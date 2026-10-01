@@ -31,6 +31,15 @@ export {
   type Verdict,
 } from "./analysis/oracle.ts";
 
+// The verifier: decides a claimed way in, using rules only.
+export {
+  verifyAll,
+  verifyClaim,
+  type Claim,
+  type ClaimVerdict,
+  type VerifiedClaim,
+} from "./analysis/verify.ts";
+
 // Phase 3: attack simulation (provider-agnostic).
 export {
   createClaudeProposer,

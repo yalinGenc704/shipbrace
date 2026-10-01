@@ -1,137 +1,127 @@
-import type { Finding, Rule } from "../types.ts";
-import { isSource, isTestPath, locate, scanLines } from "../util.ts";
+import { findSinksInFile } from "../analysis/inventory-ast.ts";
+import type { SinkKind } from "../analysis/inventory.ts";
+import type { Confidence, Finding, Rule, Severity } from "../types.ts";
+import { isSource, isTestPath } from "../util.ts";
 
 /**
- * The `postgres` and `mysql2` drivers both support parameterised queries, but an
- * LLM asked to "filter by the search box" will reach for template interpolation
- * because it reads more naturally. That is SQL injection.
+ * Dangerous operations, found by parsing rather than by matching text.
+ *
+ * These rules are the safety net beneath the oracle. The oracle reports
+ * operations it can prove untrusted input reaches; these report operations that
+ * are built unsafely at all, whether or not a path could be proven.
+ *
+ * They share the oracle's sink detection deliberately. When they had their own
+ * regular expressions the two disagreed, and the rules reported sample code
+ * held inside string literals -- a generator that emits a query was read as a
+ * generator that runs one. A parser cannot make that mistake, so both sides now
+ * ask the same question of the same syntax tree.
+ *
+ * All three are emitted by one rule so the file is parsed once rather than
+ * three times; the findings keep their separate ids so each still lands in the
+ * right place on the checklist.
  */
-export const sqlInterpolation: Rule = {
-  id: "injection/sql-string-building",
+
+interface SinkCopy {
+  ruleId: string;
+  severity: Severity;
+  confidence: Confidence;
+  title: string;
+  why: string;
+  fix: string;
+  learnMore: string;
+}
+
+const COPY: Partial<Record<SinkKind, SinkCopy>> = {
+  sql: {
+    ruleId: "injection/sql-string-building",
+    severity: "critical",
+    confidence: "likely",
+    title: "A database query is built by pasting values into text",
+    why:
+      "This query is assembled by joining text together. If any part of it comes from " +
+      "something a visitor typed, they can change what the query does -- reading other " +
+      "people's records, or deleting the table. Passing values as parameters instead " +
+      "keeps them as data that can never be read as commands.",
+    fix:
+      "Use the driver's parameter syntax -- the tagged template `` sql`...${value}` `` " +
+      "for postgres, or `?` placeholders with an argument array for mysql2 -- so the " +
+      "value is sent separately from the query text.",
+    learnMore: "/explain/sql-injection",
+  },
+  shell: {
+    ruleId: "injection/shell-string-building",
+    severity: "critical",
+    confidence: "likely",
+    title: "A system command is built by pasting values into text",
+    why:
+      "This runs a command assembled from text. Shells treat characters like `;` and " +
+      "`|` as instructions, so a value containing them can run a second, " +
+      "attacker-chosen command on your server.",
+    fix:
+      "Pass the command and its arguments as a separate array rather than one string, " +
+      "so the shell never parses the values.",
+    learnMore: "/explain/command-injection",
+  },
+  "dynamic-code": {
+    ruleId: "injection/shell-string-building",
+    severity: "critical",
+    confidence: "likely",
+    title: "The application builds and runs code while it is running",
+    why:
+      "This turns a value into code and runs it. If any part of that value comes from " +
+      "outside, whoever supplied it chooses what your application does next.",
+    fix:
+      "Replace it with a lookup table or a plain function. Almost anything built this " +
+      "way can be expressed without turning data into instructions.",
+    learnMore: "/explain/dynamic-code",
+  },
+  html: {
+    ruleId: "injection/unescaped-html",
+    severity: "high",
+    confidence: "possible",
+    title: "Raw HTML is inserted into the page without escaping",
+    why:
+      "React normally neutralises HTML in your data so that text stays text. This line " +
+      "turns that protection off for one value. If that value ever contains something a " +
+      "user supplied, their markup -- including scripts that read logged-in sessions -- " +
+      "will run in your visitors' browsers.",
+    fix:
+      "If the content is plain text, render it as `{value}` and delete this prop. If it " +
+      "genuinely must be HTML, sanitise it with a library such as DOMPurify first.",
+    learnMore: "/explain/xss",
+  },
+};
+
+export const unsafeSinks: Rule = {
+  id: "injection/unsafe-sink",
   category: "injection",
   severity: "critical",
-  appliesTo: (p) => isSource(p) && !isTestPath(p),
+  appliesTo: (path) => isSource(path) && !isTestPath(path),
 
   check(file) {
-    /**
-     * A single keyword is not enough to call something SQL.
-     *
-     * Matching a bare `WHERE` case-insensitively flags every template literal
-     * containing a variable named `where` -- which is how this rule fired on
-     * ordinary prose in this very package. Requiring the paired keywords that
-     * make a statement (SELECT…FROM, UPDATE…SET) keeps real queries and drops
-     * identifiers that merely share a name.
-     *
-     * The character classes exclude newlines so a match cannot span from one
-     * backtick near the top of a file to another hundreds of lines below.
-     */
-    const STATEMENT = String.raw`(?:SELECT[^\n]*?\bFROM|INSERT\s+INTO[^\n]*?\bVALUES|UPDATE[^\n]*?\bSET|DELETE\s+FROM)`;
-
-    // A template literal containing ${...} that also reads as SQL.
-    const templated = new RegExp("`[^`\\n]*\\b" + STATEMENT + "\\b[^`\\n]*\\$\\{", "i");
-    // Old-fashioned "SELECT ..." + variable concatenation.
-    const concatenated = new RegExp("[\"'][^\"'\\n]*\\b" + STATEMENT + "\\b[^\"'\\n]*[\"']\\s*\\+", "i");
-
     const findings: Finding[] = [];
 
-    for (const re of [templated, concatenated]) {
-      for (const hit of scanLines(file, re)) {
-        // `postgres` (porsager) tags templates and parameterises them safely:
-        //   sql`select * from users where id = ${id}`
-        // Only an *untagged* template is dangerous, so require no tag before the
-        // backtick. The optional backslash matters because code generators write
-        // the tag escaped inside their own template -- sql\` -- and without it a
-        // generator emitting safe queries is reported as emitting unsafe ones.
-        if (/\b(sql|db)\s*\\?`/.test(hit.text)) continue;
+    for (const sink of findSinksInFile(file)) {
+      // A tagged query template parameterises every value it interpolates.
+      if (sink.inherentlySafe) continue;
 
-        findings.push({
-          ruleId: sqlInterpolation.id,
-          category: "injection",
-          severity: "critical",
-          confidence: "likely",
-          title: "A database query is built by pasting values into text",
-          why:
-            `This query is assembled by joining strings together. If any part of it comes ` +
-            `from something a visitor typed, they can change what the query does -- reading ` +
-            `other people's records, or deleting the table. Passing values as parameters ` +
-            `instead keeps them as data that can never be read as commands.`,
-          location: locate(file, hit),
-          fix: {
-            kind: "manual",
-            description:
-              "Use the driver's parameter syntax -- the tagged template `` sql`...${value}` `` " +
-              "for postgres, or `?` placeholders with an argument array for mysql2 -- so the " +
-              "value is sent separately from the query text.",
-          },
-          learnMore: "/explain/sql-injection",
-        });
-      }
+      const copy = COPY[sink.kind];
+      if (!copy) continue;
+
+      findings.push({
+        ruleId: copy.ruleId,
+        category: "injection",
+        severity: copy.severity,
+        confidence: copy.confidence,
+        title: copy.title,
+        why: copy.why,
+        location: sink.location,
+        fix: { kind: "manual", description: copy.fix },
+        learnMore: copy.learnMore,
+      });
     }
     return findings;
   },
 };
 
-/** React escapes by default; this prop is the one documented way to switch that off. */
-export const rawHtmlInjection: Rule = {
-  id: "injection/unescaped-html",
-  category: "injection",
-  severity: "high",
-  appliesTo: (p) => /\.[jt]sx$/.test(p) && !isTestPath(p),
-
-  check(file) {
-    return scanLines(file, /dangerouslySetInnerHTML/).map((hit): Finding => ({
-      ruleId: rawHtmlInjection.id,
-      category: "injection",
-      severity: "high",
-      confidence: "possible",
-      title: "Raw HTML is inserted into the page without escaping",
-      why:
-        `React normally neutralises HTML in your data so that text stays text. This line ` +
-        `turns that protection off for one value. If that value ever contains something a ` +
-        `user supplied, their markup -- including scripts that read logged-in sessions -- ` +
-        `will run in your visitors' browsers.`,
-      location: locate(file, hit),
-      fix: {
-        kind: "manual",
-        description:
-          "If the content is plain text, render it as `{value}` and delete this prop. If it " +
-          "genuinely must be HTML, sanitise it with a library such as DOMPurify first.",
-      },
-      learnMore: "/explain/xss",
-    }));
-  },
-};
-
-/** Shell execution with interpolated input is command injection. */
-export const shellInterpolation: Rule = {
-  id: "injection/shell-string-building",
-  category: "injection",
-  severity: "critical",
-  appliesTo: (p) => isSource(p) && !isTestPath(p),
-
-  check(file) {
-    const re = /\b(execSync|exec|spawnSync|\$)\s*\(?\s*[`"'][^`"']*\$\{/;
-
-    return scanLines(file, re).map((hit): Finding => ({
-      ruleId: shellInterpolation.id,
-      category: "injection",
-      severity: "critical",
-      confidence: "likely",
-      title: "A system command is built by pasting values into text",
-      why:
-        `This runs a shell command assembled from strings. Shells treat characters like ` +
-        `\`;\` and \`|\` as instructions, so a value containing them can run a second, ` +
-        `attacker-chosen command on your server.`,
-      location: locate(file, hit),
-      fix: {
-        kind: "manual",
-        description:
-          "Pass the command and its arguments as a separate array rather than one string, " +
-          "so the shell never parses the values.",
-      },
-      learnMore: "/explain/command-injection",
-    }));
-  },
-};
-
-export const injectionRules: Rule[] = [sqlInterpolation, rawHtmlInjection, shellInterpolation];
+export const injectionRules: Rule[] = [unsafeSinks];

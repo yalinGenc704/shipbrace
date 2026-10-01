@@ -107,12 +107,49 @@ export interface Assignment {
   doorId?: string;
 }
 
+/**
+ * A function defined in the code, so a claimed path can be followed into it.
+ *
+ * Finding every path through every function is expensive; checking whether one
+ * specific claimed path holds is not. That asymmetry is why the verifier can
+ * follow calls when the all-paths pass does not.
+ */
+export interface FunctionDef {
+  id: string;
+  /** Empty for an anonymous function assigned to nothing. */
+  name: string;
+  /** Parameter names, in order. */
+  params: string[];
+  /** Character range of the body. */
+  bodyRange: [number, number];
+  path: string;
+}
+
+/**
+ * One call to a named function, with its arguments kept by position.
+ *
+ * Position matters: `countFor(owner)` must taint only `countFor`'s first
+ * parameter. Matching on names alone let taint leak between unrelated functions
+ * that happened to name a parameter the same thing, which reported a validated
+ * route as vulnerable.
+ */
+export interface CallSite {
+  id: string;
+  callee: string;
+  /** Identifiers appearing in each argument, by position. */
+  args: string[][];
+  path: string;
+}
+
 export interface Inventory {
   doors: Door[];
   sources: TaintSource[];
   sinks: Sink[];
   sanitizers: Sanitizer[];
   assignments: Assignment[];
+  /** Optional so existing callers that build an Inventory literal keep working. */
+  functions?: FunctionDef[];
+  calls?: CallSite[];
 }
 
 /** Identifiers that are language or library names, never user data. */

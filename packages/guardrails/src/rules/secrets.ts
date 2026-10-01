@@ -21,7 +21,19 @@ export const hardcodedCredential: Rule = {
   severity: "critical",
   appliesTo: (p) => (isSource(p) || /\.(json|ya?ml|toml|env.*)$/.test(p)) && !isExampleEnv(p),
 
-  check(file) {
+  check(file, snapshot) {
+    /**
+     * A key in an untracked `.env` is correctly stored, not leaked.
+     *
+     * This rule exists to catch credentials written into code. An environment
+     * file that git ignores is the destination this rule tells people to move
+     * them to -- flagging it would punish the exact behaviour the product asks
+     * for, and teach users that the warnings are noise. A `.env` that *is*
+     * tracked is a real problem, and `committed-dotenv` reports it.
+     */
+    const isDotenv = /(^|\/)\.env(\.|$)/.test(file.path);
+    if (isDotenv && !snapshot.tracked.has(file.path)) return [];
+
     const findings: Finding[] = [];
 
     /**

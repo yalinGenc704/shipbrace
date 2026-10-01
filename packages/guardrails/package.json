@@ -4,6 +4,13 @@
   "type": "module",
   "private": true,
   "main": "./src/index.ts",
-  "exports": { ".": "./src/index.ts" },
-  "scripts": { "test": "bun test" }
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "bun test"
+  },
+  "dependencies": {
+    "oxc-parser": "^0.152.0"
+  }
 }
