@@ -1,0 +1,31 @@
+{
+  "name": "@aegis/app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "fixture": "node --experimental-strip-types scripts/make-fixture.ts"
+  },
+  "dependencies": {
+    "@aegis/guardrails": "*",
+    "@tanstack/react-query": "5.102.8",
+    "@tanstack/react-router": "1.170.32",
+    "chart.js": "4.5.1",
+    "lucide-react": "1.35.0",
+    "react": "19.2.8",
+    "react-chartjs-2": "5.3.1",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.3",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "6.1.1",
+    "tailwindcss": "4.3.3",
+    "typescript": "7.0.2",
+    "vite": "8.2.2"
+  }
+}

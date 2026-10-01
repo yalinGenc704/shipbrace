@@ -1,0 +1,81 @@
+@import "tailwindcss";
+
+/**
+ * Colour is carrying meaning for someone who cannot read the code, so it is
+ * assigned deliberately rather than decoratively:
+ *
+ *   danger  - a confirmed problem graded high. Red is reserved for this alone,
+ *             so that seeing red always means the same thing.
+ *   warn    - a confirmed problem graded medium.
+ *   review  - an item the user must judge. Deliberately NOT red: it is a task
+ *             that has not been done, not a failure.
+ *   ok      - a check that ran and found nothing. Muted, because a clean result
+ *             should not compete for attention with an unclean one.
+ */
+@theme {
+  --color-surface: oklch(99% 0.002 260);
+  --color-surface-raised: oklch(100% 0 0);
+  --color-line: oklch(92% 0.004 260);
+  --color-ink: oklch(25% 0.012 260);
+  --color-ink-soft: oklch(52% 0.014 260);
+
+  --color-danger: oklch(55% 0.19 25);
+  --color-danger-bg: oklch(96% 0.03 25);
+  --color-warn: oklch(62% 0.14 70);
+  --color-warn-bg: oklch(96% 0.04 80);
+  --color-review: oklch(54% 0.14 265);
+  --color-review-bg: oklch(96% 0.025 265);
+  --color-ok: oklch(55% 0.11 155);
+  --color-ok-bg: oklch(96% 0.03 155);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-surface: oklch(19% 0.012 260);
+    --color-surface-raised: oklch(23% 0.014 260);
+    --color-line: oklch(31% 0.014 260);
+    --color-ink: oklch(94% 0.004 260);
+    --color-ink-soft: oklch(72% 0.012 260);
+
+    --color-danger: oklch(72% 0.16 25);
+    --color-danger-bg: oklch(28% 0.06 25);
+    --color-warn: oklch(78% 0.13 75);
+    --color-warn-bg: oklch(28% 0.05 75);
+    --color-review: oklch(75% 0.12 265);
+    --color-review-bg: oklch(27% 0.05 265);
+    --color-ok: oklch(75% 0.12 155);
+    --color-ok-bg: oklch(26% 0.05 155);
+  }
+}
+
+:root[data-theme="dark"] {
+  --color-surface: oklch(19% 0.012 260);
+  --color-surface-raised: oklch(23% 0.014 260);
+  --color-line: oklch(31% 0.014 260);
+  --color-ink: oklch(94% 0.004 260);
+  --color-ink-soft: oklch(72% 0.012 260);
+
+  --color-danger: oklch(72% 0.16 25);
+  --color-danger-bg: oklch(28% 0.06 25);
+  --color-warn: oklch(78% 0.13 75);
+  --color-warn-bg: oklch(28% 0.05 75);
+  --color-review: oklch(75% 0.12 265);
+  --color-review-bg: oklch(27% 0.05 265);
+  --color-ok: oklch(75% 0.12 155);
+  --color-ok-bg: oklch(26% 0.05 155);
+}
+
+body {
+  background: var(--color-surface);
+  color: var(--color-ink);
+}
+
+/* Respect a reduced-motion preference for the disclosure animations. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
