@@ -211,13 +211,45 @@ OWASP/NodeGoat, juice-shop/juice-shop.
   changes every run, so the App's webhook URL must be updated each time until
   it is hosted. No persistence yet: past reviews are not stored.
 
-## Next steps
+## Next steps (agreed with Murat, 2026-10-01)
 
-1. Treat stored content (database rows rendered later) as an input; today it
-   shows only under "worth a look".
-2. Before any second user: the disclosures and per-user switches in
-   `docs/legal/third-party-services.md` section 4.
-3. GitHub integration: review each push automatically (needs a GitHub App).
-4. Remove or clearly deprecate the legacy exports above.
+**Recommended next: 1 and 3.** Neither needs a decision from Murat, and both
+are required either way. He decides hosting and a domain meanwhile.
+
+### Making it usable without the laptop
+
+1. **Store past reviews in PostgreSQL.** Each repository gets its own history
+   in the dashboard, and the GitHub check links straight to it. ~1 session,
+   no decisions needed.
+2. **Put Aegis online, running all the time.** ~1-2 sessions. Needs two
+   decisions from Murat:
+   - *Where it runs.* Recommendation: a small rented server (VPS) running
+     Docker, with Cloudflare Tunnel in front -- exactly the stack's setup.
+     Typically around $5/month.
+   - *A domain name* added to Cloudflare, so the tunnel has a permanent
+     address and the GitHub App's webhook URL never changes again. Typically
+     around $10/year.
+
+### Required before anyone else uses it
+
+3. **Run the code reader sealed off** (an isolated worker with time and memory
+   limits). Strangers' repositories could be built to attack the parser
+   reading them; see "Open item" in docs/architecture.md. ~1 session.
+4. **Sign-up, the legal notices, and per-person on/off switches** for the AI
+   and the package lookup (docs/legal/third-party-services.md section 4).
+   ~1-2 sessions.
+5. **A real product name.** "Aegis" is crowded (several security tools for
+   AI-built apps use it); choose one and have it trademark-checked.
+
+### The rest of the original vision
+
+6. **Switch Aegis itself to Bun and Docker** (the generated apps already use
+   them). Done for the starter kit on 2026-10-01: charts, Excel, and MySQL.
+7. **Deployment:** putting users' apps online with Cloudflare -- the "handles
+   deployment" part of the vision. Not started.
+8. **More detection:** stored attacks (bad data saved, shown later),
+   browser-side code, the XML upload attack (XXE), and sign-in checks written
+   inside a handler (Juice Shop `dataErasure`). Also remove or deprecate the
+   legacy exports listed above.
 
 See `docs/architecture.md` for the reasoning behind these decisions.
