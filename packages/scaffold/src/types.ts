@@ -9,9 +9,20 @@
  * so it can be made per-app and changed at any time.
  */
 
-export type FeatureId = "auth" | "charts" | "spreadsheets";
+/**
+ * Optional capabilities. Charts, spreadsheets, and the MySQL driver are part
+ * of the stack itself and come with every app (see modules/stack.ts); they
+ * used to be listed here and silently did nothing.
+ */
+export type FeatureId = "auth";
 
-export type DatabaseKind = "postgres" | "mysql" | "none";
+/**
+ * The app's own database. PostgreSQL is the stack's database; MySQL is
+ * supported as an additional connection to an existing database (MYSQL_URL),
+ * not as a replacement -- choosing "mysql" here used to quietly produce
+ * PostgreSQL anyway.
+ */
+export type DatabaseKind = "postgres" | "none";
 
 export interface ScaffoldSpec {
   /** kebab-case; used as the directory name, Docker project name, and DB name. */

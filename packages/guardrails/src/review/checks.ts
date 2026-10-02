@@ -240,13 +240,25 @@ const pinnedVersions: ProjectCheck = {
     }
 
     const risks: Risk[] = [];
+    // Packages that are part of this same project, linked rather than downloaded.
+    const local = new Set([...snapshot.manifests.values()].map((m) => m.name).filter(Boolean));
 
     for (const [path, manifest] of snapshot.manifests) {
-      const deps = manifest.dependencies;
-      if (typeof deps !== "object" || deps === null) continue;
+      /**
+       * Development tools count too: they run during every build, with the
+       * same access to the code and its secrets. And `latest` is the loosest
+       * version there is -- it was how one slipped through unflagged.
+       */
+      const deps = {
+        ...(manifest.dependencies as Record<string, unknown> | undefined),
+        ...(manifest.devDependencies as Record<string, unknown> | undefined),
+      };
 
-      const loose = Object.entries(deps as Record<string, unknown>)
-        .filter(([, version]) => typeof version === "string" && /^[\^~]|[*x]$|\s-\s/.test(version))
+      const loose = Object.entries(deps)
+        .filter(([name]) => !local.has(name))
+        .filter(([, version]) =>
+          typeof version === "string" && /^[\^~]|[*x]$|\s-\s|^(?:latest|next|beta|canary|\*)$/.test(version)
+        )
         .map(([name, version]) => `${name}@${String(version)}`);
 
       if (loose.length === 0) continue;

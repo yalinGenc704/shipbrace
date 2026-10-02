@@ -114,6 +114,18 @@ const readme = (spec: ScaffoldSpec): string => `# ${spec.name}
 - Requests are rate limited${spec.features.includes("auth") ? ", with a much stricter limit on signing in" : ""}.
 - The server refuses to start with a missing or weak signing key.
 
+## Built in, ready to use
+
+- **Charts** -- \`BarChart\`, \`LineChart\` and \`DoughnutChart\` from
+  \`app/src/components/charts.tsx\` (Chart.js).
+- **Excel import and export** -- \`readSpreadsheet(file)\` and
+  \`downloadSpreadsheet(rows, "name")\` from \`app/src/lib/spreadsheet.ts\`
+  (SheetJS). Uploaded files are size-limited and never run formulas; exported
+  cells that would run as formulas are made into plain text.
+- **MySQL** -- set \`MYSQL_URL\` in \`.env\` to connect to an existing MySQL
+  database, then use \`\` query\`SELECT ... \${value}\` \`\` from \`server/src/mysql.ts\`.
+  Values are always sent separately from the query text.
+
 Run the security review before deploying. It reports what it could check and
 what is still yours to judge.
 `;
@@ -185,6 +197,7 @@ function dockerCompose(spec: ScaffoldSpec): string {
     "      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS}",
     "      JWT_SECRET: ${JWT_SECRET}",
     ...(hasDb ? ["      DATABASE_URL: ${DATABASE_URL}"] : []),
+    "      MYSQL_URL: ${MYSQL_URL:-}",
   ].join("\n");
 
   const apiDependsOn = hasDb
@@ -409,6 +422,8 @@ const schema = z.object({
     }),
   JWT_SECRET: z.string().min(32, "JWT_SECRET must be at least 32 characters"),
   DATABASE_URL: z.string().url().optional(),
+  // Optional second database; an empty value means "not used".
+  MYSQL_URL: z.preprocess((v) => (v === "" ? undefined : v), z.string().url().optional()),
 });
 
 const parsed = schema.safeParse(process.env);

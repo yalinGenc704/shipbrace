@@ -64,7 +64,7 @@ Bun and Docker are **not installed** on this machine, so the Bun-based root
 scripts fail (`npm test` → "'bun' is not recognized"). Use Node directly:
 
 ```bash
-# all tests (expect 144 pass, 1 skipped -- symlinks need elevation on Windows)
+# all tests (expect 146 pass, 1 skipped -- symlinks need elevation on Windows)
 node --experimental-strip-types --test packages/guardrails/test/*.test.ts packages/scaffold/test/*.test.ts server/test/*.test.ts
 
 # review API on :3000. Set REVIEW_ROOT explicitly: npm runs workspace scripts
@@ -117,6 +117,18 @@ print its value. Prepaid credits with auto-reload off, so it cannot overspend.
   code, and missing CSRF protection on cookie sign-in (new item
   `access-control/csrf`) are detected. MongoDB-style filters taking request
   values inline, and `$where` built from values, are `nosql` operations.
+- **The whole stack is in every generated app** (2026-10-01,
+  `packages/scaffold/src/modules/stack.ts`): Chart.js + react-chartjs-2
+  (`components/charts.tsx`), SheetJS from its CDN (`lib/spreadsheet.ts`,
+  size-limited reads, formula-injection-safe exports), and both `postgres` and
+  `mysql2` (`server/src/mysql.ts`, tagged-template only, optional `MYSQL_URL`).
+  The old `charts`/`spreadsheets` features and `database: "mysql"` silently
+  did nothing and were removed. The pin check now covers devDependencies and
+  `latest`; Aegis's own manifests are pinned. The dashboard has "Download as
+  Excel" (lazy-loaded, cells made plain text). Newer versions than the spec
+  (TypeScript 7, Vite 8 stable, Bun 1.4) were approved by the user.
+- **Aegis itself still runs on Node, not Bun** (Bun is not installed here), and
+  has no PostgreSQL, Docker, or login yet: those come with hosting.
 - **Admin pages and password hashes** (project checks): a route with
   `admin` in its address needs a role-ish guard or an `if` testing the role
   (showing the role in a page does not count); a route that loads user

@@ -1,5 +1,6 @@
 import type { ReviewResult } from "@aegis/guardrails";
 import { ArcElement, Chart, Legend, Tooltip } from "chart.js";
+import { Download } from "lucide-react";
 import { Doughnut } from "react-chartjs-2";
 import type { Mode } from "../lib/review.ts";
 import { MODE_LABEL } from "../lib/review.ts";
@@ -90,6 +91,19 @@ export function Summary({
           </button>
         ))}
       </div>
+
+      {/*
+        The spreadsheet library is loaded only when someone asks for the file,
+        so the page itself stays as quick to open as before.
+      */}
+      <button
+        type="button"
+        onClick={() => void import("../lib/export.ts").then(({ downloadReview }) => downloadReview(review))}
+        className="mt-5 ml-3 inline-flex items-center gap-1.5 rounded-lg border border-line px-3 py-2 text-sm font-medium text-ink-soft transition-colors hover:text-ink"
+      >
+        <Download className="size-4" aria-hidden />
+        Download as Excel
+      </button>
     </header>
   );
 }

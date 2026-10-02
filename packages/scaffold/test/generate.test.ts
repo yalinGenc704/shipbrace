@@ -75,13 +75,36 @@ test("env validation refuses a wildcard origin and a short secret", () => {
   assert.ok(!/JWT_SECRET[^\n]*(\|\||\?\?)/.test(envFile));
 });
 
+/** An exact version, or a vendor tarball whose URL names one (SheetJS). */
+const PINNED = /^\d+\.\d+\.\d+$|^https:\/\/[^\s]+-\d+\.\d+\.\d+\.tgz$/;
+
 test("dependency versions are pinned exactly, never ranged", () => {
-  const pkg = JSON.parse(read(generate(withAuth), "app/package.json")) as {
-    dependencies: Record<string, string>;
-  };
-  for (const [name, version] of Object.entries(pkg.dependencies)) {
-    assert.match(version, /^\d+\.\d+\.\d+$/, `${name} is not pinned: ${version}`);
+  const out = generate(withAuth);
+  for (const path of ["package.json", "app/package.json", "server/package.json"]) {
+    const pkg = JSON.parse(read(out, path)) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
+    for (const [name, version] of Object.entries({ ...pkg.dependencies, ...pkg.devDependencies })) {
+      assert.match(version, PINNED, `${path}: ${name} is not pinned: ${version}`);
+    }
   }
+});
+
+test("every app carries the whole stack: charts, Excel, and both database drivers", () => {
+  const out = generate(bare);
+  const app = JSON.parse(read(out, "app/package.json")).dependencies;
+  const server = JSON.parse(read(out, "server/package.json")).dependencies;
+  for (const name of ["chart.js", "react-chartjs-2", "xlsx"]) assert.ok(app[name], name);
+  for (const name of ["postgres", "mysql2"]) assert.ok(server[name], name);
+  assert.match(app.xlsx, /^https:\/\/cdn\.sheetjs\.com\//, "SheetJS must come from its vendor, not the stale npm copy");
+  for (const path of ["app/src/components/charts.tsx", "app/src/lib/spreadsheet.ts", "server/src/mysql.ts"]) {
+    assert.ok(read(out, path).length > 0, path);
+  }
+});
+
+test("Excel export makes formula-looking cells plain text", () => {
+  assert.match(read(generate(bare), "app/src/lib/spreadsheet.ts"), /FORMULA_START/);
 });
 
 test("conflicting module versions are reported rather than silently resolved", () => {

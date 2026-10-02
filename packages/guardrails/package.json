@@ -11,6 +11,6 @@
     "test": "bun test"
   },
   "dependencies": {
-    "oxc-parser": "^0.152.0"
+    "oxc-parser": "0.152.0"
   }
 }

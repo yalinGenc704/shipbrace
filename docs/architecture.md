@@ -152,12 +152,20 @@ Hosting means holding GitHub and Cloudflare tokens for every user.
 
 ## Deviations from the original stack spec
 
+**Approved by the user on 2026-10-01:** keep the newer released versions
+rather than the betas and older versions named in the spec.
+
 Verified against the registry on 2026-08-28:
 
 - **TypeScript 7.0.2**, not 6.0β — 6.0.0-beta is a superseded prerelease.
 - **Vite 8.2.2 stable**, not beta.
 - **Bun 1.4 / `oven/bun:1.4`**, not 1.3.10.
-- **SheetJS from the vendor CDN**, not npm `xlsx@0.18.5`, which is abandoned there
-  and carries prototype-pollution and ReDoS advisories.
+- **SheetJS from the vendor CDN** (`https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`,
+  checked 2026-10-01), not npm `xlsx@0.18.5`, which is abandoned there and
+  carries prototype-pollution and ReDoS advisories. The lockfile records its
+  checksum.
+- **MySQL is an additional connection, not a replacement.** PostgreSQL is the
+  app's database (in docker-compose); `mysql2` is present with a safe
+  `query` tagged template for connecting to an existing MySQL database.
 - **oxc-parser** added for analysis, from the same project as OxLint and Oxfmt.
 - `postgres:18-alpine` confirmed present; unchanged.

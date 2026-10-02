@@ -167,7 +167,7 @@ function serverPackageJson(spec: ScaffoldSpec, deps: Record<string, string>): Ge
       type: "module",
       scripts: { dev: "bun run --hot src/index.ts", start: "bun run src/index.ts" },
       dependencies: deps,
-      devDependencies: { "@types/bun": "latest", typescript: "7.0.2" },
+      devDependencies: { "@types/bun": "1.4.2", typescript: "7.0.2" },
     }),
   };
 }
