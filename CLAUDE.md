@@ -213,6 +213,11 @@ OWASP/NodeGoat, juice-shop/juice-shop.
 
 ## Next steps (agreed with Murat, 2026-10-01)
 
+**At the start of a session, do not begin these on your own.** Summarise where
+things stand, present this list in plain language (grouped as below, with
+time estimates and the decisions each needs), give the recommendation, and
+ask Murat which to start. Wait for his answer.
+
 **Recommended next: 1 and 3.** Neither needs a decision from Murat, and both
 are required either way. He decides hosting and a domain meanwhile.
 
