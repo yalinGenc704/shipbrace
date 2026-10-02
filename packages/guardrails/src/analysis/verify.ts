@@ -176,7 +176,30 @@ const BUILT_IN = new Set([
   "Object", "Symbol", "BigInt", "Date", "RegExp", "Error", "Promise", "structuredClone",
 ]);
 
-function followValue(start: string, after: number, path: string, inventory: Inventory): Flow {
+/**
+ * `const id = parseInt(req.params.id, 10)` reads the input and checks it in
+ * one statement, so the name it lands in already holds the checked value.
+ * Starting that name as unchecked reported a number as able to carry query
+ * text -- a warning on correct code.
+ */
+function checkedOnArrival(source: TaintSource, inventory: Inventory): boolean {
+  const binding = source.binding;
+  return Boolean(binding) && inventory.sanitizers.some(
+    (s) =>
+      fileOf(s.id) === fileOf(source.id) &&
+      s.guards[0] === binding &&
+      s.location.line === source.location.line &&
+      positionOf(s.id) <= positionOf(source.id),
+  );
+}
+
+function followValue(
+  start: string,
+  after: number,
+  path: string,
+  inventory: Inventory,
+  startChecked = false,
+): Flow {
   const functions = inventory.functions ?? [];
   const byScope = new Map<string, ScopeState>();
   const state = (key: string): ScopeState => {
@@ -188,7 +211,7 @@ function followValue(start: string, after: number, path: string, inventory: Inve
   interface Scope { key: string; fn?: FunctionDef; path: string; after: number }
   const origin = enclosingFunctionDef(inventory, path, after);
   const first: Scope = { key: origin?.id ?? topScope(path), ...(origin ? { fn: origin } : {}), path, after };
-  state(first.key).tainted.add(start);
+  (startChecked ? state(first.key).washed : state(first.key).tainted).add(start);
 
   const queue: Scope[] = [first];
   const queued = new Set([first.key]);
@@ -355,6 +378,17 @@ function reachesOperands(
 }
 
 /**
+ * The input is read right inside the operation, as in
+ * `db.query("..." + req.body.login + "'")`. Its value never passes through a
+ * name, so following names cannot find it; the text can.
+ */
+function writtenInside(source: TaintSource, sink: Sink): boolean {
+  if (fileOf(source.id) !== fileOf(sink.id) || positionOf(source.id) < positionOf(sink.id)) return false;
+  const text = source.expression.replace(/\s+/g, " ");
+  return text.length > 0 && sink.expression.includes(text);
+}
+
+/**
  * Loose match: a claim will not reproduce an expression character for character.
  *
  * Short names are matched on a word boundary rather than dropped. An earlier
@@ -451,7 +485,7 @@ export function verifyClaim(claim: Claim, inventory: Inventory): VerifiedClaim {
     // An inline source with no name cannot be followed by name; it is only
     // reachable if the sink literally contains that expression.
     const flow: Flow = binding
-      ? followValue(binding, sourceAt, path, inventory)
+      ? followValue(binding, sourceAt, path, inventory, checkedOnArrival(source, inventory))
       : { byScope: new Map(), tainted: new Set(), washed: new Set() };
     const tainted = flow.tainted;
     if (flow.unfollowed) unfollowed ??= flow.unfollowed;
@@ -467,14 +501,19 @@ export function verifyClaim(claim: Claim, inventory: Inventory): VerifiedClaim {
        * verifier exists to follow.
        */
       const sameScope = sourceScope === enclosingFunction(inventory, fileOf(sink.id), positionOf(sink.id));
-      if (sameScope && positionOf(sink.id) <= sourceAt && fileOf(sink.id) === path) continue;
+      if (sameScope && positionOf(sink.id) <= sourceAt && fileOf(sink.id) === path && !writtenInside(source, sink)) {
+        continue;
+      }
 
       const carries = (which: keyof ScopeState): boolean =>
         reachesOperands(flow, which, sink.operands, fileOf(sink.id), positionOf(sink.id), inventory);
 
+      // An input read inline has no name to follow; it reaches only the
+      // operation it is literally written inside. Matching it by loose words
+      // ("req") attributed one route's input to another function's query.
       const reaches = binding
-        ? carries("tainted")
-        : mentions(sink.expression, source.expression);
+        ? carries("tainted") || writtenInside(source, sink)
+        : writtenInside(source, sink);
 
       // Reached, but only by a value that passed a check on the way.
       if (!reaches && binding && carries("washed")) {
@@ -598,7 +637,7 @@ export function verifyOwnership(claim: OwnershipClaim, inventory: Inventory): Ve
     const sourceAt = positionOf(source.id);
     const path = fileOf(source.id);
     const flow: Flow = source.binding
-      ? followValue(source.binding, sourceAt, path, inventory)
+      ? followValue(source.binding, sourceAt, path, inventory, checkedOnArrival(source, inventory))
       : { byScope: new Map(), tainted: new Set(), washed: new Set() };
     if (flow.unfollowed) unfollowed ??= flow.unfollowed;
 

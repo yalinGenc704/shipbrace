@@ -1008,6 +1008,79 @@ export const CASES: BenchCase[] = [
     ],
   },
 
+  // --- Express, the most common older framework ----------------------------------
+  {
+    id: "express-sql-concat",
+    tests: "An Express route builds a query by joining text with +, reading the form inline.",
+    files: [
+      file("server/routes/users.js", [
+        'const router = require("express").Router();',
+        'router.post("/usersearch", requireLogin, (req, res) => {',
+        `  const query = "SELECT name FROM Users WHERE login='" + req.body.login + "'"; // [A]`,
+        "  db.sequelize.query(query).then((rows) => res.json(rows));",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/usersearch",
+        parameter: "login",
+        sink: "sql",
+        real: true,
+        why: "A login containing a quote mark rewrites the query.",
+      },
+    ],
+  },
+  {
+    id: "express-sql-concat-number",
+    tests: "The same query, but the value is turned into a number first.",
+    files: [
+      file("server/routes/users.js", [
+        'const router = require("express").Router();',
+        'router.get("/users/:id", requireLogin, (req, res) => {',
+        "  const id = parseInt(req.params.id, 10);",
+        '  const query = "SELECT name FROM Users WHERE id=" + id; // [A]',
+        "  db.sequelize.query(query).then((rows) => res.json(rows));",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/users/:id",
+        parameter: "id",
+        sink: "sql",
+        real: false,
+        why: "A number cannot carry query text.",
+      },
+    ],
+  },
+  {
+    id: "express-unserialize-upload",
+    tests: "An uploaded file is turned back into objects with node-serialize.",
+    files: [
+      file("server/routes/products.js", [
+        'const serialize = require("node-serialize");',
+        'const router = require("express").Router();',
+        'router.post("/products/import", requireLogin, (req, res) => {',
+        '  const products = serialize.unserialize(req.files.products.data.toString("utf8")); // [A]',
+        "  res.json(products);",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/products/import",
+        parameter: "files",
+        sink: "dynamic-code",
+        real: true,
+        why: "The file can contain a function that runs on your server as it is read.",
+      },
+    ],
+  },
+
   // --- uploaded files ----------------------------------------------------------
   {
     id: "upload-filename",

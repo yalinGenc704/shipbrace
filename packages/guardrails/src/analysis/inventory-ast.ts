@@ -33,7 +33,11 @@ const ROUTER = /^(?:app|router|\w*[Rr]outes?)$/;
 const METHODS = new Set(["get", "post", "put", "patch", "delete", "all"]);
 
 /** Middleware that is not an access-control check; naming it as a guard would hide a missing one. */
-const NOT_A_GUARD = /^(?:cors|secureHeaders|logger|compress|etag|prettyJSON|rateLimiter)$/;
+const ACCESS_CHECK =
+  /auth|login|signed|session|guard|protect|require(?:User|Login|Admin|Role)|verify(?:Token|Jwt|User)|jwt|deny|permission|role|admin|acl|userId/i;
+
+const NOT_A_GUARD =
+  /^(?:cors|secureHeaders|logger|compress|compression|etag|prettyJSON|rateLimiter|rateLimit|limiter|helmet|morgan|bodyParser|json|urlencoded|cookieParser|express|upload|multer|serveStatic|cache|validate\w*)$/;
 
 const SOURCE_NAMES: Array<{ match: RegExp; kind: SourceKind }> = [
   // Express with multer: `req.file.originalname` is whatever the uploader named it.
@@ -87,7 +91,12 @@ function isIdentityRead(node: Node): boolean {
 const SHELL = /^(?:execSync|exec|execFile|execFileSync|spawn|spawnSync)$/;
 const FILESYSTEM =
   /(?:^|\.)(?:readFile|readFileSync|writeFile|writeFileSync|appendFile|unlink|rm|rmSync|createReadStream|createWriteStream|open)$/;
-const DYNAMIC_CODE = /^(?:eval)$/;
+/**
+ * Turning text into running code. `unserialize` is node-serialize's: it
+ * rebuilds functions from the text it is given, so whoever wrote the text
+ * chooses what runs.
+ */
+const DYNAMIC_CODE = /^(?:eval|vm\.runIn(?:New|This)?Context|vm\.compileFunction)$|(?:^|\.)unserialize$/;
 
 /** Bun's own file calls. Matched exactly: `stream.write` is not a file path. */
 const BUN_FILE = /^Bun\.(?:write|file)$/;
@@ -143,7 +152,7 @@ function doorFor(doors: Door[], node: Node): Door | undefined {
 
 function findDoors(parsed: ParsedFile): Door[] {
   const registered: Array<{ prefix: string; names: string[] }> = [];
-  const routes: Array<{ method: string; path: string; node: Node; handler: Node }> = [];
+  const routes: Array<{ method: string; path: string; node: Node; handler: Node; middleware: Node[] }> = [];
 
   walk(parsed.program, (node) => {
     if (node.type !== "CallExpression") return;
@@ -177,11 +186,32 @@ function findDoors(parsed: ParsedFile): Door[] {
       path: String(args[0].value),
       node,
       handler: handler ?? node,
+      // Everything between the path and the handler runs first, on this
+      // route only: `router.get("/admin", requireLogin, handler)`.
+      middleware: args.slice(1, -1),
     });
   });
 
-  return routes.map(({ method, path, node, handler }): Door => {
+  return routes.map(({ method, path, node, handler, middleware }): Door => {
     const guards = new Set<string>();
+    /**
+     * Checks named on the route itself count as much as ones registered for a
+     * prefix. Missing them reported every route of a typical Express app as
+     * open to anyone -- 27 warnings on one app whose routes were all protected.
+     */
+    for (const name of middleware.flatMap((m) => identifiersIn(m))) {
+      if (!NOT_A_GUARD.test(name)) guards.add(name);
+    }
+    /**
+     * `app.post("/api/Products", security.isAuthorized())` -- the only thing
+     * after the path is a check, and the real handler is registered elsewhere.
+     * It sits where a handler would, and `app.get("/x", search())` looks the
+     * same, so it counts only when its name says it is an access check.
+     */
+    if (middleware.length === 0 && handler.type === "CallExpression") {
+      const callee = dottedName(handler.callee) ?? "";
+      if (ACCESS_CHECK.test(callee)) guards.add(callee);
+    }
     for (const entry of registered) {
       if (entry.prefix === "" || path.startsWith(entry.prefix)) {
         for (const name of entry.names) guards.add(name);
@@ -518,6 +548,30 @@ function sinkFor(parsed: ParsedFile, node: Node, parents: Node[]): Sink | undefi
     const safe = tagged && SAFE_TAG.test(dottedName(parent.tag) ?? "");
 
     return make("sql", expressions.flatMap((e) => identifiersIn(e)), safe);
+  }
+
+  /**
+   * A query assembled with `+`: `"SELECT ... WHERE login='" + name + "'"`.
+   * Judged once, at the outermost `+`, from the fixed text of all its parts --
+   * the statement is only recognisable when the pieces are read together.
+   */
+  if (node.type === "BinaryExpression" && node.operator === "+") {
+    const parent = parents[0];
+    if (parent?.type === "BinaryExpression" && parent.operator === "+") return undefined;
+
+    const parts: Node[] = [];
+    const flatten = (n: Node): void => {
+      if (n.type === "BinaryExpression" && n.operator === "+") {
+        flatten(n.left as Node);
+        flatten(n.right as Node);
+      } else parts.push(n);
+    };
+    flatten(node);
+
+    const fixed = parts.filter((p) => isStringLiteral(p)).map((p) => String(p.value)).join("");
+    const moving = parts.filter((p) => !isStringLiteral(p));
+    if (moving.length === 0 || !SQL_STATEMENT.test(fixed)) return undefined;
+    return make("sql", moving.flatMap((p) => identifiersIn(p)));
   }
 
   if (node.type === "JSXAttribute") {

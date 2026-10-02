@@ -845,7 +845,7 @@ export function buildReview(input: ReviewInput): SecurityReview {
 
 /** Routes that are public on purpose; flagging them is noise, not safety. */
 function isPublicByDesign(path: string): boolean {
-  return /\/(health|healthz|ready|metrics|login|register|signup|refresh|logout|public)(\/|$)/.test(
+  return /\/(health|healthz|ready|metrics|login|register|signup|refresh|logout|public|forgot\w*|reset\w*)(\/|$)/.test(
     path,
   );
 }

@@ -28,15 +28,15 @@ test("the checker never reports safe code as a proven problem", async () => {
 
 test("rules alone prove at least the baseline", async () => {
   const score = await grade(CASES, "rules");
-  assert.ok(score.real.proven >= 21, `proven ${score.real.proven}, baseline 21`);
+  assert.ok(score.real.proven >= 23, `proven ${score.real.proven}, baseline 23`);
   // Unproven leads still surface real problems, under "worth a look".
   const surfaced = score.real.found + score.real.leads;
-  assert.ok(surfaced >= 22, `surfaced ${surfaced}, baseline 22`);
+  assert.ok(surfaced >= 24, `surfaced ${surfaced}, baseline 24`);
 });
 
 test("a perfect suggester gets at least the baseline confirmed", async () => {
   const score = await grade(CASES, "perfect");
-  assert.ok(score.real.proven >= 23, `proven ${score.real.proven}, baseline 23`);
+  assert.ok(score.real.proven >= 25, `proven ${score.real.proven}, baseline 25`);
 });
 
 test("a good suggester adds findings the rules cannot raise alone", async () => {

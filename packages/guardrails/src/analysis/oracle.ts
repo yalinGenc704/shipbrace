@@ -150,6 +150,21 @@ function interveningSanitizer(
   });
 }
 
+/**
+ * The check that happens in the same statement the input is read:
+ * `const id = parseInt(req.params.id, 10)`. It sits before the input's own
+ * position, so the search for a check *between* input and operation misses it.
+ */
+function checkOnArrival(source: TaintSource, scope: Scope): Sanitizer | undefined {
+  if (!source.binding) return undefined;
+  return scope.sanitizers.find(
+    (s) =>
+      s.guards[0] === source.binding &&
+      s.location.line === source.location.line &&
+      positionOf(s.id) <= positionOf(source.id),
+  );
+}
+
 export function analyseTaint(inventory: Inventory): TaintPath[] {
   const paths: TaintPath[] = [];
 
@@ -180,7 +195,8 @@ export function analyseTaint(inventory: Inventory): TaintPath[] {
           continue;
         }
 
-        const sanitizer = interveningSanitizer(tainted, scope, sourceAt, sinkAt);
+        const sanitizer =
+          checkOnArrival(source, scope) ?? interveningSanitizer(tainted, scope, sourceAt, sinkAt);
         paths.push(
           makePath(
             sanitizer ? "sanitized" : "exploitable",

@@ -369,3 +369,20 @@ test("code sent to the model never includes .env files or unredacted keys", asyn
   assert.ok(!sent.includes("sk-live1234567890abcdef"), "a key reached the model");
   assert.ok(!sent.includes("hunter2"));
 });
+
+test("a sign-in check named on the route itself counts as protection", async () => {
+  const review = await runSecurityReview(
+    snap(
+      "server/routes/app.js",
+      [
+        'router.get("/admin", authHandler.isAuthenticated, (req, res) => res.send("ok"));',
+        'router.post("/upload", upload.single("doc"), (req, res) => res.send("ok"));',
+      ].join("\n"),
+    ),
+  );
+  const item = review.modules
+    .find((m) => m.id === "access-control")
+    ?.items.find((i) => i.id === "access-control/unguarded-routes");
+  // The upload handler is not a sign-in check, so that route is still open.
+  assert.deepEqual(item?.risks.map((r) => r.what.split(" (")[0]), ["POST /upload"]);
+});
