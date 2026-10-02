@@ -35,7 +35,9 @@ export type SinkKind =
   | "html"
   | "redirect"
   | "outbound-request"
-  | "dynamic-code";
+  | "dynamic-code"
+  /** A MongoDB-style query whose filter takes a visitor's value as-is. */
+  | "nosql";
 
 export type SanitizerKind =
   | "schema-validation"

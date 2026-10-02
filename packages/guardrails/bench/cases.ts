@@ -1227,6 +1227,101 @@ export const CASES: BenchCase[] = [
     ],
   },
 
+  // --- MongoDB-style queries ----------------------------------------------------------
+  {
+    id: "mongo-login-bypass",
+    tests: "A login looks the user up with the form's values passed straight into a MongoDB filter.",
+    files: [
+      file("server/routes/login.js", [
+        'const router = require("express").Router();',
+        'router.post("/login", async (req, res) => {',
+        "  const user = await User.findOne({ email: req.body.email, password: req.body.password }); // [A]",
+        "  res.json({ ok: Boolean(user) });",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/login",
+        parameter: "password",
+        sink: "nosql",
+        real: true,
+        why: 'Sending {"$ne": null} as the password matches any user.',
+      },
+    ],
+  },
+  {
+    id: "mongo-login-as-text",
+    tests: "The same login, with each value turned into plain text first.",
+    files: [
+      file("server/routes/login.js", [
+        'const router = require("express").Router();',
+        'router.post("/login", async (req, res) => {',
+        "  const user = await User.findOne({ email: String(req.body.email), password: String(req.body.password) }); // [A]",
+        "  res.json({ ok: Boolean(user) });",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/login",
+        parameter: "password",
+        sink: "nosql",
+        real: false,
+        why: "A string cannot carry query operators.",
+      },
+    ],
+  },
+  {
+    id: "mongo-where-built",
+    tests: "A MongoDB $where condition is assembled from a value in the address.",
+    files: [
+      file("server/routes/allocations.js", [
+        'const router = require("express").Router();',
+        'router.get("/allocations", requireLogin, async (req, res) => {',
+        "  const threshold = req.query.threshold;",
+        "  const rows = await allocationsCol.find({ $where: `this.stocks > ${threshold}` }); // [A]",
+        "  res.json(rows);",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/allocations",
+        parameter: "threshold",
+        sink: "nosql",
+        real: true,
+        why: "$where runs JavaScript inside the database, and the visitor writes part of it.",
+      },
+    ],
+  },
+  {
+    id: "sequelize-where-safe",
+    tests: "A Sequelize lookup with the same field names; Sequelize sends values as data.",
+    files: [
+      file("server/routes/login.js", [
+        'const router = require("express").Router();',
+        'router.post("/login", async (req, res) => {',
+        "  const user = await User.findOne({ where: { email: req.body.email } }); // [A]",
+        "  res.json({ ok: Boolean(user) });",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/login",
+        parameter: "email",
+        sink: "nosql",
+        real: false,
+        why: "Sequelize's where filter does not treat values as operators.",
+      },
+    ],
+  },
+
   // --- uploaded files ----------------------------------------------------------
   {
     id: "upload-filename",

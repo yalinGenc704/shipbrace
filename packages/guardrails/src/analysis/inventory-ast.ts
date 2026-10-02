@@ -100,7 +100,11 @@ const DISPLAY = /(?:^|\.)(?:render|json|send|write|end|html|text|flash|log|info|
  */
 const ORM_METHOD =
   /^(?:findOne|findByPk|findById|findUnique|findFirst|findAll|findMany|find|update|updateOne|updateMany|destroy|delete|deleteOne|deleteMany|findOneAndUpdate|findByIdAndUpdate|findByIdAndDelete|findOneAndDelete|upsert)$/;
-const MODEL_OWNER = /^(?:db|prisma|models?|repo|repository|knex)$|^[A-Z]/;
+const MODEL_OWNER = /^(?:db|prisma|models?|repo|repository|knex)$|^[A-Z]|(?:Col|Collection|Model|Repo|Repository)$/;
+
+/** Query methods whose filter is a MongoDB-style object. */
+const MONGO_METHOD =
+  /^(?:find|findOne|findOneAndUpdate|findOneAndDelete|updateOne|updateMany|deleteOne|deleteMany|countDocuments|count|exists)$/;
 
 const SHELL = /^(?:execSync|exec|execFile|execFileSync|spawn|spawnSync)$/;
 const FILESYSTEM =
@@ -704,6 +708,58 @@ function renderSink(
   };
 }
 
+/**
+ * MongoDB filters are objects, so a visitor who sends an object instead of a
+ * string -- `{"$ne": null}` for a password -- changes what the query means:
+ * "any user whose password is not empty". Two shapes are recognised:
+ *
+ *  - a filter value read straight from the request, unwrapped:
+ *    `User.findOne({ name: req.body.name })`. Read inline only: once the value
+ *    passes through a variable it may have been turned into a string on the
+ *    way, and guessing would warn about correct code.
+ *  - `$where`, which runs JavaScript inside the database, built from values.
+ *
+ * Sequelize also has `find`, but wraps its filter in `where:`; those are
+ * left to the record-lookup path.
+ */
+function mongoFilterSink(parsed: ParsedFile, node: Node, method: string, filter: Node | undefined): Sink | undefined {
+  if (!MONGO_METHOD.test(method) || filter?.type !== "ObjectExpression") return undefined;
+  const properties = (filter.properties ?? []) as Node[];
+  const keyOf = (p: Node) => {
+    const key = p.key as Node | undefined;
+    return key?.type === "Identifier" ? String(key.name) : isStringLiteral(key) ? String(key.value) : "";
+  };
+  if (properties.some((p) => keyOf(p) === "where")) return undefined;
+
+  const raw: Node[] = [];
+  const operands: string[] = [];
+  for (const property of properties) {
+    const value = property.value as Node | undefined;
+    if (!value) continue;
+    if (keyOf(property) === "$where") {
+      if (value.type === "TemplateLiteral" || value.type === "BinaryExpression") {
+        raw.push(value);
+        operands.push(...identifiersIn(value));
+      }
+      continue;
+    }
+    // Only the value itself, read from the request with nothing around it.
+    if (value.type === "MemberExpression" && /\breq\.(?:body|query|params)\b/.test(textOf(parsed, value))) {
+      raw.push(value);
+    }
+  }
+  if (raw.length === 0) return undefined;
+
+  return {
+    id: `${parsed.path}:sink:${node.start}`,
+    kind: "nosql",
+    expression: raw.map((v) => textOf(parsed, v)).join(" , ").replace(/\s+/g, " ").slice(0, 200),
+    operands,
+    location: locationOf(parsed, node),
+    inherentlySafe: false,
+  };
+}
+
 function sinkFor(
   parsed: ParsedFile,
   node: Node,
@@ -789,6 +845,8 @@ function sinkFor(
     const firstArg = args[0];
     const isCallback = firstArg && /Function|ArrowFunctionExpression/.test(firstArg.type);
     if (owners.length > 0 && ORM_METHOD.test(method) && owners.some((p) => MODEL_OWNER.test(p)) && !isCallback) {
+      const mongo = mongoFilterSink(parsed, node, method, firstArg);
+      if (mongo) return mongo;
       return make("sql", operands, true);
     }
   }

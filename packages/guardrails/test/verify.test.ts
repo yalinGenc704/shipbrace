@@ -428,3 +428,12 @@ test("a confirmed ownership gap lands on the checklist as a high risk", async ()
   assert.equal(item?.risks[0]?.grade, "high");
   assert.match(item?.risks[0]?.what ?? "", /never checks that the record belongs/);
 });
+
+test("a route registered twice at the same place does not loop forever", () => {
+  const inventory = inv([
+    'app.get("/api/x", (c) => c.text("a"));',
+    'app.get("/api/x", (c) => c.text("b"));',
+  ]);
+  const result = verifyClaim({ door: "/api/x", parameter: "q", sink: "sql" }, inventory);
+  assert.ok(["not-found", "no-path"].includes(result.verdict));
+});

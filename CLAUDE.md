@@ -64,7 +64,7 @@ Bun and Docker are **not installed** on this machine, so the Bun-based root
 scripts fail (`npm test` → "'bun' is not recognized"). Use Node directly:
 
 ```bash
-# all tests (expect 135 pass, 1 skipped -- symlinks need elevation on Windows)
+# all tests (expect 138 pass, 1 skipped -- symlinks need elevation on Windows)
 node --experimental-strip-types --test packages/guardrails/test/*.test.ts packages/scaffold/test/*.test.ts server/test/*.test.ts
 
 # review API on :3000. Set REVIEW_ROOT explicitly: npm runs workspace scripts
@@ -106,11 +106,17 @@ print its value. Prepaid credits with auto-reload off, so it cannot overspend.
 
 ## Current state and known gaps
 
-- **Benchmark (50 apps, 28 real problems, 23 safe decoys), 2026-10-01:** rules
-  alone prove 25; a perfect suggester proves 27 (the extra two are ownership
-  gaps, which only a suggester can raise); the real model matched the perfect
-  suggester on the 31-app version; **zero** false alarms. Only miss: a stored
-  comment rendered as raw HTML (needs following data through the database).
+- **Benchmark (56 apps, 31 real problems, 26 safe decoys), 2026-10-01:** rules
+  alone prove 27; a perfect suggester proves 30; zero false alarms. Only
+  miss: a stored comment rendered as raw HTML. The starter kit is held to its
+  own review (`packages/scaffold/test/self-review.test.ts`): no warnings
+  except the lockfile a fresh app gets on first install.
+- **"Checked" says what was checked** (`ActionItem.covers`). Error pages hand
+  back to the user when Express's built-in error page is in use (it leaks
+  unless NODE_ENV=production); Sequelize query logging, session secrets in
+  code, and missing CSRF protection on cookie sign-in (new item
+  `access-control/csrf`) are detected. MongoDB-style filters taking request
+  values inline, and `$where` built from values, are `nosql` operations.
 - **Page templates** (EJS, Handlebars, Pug, Nunjucks/Swig): `res.render(view,
   locals)` is an html operation only for the values the template prints raw
   (`<%-`, `{{{`, `!{`, `| safe`, autoescape off). Plain reassignments

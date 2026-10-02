@@ -71,6 +71,12 @@ export interface ActionItem {
   /** Present when the user must answer something automation cannot determine. */
   question?: string;
   /**
+   * Exactly what the automated check looks at, shown with a pass. A pass is
+   * only ever as wide as the check behind it, and saying so stops "Checked"
+   * reading as "safe".
+   */
+  covers?: string;
+  /**
    * Name of the detector that checks this item, or null when nothing automated
    * covers it yet.
    *
@@ -141,6 +147,7 @@ const SINK_GRADE: Record<string, Grade> = {
   "outbound-request": "medium",
   html: "medium",
   redirect: "low",
+  nosql: "high",
 };
 
 /**
@@ -193,6 +200,13 @@ const SINK_COPY: Record<string, { operation: string; impact: string; fix: string
       "Someone could put their own scripts onto your pages, which run in your visitors' browsers and can steal whatever those visitors are logged into.",
     fix:
       "If the content is plain text, render it as text and let React escape it for you. If it genuinely has to be HTML, clean it with a library such as DOMPurify before it reaches the page.",
+  },
+  nosql: {
+    operation: "a database query",
+    impact:
+      "Someone could send a specially shaped value instead of plain text -- for a password, \"anything except empty\" -- and get past a login or read records that are not theirs, without knowing any password.",
+    fix:
+      "Turn the value into plain text before it reaches the query, for example `String(req.body.name)`, or check its type with a schema so objects are refused. Never build a `$where` from visitor input.",
   },
   redirect: {
     operation: "sending the visitor to another address",
@@ -252,6 +266,7 @@ const MODULES: ModuleShape[] = [
     items: [
       {
         id: "access-control/unguarded-routes",
+        covers: "every route has a sign-in check, or is a page meant to be public",
         title: "Every private page and action requires signing in",
         detector: "route-guard-check",
       },
@@ -264,11 +279,21 @@ const MODULES: ModuleShape[] = [
       },
       {
         id: "access-control/file-paths",
+        covers: "no visitor input was traced to a file path",
         title: "File access cannot be steered outside its intended folder",
         detector: "taint:filesystem",
       },
       {
+        id: "access-control/csrf",
+        covers: "cookie sign-in is protected against requests started by other websites",
+        title: "Other websites cannot make signed-in visitors do things",
+        question:
+          "If your site signs people in with cookies, a page on another site can submit forms to yours while they are signed in. Confirm changes need a token only your own pages have, or that your login cookie is marked SameSite.",
+        detector: "server:csrf-protection",
+      },
+      {
         id: "ssrf/url-allowlist",
+        covers: "no visitor input was traced to an address your server fetches",
         title: "Visitor-supplied addresses are checked against an allowlist",
         detector: "taint:outbound-request",
       },
@@ -289,9 +314,10 @@ const MODULES: ModuleShape[] = [
     summary:
       "The code can be correct while the settings around it are not -- an overly permissive sharing rule, a debug mode left on, a default password never changed.",
     items: [
-      { id: "config/cors", title: "Only your own sites can call your API", detector: "rules:cors" },
+      { id: "config/cors", covers: "your API does not accept calls from every website", title: "Only your own sites can call your API", detector: "rules:cors" },
       {
         id: "config/security-headers",
+        covers: "your server switches on the standard protective headers",
         title: "Standard protective headers are switched on",
         question:
           "Confirm your server sets the standard protective headers. They cost nothing and close a whole class of browser-side attacks.",
@@ -299,6 +325,7 @@ const MODULES: ModuleShape[] = [
       },
       {
         id: "config/exposed-services",
+        covers: "your docker-compose file does not publish the database to the outside",
         title: "The database is not reachable from the internet",
         question:
           "Confirm your database does not publish a port to the outside world. It should be reachable only by your own application.",
@@ -316,6 +343,7 @@ const MODULES: ModuleShape[] = [
     items: [
       {
         id: "components/known-vulnerabilities",
+        covers: "every public package in your lockfile against the OSV.dev list of known flaws",
         title: "No dependency has a known published vulnerability",
         question:
           "If this could not be checked automatically, run your package manager's audit command (for example npm audit) and review what it reports.",
@@ -330,6 +358,7 @@ const MODULES: ModuleShape[] = [
       },
       {
         id: "components/pinned",
+        covers: "every package version in package.json is exact",
         title: "Versions are pinned so builds are reproducible",
         question:
           "Confirm your dependency versions are exact rather than ranges, so the code you reviewed is the code that ships.",
@@ -337,6 +366,7 @@ const MODULES: ModuleShape[] = [
       },
       {
         id: "integrity/lockfile",
+        covers: "a lockfile is committed",
         title: "A lockfile records exactly which package versions are installed",
         question:
           "Confirm a lockfile is committed. Without one, two installs of the same code can pull different package versions.",
@@ -361,11 +391,13 @@ const MODULES: ModuleShape[] = [
     items: [
       {
         id: "crypto/exposed-secrets",
+        covers: "no keys, passwords, or session secrets are written into your code",
         title: "No keys or passwords are written into the code",
         detector: "rules:secrets",
       },
       {
         id: "crypto/password-storage",
+        covers: "passwords are hashed with bcrypt or argon2",
         title: "Passwords are stored using a slow, modern hash",
         question:
           "Passwords must never be stored as typed, and never with a fast hash like MD5 or SHA-256. Confirm yours use argon2id or bcrypt -- deliberately slow algorithms that make guessing impractical.",
@@ -390,16 +422,19 @@ const MODULES: ModuleShape[] = [
     items: [
       {
         id: "injection/database",
+        covers: "no visitor input was traced into a database query",
         title: "Database queries keep visitor input as data, not commands",
         detector: "taint:sql",
       },
       {
         id: "injection/system-commands",
+        covers: "no visitor input was traced into a system command or into code that runs",
         title: "No system command is built from visitor input",
         detector: "taint:shell",
       },
       {
         id: "injection/page-content",
+        covers: "no visitor input was traced into a page without escaping",
         title: "Visitor-supplied content cannot inject scripts into pages",
         detector: "taint:html",
       },
@@ -422,6 +457,7 @@ const MODULES: ModuleShape[] = [
       },
       {
         id: "design/rate-limiting",
+        covers: "a rate limiter is in place",
         title: "Expensive or sensitive actions are rate limited",
         question:
           "Anything that costs you money, sends a message, or checks a password should refuse to run thousands of times a minute from one source. Confirm which of your actions have a limit.",
@@ -446,11 +482,13 @@ const MODULES: ModuleShape[] = [
     items: [
       {
         id: "auth/session-storage",
+        covers: "login tokens are not kept where page scripts can read them",
         title: "Login tokens cannot be read by scripts on the page",
         detector: "rules:token-storage",
       },
       {
         id: "auth/session-expiry",
+        covers: "login tokens are issued with an expiry",
         title: "Sessions expire and can be revoked",
         question:
           "Confirm a login does not last forever, and that signing out actually invalidates it on the server rather than only in the browser.",
@@ -520,6 +558,7 @@ const MODULES: ModuleShape[] = [
       },
       {
         id: "logging/no-secrets",
+        covers: "no password, token, or key is passed to a log call, and database query logging is off",
         title: "Logs never contain passwords, tokens, or keys",
         question:
           "Logs are copied, shipped to other services, and read by more people than your database. Confirm nothing sensitive is written into them.",
@@ -544,6 +583,7 @@ const MODULES: ModuleShape[] = [
     items: [
       {
         id: "config/error-detail",
+        covers: "no error text is sent back to visitors from your own code, and you have your own error handler",
         title: "Error messages shown to visitors do not reveal internals",
         question:
           "A stack trace or raw database error tells an attacker how your system is built. Confirm visitors see a short message and the detail goes to your logs instead.",
@@ -688,6 +728,7 @@ const ITEM_FOR_SINK: Record<string, string> = {
   "dynamic-code": "injection/system-commands",
   filesystem: "access-control/file-paths",
   redirect: "access-control/file-paths",
+  nosql: "injection/database",
   "outbound-request": "ssrf/url-allowlist",
 };
 

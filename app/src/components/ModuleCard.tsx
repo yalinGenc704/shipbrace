@@ -145,8 +145,11 @@ function Item({
         something. An item with no detector is never shown as passed by the
         engine, so this only ever describes a check that really ran.
       */}
+      {item.status === "pass" && item.covers && (
+        <p className="mt-2 text-xs leading-relaxed text-ink-soft">Checked: {item.covers}.</p>
+      )}
       {item.status === "pass" && mode === "detailed" && item.detector && (
-        <p className="mt-2 font-mono text-xs text-ink-soft">checked by {item.detector}</p>
+        <p className="mt-1 font-mono text-xs text-ink-soft">checked by {item.detector}</p>
       )}
 
       {item.risks.length > 0 && (

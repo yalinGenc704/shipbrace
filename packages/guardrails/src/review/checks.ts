@@ -1,6 +1,6 @@
 import type { Inventory } from "../analysis/inventory.ts";
 import type { CodeLocation, RepoSnapshot, SourceFile } from "../types.ts";
-import { isSource, isTestPath } from "../util.ts";
+import { isSource, isTestPath, redact } from "../util.ts";
 import type { Grade, Risk } from "./modules.ts";
 
 /**
@@ -51,7 +51,9 @@ function lineOf(file: SourceFile, re: RegExp): CodeLocation {
   return {
     path: file.path,
     line: index === -1 ? 1 : index + 1,
-    ...(index === -1 ? {} : { excerpt: lines[index]!.trim().slice(0, 300) }),
+    // Redacted here, before a finding exists: the line that proves a secret
+    // is hardcoded is the line that contains it.
+    ...(index === -1 ? {} : { excerpt: redact(lines[index]!.trim()).slice(0, 300) }),
   };
 }
 
@@ -203,7 +205,26 @@ const errorDetail: ProjectCheck = {
         ),
       );
     }
-    return risks.length > 0 ? { status: "risks", risks } : { status: "pass" };
+    if (risks.length > 0) return { status: "risks", risks };
+
+    /**
+     * An Express app with no error handler of its own uses Express's, which
+     * prints the full internal error to the visitor unless the server runs with
+     * NODE_ENV=production. How it will be run is not in the code, so this goes
+     * back to the user as a specific question -- not a pass, which is what it
+     * used to be, on an app that does leak.
+     */
+    const files = sourceFiles(snapshot);
+    const usesExpress = anyMatch(files, /\bexpress\s*\(\s*\)/);
+    const ownHandler = anyMatch(files, /\.use\s*\(\s*(?:async\s*)?(?:function\s*\w*\s*)?\(\s*\w+\s*,\s*\w+\s*,\s*\w+\s*,\s*\w+\s*\)/);
+    if (usesExpress && !ownHandler) {
+      return {
+        status: "not-applicable",
+        reason:
+          "This app relies on Express's built-in error page, which shows visitors the full internal error -- file paths and code -- unless the server runs with NODE_ENV=production. Confirm it does, or add an error handler of your own that sends a short message.",
+      };
+    }
+    return { status: "pass" };
   },
 };
 
@@ -422,11 +443,106 @@ const logsWithoutSecrets: ProjectCheck = {
         ),
       );
     }
+    /**
+     * Sequelize writes every query it runs to the console unless told not to --
+     * including the values in them, so password hashes and personal details
+     * end up in the logs.
+     */
+    for (const file of files) {
+      for (const match of file.content.matchAll(/new\s+Sequelize\s*\(([\s\S]{0,600}?)\)\s*;?/g)) {
+        if (/\blogging\s*:/.test(match[1] ?? "")) continue;
+        risks.push(
+          risk(
+            "check/orm-query-logging",
+            "medium",
+            `${file.path} sets up Sequelize without turning off its query logging, so every database query -- with the values in it -- is written to the logs.`,
+            "Queries carry the data they read and write: password hashes, emails, addresses. Logs are copied and shared far more widely than your database, so that data leaks out through them.",
+            "Add `logging: false` to the Sequelize options (or send it to a logger that leaves values out).",
+            lineOf(file, /new\s+Sequelize/),
+          ),
+        );
+        break;
+      }
+    }
     return risks.length > 0 ? { status: "risks", risks } : { status: "pass" };
   },
 };
 
+// --- A04: session secrets written into the code -------------------------------
+
+const sessionSecret: ProjectCheck = {
+  id: "server:session-secret-from-settings",
+  itemId: "crypto/exposed-secrets",
+
+  run(snapshot) {
+    const files = sourceFiles(snapshot);
+    const risks: Risk[] = [];
+    const inline =
+      /\b(?:session|expressSession|cookieSession)\s*\(\s*\{[^}]*?\bsecret\s*:\s*(['"`])[^'"`]+\1|\bcookieParser\s*\(\s*(['"`])[^'"`]+\2/;
+
+    for (const file of files) {
+      if (!inline.test(file.content)) continue;
+      risks.push(
+        risk(
+          "check/session-secret-in-code",
+          "high",
+          `${file.path} writes the secret that signs login sessions directly into the code.`,
+          "Anyone who has seen the code -- or guesses a common example value like the ones in tutorials -- can forge a login session for any user without a password.",
+          "Read the secret from your settings (an environment variable such as SESSION_SECRET), set it to a long random value, and change it now, since the current one has been in the code.",
+          lineOf(file, /\bsecret\s*:|cookieParser\s*\(/),
+        ),
+      );
+    }
+    return risks.length > 0 ? { status: "risks", risks } : { status: "pass" };
+  },
+};
+
+// --- A01: other sites cannot act for a signed-in visitor (CSRF) ----------------
+
+const csrfProtection: ProjectCheck = {
+  id: "server:csrf-protection",
+  itemId: "access-control/csrf",
+
+  run(snapshot, inventory) {
+    const files = sourceFiles(snapshot);
+    const changes = inventory.doors.filter((d) => ["POST", "PUT", "PATCH", "DELETE"].includes(d.method));
+    if (changes.length === 0) {
+      return { status: "not-applicable", reason: "No routes change anything, so there is nothing for another site to trigger." };
+    }
+
+    // The browser sends cookies along automatically; that is what makes this possible.
+    const cookieLogin = anyMatch(files, /\b(?:express-session|cookie-session)\b|\b(?:session|cookieSession)\s*\(\s*\{|\bsetCookie\s*\(|res\.cookie\s*\(/);
+    if (!cookieLogin) {
+      return {
+        status: "not-applicable",
+        reason: "No cookie-based sign-in was found. If this app signs people in with cookies some other way, confirm other sites cannot submit forms to it on their behalf.",
+      };
+    }
+
+    const protectedBy =
+      anyMatch(files, /\b(?:csurf|lusca\.csrf|csrf\s*\(|doubleCsrf|csrfSync)\b|from\s+["']hono\/csrf["']/) ||
+      anyMatch(files, /sameSite\s*:\s*["'`](?:strict|lax)["'`]/i);
+    if (protectedBy) return { status: "pass" };
+
+    return {
+      status: "risks",
+      risks: [
+        risk(
+          "check/no-csrf-protection",
+          "medium",
+          `This app signs people in with cookies and has ${changes.length} route${changes.length === 1 ? "" : "s"} that change things, but nothing stops another website from sending those requests on a visitor's behalf.`,
+          "A page on any other site can quietly submit a form to yours while your visitor is signed in -- changing their email, placing an order, deleting data -- and your server cannot tell it apart from the visitor doing it.",
+          "Set your login cookie with `sameSite: \"lax\"` (or \"strict\"), and add CSRF protection middleware -- `csrf()` from hono/csrf, or csrf-csrf for Express -- to routes that change data.",
+          lineOf(files.find((f) => /session\s*\(|setCookie|res\.cookie/.test(f.content)) ?? files[0]!, /session\s*\(|setCookie|res\.cookie/),
+        ),
+      ],
+    };
+  },
+};
+
 export const projectChecks: ProjectCheck[] = [
+  sessionSecret,
+  csrfProtection,
   exposedServices,
   securityHeaders,
   errorDetail,

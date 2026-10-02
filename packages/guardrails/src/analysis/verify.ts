@@ -391,6 +391,9 @@ function reachesOperands(
  */
 function writtenInside(source: TaintSource, sink: Sink): boolean {
   if (fileOf(source.id) !== fileOf(sink.id) || positionOf(source.id) < positionOf(sink.id)) return false;
+  // `fetch(url)` is both a reply from elsewhere and a request out. Its reply
+  // cannot be inside the request that produces it.
+  if (positionOf(source.id) === positionOf(sink.id)) return false;
   const text = source.expression.replace(/\s+/g, " ");
   return text.length > 0 && sink.expression.includes(text);
 }
@@ -457,6 +460,8 @@ function eachDoor(
   check: (door: string) => VerifiedClaim,
 ): VerifiedClaim | undefined {
   if (!claimDoor) return undefined;
+  // Already pinned to one door id -- even one registered twice -- so stop here.
+  if (inventory.doors.some((d) => d.id === claimDoor)) return undefined;
   const doors = doorsNamed(claimDoor, inventory);
   if (doors.length < 2) return undefined;
   return doors
@@ -669,7 +674,7 @@ export function verifyOwnership(claim: OwnershipClaim, inventory: Inventory): Ve
     return { claim, door, verdict: "not-found", reason: `No input matching "${claim.parameter}" is read in ${door.path}.` };
   }
 
-  const lookups = inventory.sinks.filter((s) => s.kind === "sql");
+  const lookups = inventory.sinks.filter((s) => s.kind === "sql" || s.kind === "nosql");
   if (lookups.length === 0) {
     return { claim, door, verdict: "not-found", reason: "No database query found." };
   }
