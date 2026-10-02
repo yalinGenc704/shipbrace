@@ -167,7 +167,14 @@ print its value. Prepaid credits with auto-reload off, so it cannot overspend.
 - 17 of 35 checklist items have no detector and are left to the user. The
   checklist follows OWASP Top 10:2025; the four items added for its new
   categories (A03 supply chain, A10 exceptional conditions) have no detector yet.
-- No GitHub integration, persistence, or webhooks yet.
+- **GitHub App works end to end (first live run 2026-10-01):** App ID 5157570
+  ("yg-aegis-review"), installed only on the private test repo
+  yalinGenc704/aegis-dvna-test (a DVNA copy). A push produced a failing check
+  with 12 line notes. Local setup: `GITHUB_*` settings in `.env`, key in
+  `github-app.pem` (git-ignored), and a temporary Cloudflare quick tunnel
+  (`cloudflared tunnel --url http://localhost:3000`). The tunnel address
+  changes every run, so the App's webhook URL must be updated each time until
+  it is hosted. No persistence yet: past reviews are not stored.
 
 ## Next steps
 

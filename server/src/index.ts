@@ -40,7 +40,8 @@ app.use(
   }),
 );
 
-app.get("/api/health", (c) => c.json({ ok: true, root: config.reviewRoot }));
+// Nothing about the host: once a tunnel is open, anyone can call this.
+app.get("/api/health", (c) => c.json({ ok: true }));
 
 const reviewRequest = z.object({
   /** Relative to the configured root. Confined to it by `ingest`. */

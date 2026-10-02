@@ -98,6 +98,7 @@ async function reviewCommit(
   }
 
   try {
+    console.log(`reviewing ${owner}/${repo}@${sha.slice(0, 7)}`);
     const fetched = await fetchRepository(client, owner, repo, sha);
     const result = await deps.review(fetched.snapshot);
     const output = checkOutput(result, fetched.skipped);
@@ -116,6 +117,7 @@ async function reviewCommit(
       status: "completed",
       conclusion: output.conclusion,
     });
+    console.log(`posted ${output.conclusion} for ${owner}/${repo}@${sha.slice(0, 7)}: ${output.title}`);
   } catch (error) {
     log(`review failed for ${owner}/${repo}@${sha.slice(0, 7)}:`, error);
     // Never left spinning, and never a pass: a failed review says so.
