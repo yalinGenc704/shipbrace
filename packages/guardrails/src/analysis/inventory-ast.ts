@@ -88,6 +88,20 @@ function isIdentityRead(node: Node): boolean {
   return false;
 }
 
+/** Calls that show or record a value without deciding anything with it. */
+const DISPLAY = /(?:^|\.)(?:render|json|send|write|end|html|text|flash|log|info|warn|error|debug)$/;
+
+/**
+ * Record lookups through a database library -- Sequelize, Prisma, Mongoose,
+ * TypeORM. They send values as data, so they are never an injection problem;
+ * they matter only for "whose record is this?". Required to be called on a
+ * model (`User.find`, `db.User.find`, `prisma.user.update`) so that an array's
+ * `.find` or a hash's `.update` is not mistaken for one.
+ */
+const ORM_METHOD =
+  /^(?:findOne|findByPk|findById|findUnique|findFirst|findAll|findMany|find|update|updateOne|updateMany|destroy|delete|deleteOne|deleteMany|findOneAndUpdate|findByIdAndUpdate|findByIdAndDelete|findOneAndDelete|upsert)$/;
+const MODEL_OWNER = /^(?:db|prisma|models?|repo|repository|knex)$|^[A-Z]/;
+
 const SHELL = /^(?:execSync|exec|execFile|execFileSync|spawn|spawnSync)$/;
 const FILESYSTEM =
   /(?:^|\.)(?:readFile|readFileSync|writeFile|writeFileSync|appendFile|unlink|rm|rmSync|createReadStream|createWriteStream|open)$/;
@@ -139,6 +153,14 @@ export function buildInventoryFromAst(snapshot: RepoSnapshot): Inventory {
     const doors = findDoors(parsed);
     inventory.doors.push(...doors);
     collect(parsed, doors, inventory, views);
+  }
+
+  // A route that names its handler gets that function's code, when exactly one
+  // function of that name exists. Two of the same name is a guess, so neither.
+  for (const door of inventory.doors) {
+    if (!door.handlerRef) continue;
+    const matches = (inventory.functions ?? []).filter((f) => f.name === door.handlerRef);
+    if (matches.length === 1) door.handlerAt = { path: matches[0]!.path, range: matches[0]!.bodyRange };
   }
   return inventory;
 }
@@ -224,6 +246,10 @@ function findDoors(parsed: ParsedFile): Door[] {
       }
     }
 
+    const named = handler.type === "Identifier" || handler.type === "MemberExpression"
+      ? dottedName(handler)?.split(".").pop()
+      : undefined;
+
     return {
       id: `${parsed.path}:${method}:${path}`,
       method,
@@ -231,6 +257,7 @@ function findDoors(parsed: ParsedFile): Door[] {
       location: locationOf(parsed, node),
       guards: [...guards],
       bodyRange: [handler.start, handler.end],
+      ...(named ? { handlerRef: named } : {}),
     };
   });
 }
@@ -252,7 +279,7 @@ function collect(
       into.sources.push({
         id: `${parsed.path}:src:${node.start}`,
         kind: sourceKind,
-        expression: textOf(parsed, node).slice(0, 160),
+        expression: textOf(parsed, fieldOf(node, parents)).slice(0, 160),
         ...(binding ? { binding } : {}),
         location: locationOf(parsed, node),
         ...doorId,
@@ -261,11 +288,17 @@ function collect(
 
     // --- who is signed in -----------------------------------------------
     if (isIdentityRead(node)) {
+      // The nearest call it is passed into, if that call only displays it.
+      const call = parents.find((p) => p.type === "CallExpression" && p !== node);
+      const displayOnly = Boolean(call) &&
+        DISPLAY.test(dottedName(call!.callee) ?? "") &&
+        !parents.some((p) => p.type === "VariableDeclarator" || p.type === "AssignmentExpression");
       (into.identities ??= []).push({
         id: `${parsed.path}:who:${node.start}`,
         expression: textOf(parsed, node).slice(0, 120),
         location: locationOf(parsed, node),
         ...doorId,
+        ...(displayOnly ? { displayOnly } : {}),
       });
     }
 
@@ -358,8 +391,14 @@ function collect(
     if (/^(?:FunctionDeclaration|FunctionExpression|ArrowFunctionExpression)$/.test(node.type)) {
       const body = (node.body as Node | undefined) ?? node;
       const declared = (node.id as Node | undefined)?.name;
-      const assigned = parents[0]?.type === "VariableDeclarator"
-        ? ((parents[0].id as Node | undefined)?.name)
+      // `const f = ...`, `module.exports.f = ...`, `exports.f = ...`, `{ f: ... }`
+      const parent = parents[0];
+      const assigned = parent?.type === "VariableDeclarator"
+        ? ((parent.id as Node | undefined)?.name)
+        : parent?.type === "AssignmentExpression" && parent.right === node
+        ? (dottedName(parent.left)?.split(".").pop())
+        : (parent?.type === "Property" || parent?.type === "ObjectProperty") && parent.value === node
+        ? ((parent.key as Node | undefined)?.name ?? (isStringLiteral(parent.key) ? parent.key.value : undefined))
         : undefined;
 
       (into.functions ??= []).push({
@@ -377,6 +416,19 @@ function collect(
     const sink = sinkFor(parsed, node, parents, views);
     if (sink) into.sinks.push({ ...sink, ...doorId });
   });
+}
+
+/**
+ * `req.body.id`, not just `req.body`: the field read is what a suggestion
+ * names ("the id in the form"), and what tells two inputs apart.
+ */
+function fieldOf(node: Node, parents: Node[]): Node {
+  let current = node;
+  for (const parent of parents) {
+    if (parent.type !== "MemberExpression" || parent.object !== current || parent.computed) break;
+    current = parent;
+  }
+  return current;
 }
 
 function sourceKindOf(node: Node, parents: Node[]): SourceKind | undefined {
@@ -729,6 +781,17 @@ function sinkFor(
     return isCommandBuilt(args) ? make("shell", operands) : undefined;
   }
   if (DYNAMIC_CODE.test(name)) return make("dynamic-code", operands);
+
+  {
+    const parts = name.split(".");
+    const method = parts.at(-1) ?? "";
+    const owners = parts.slice(0, -1);
+    const firstArg = args[0];
+    const isCallback = firstArg && /Function|ArrowFunctionExpression/.test(firstArg.type);
+    if (owners.length > 0 && ORM_METHOD.test(method) && owners.some((p) => MODEL_OWNER.test(p)) && !isCallback) {
+      return make("sql", operands, true);
+    }
+  }
 
   const rendered = renderSink(parsed, node, name, args, views);
   if (rendered) return rendered;

@@ -55,6 +55,13 @@ export interface Door {
   guards: string[];
   /** Character range of the handler body within the file, for scoping analysis. */
   bodyRange: [number, number];
+  /**
+   * Set when the route names its handler instead of writing it inline --
+   * `router.post("/usersearch", appHandler.userSearch)` -- and that function
+   * was found. The handler's code is then the route's code.
+   */
+  handlerRef?: string;
+  handlerAt?: { path: string; range: [number, number] };
 }
 
 export interface TaintSource {
@@ -152,6 +159,11 @@ export interface IdentityRead {
   expression: string;
   location: CodeLocation;
   doorId?: string;
+  /**
+   * Only printed or logged -- `res.render("page", { userId: req.user.id })`.
+   * Showing who is signed in is not checking anything.
+   */
+  displayOnly?: boolean;
 }
 
 export interface Inventory {

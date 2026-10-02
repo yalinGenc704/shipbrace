@@ -62,8 +62,32 @@ export function ReviewPage() {
         {Math.round(review.stats.durationMs)}ms. This review reports what it was able to check —
         it is not a guarantee that the application is secure.
       </p>
+      <ModelNote model={review.stats.model} made={review.stats.proposalsMade} confirmed={review.stats.proposalsConfirmed} />
     </div>
   );
+}
+
+/**
+ * What the AI step contributed, in one sentence. A refusal or an outage is
+ * stated plainly: the review still ran, on rules alone, and the reader should
+ * know that rather than assume the AI looked.
+ */
+function ModelNote({
+  model,
+  made,
+  confirmed,
+}: {
+  model?: { status: "not-used" | "used" | "refused" | "failed" };
+  made: number;
+  confirmed: number;
+}) {
+  if (!model || model.status === "not-used") return null;
+  const text = {
+    used: `An AI model suggested ${made} place${made === 1 ? "" : "s"} to check; the automated rules confirmed ${confirmed}. Only confirmed findings are counted as risks.`,
+    refused: "The AI model declined to look at this code, so this review used the automated rules alone.",
+    failed: "The AI model could not be reached, so this review used the automated rules alone.",
+  }[model.status];
+  return <p className="mt-2 text-xs leading-relaxed text-ink-soft">{text}</p>;
 }
 
 /**

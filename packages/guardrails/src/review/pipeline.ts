@@ -12,7 +12,7 @@ import {
   type ClaimVerdict,
 } from "../analysis/verify.ts";
 import type { Inventory } from "../analysis/inventory.ts";
-import { nullProposer, type AttackProposer } from "../analysis/proposer.ts";
+import { nullProposer, ProposerRefusedError, type AttackProposer } from "../analysis/proposer.ts";
 import { scan } from "../engine.ts";
 import type { RepoSnapshot } from "../types.ts";
 import { isTestPath, redact } from "../util.ts";
@@ -48,6 +48,11 @@ export interface ReviewResult extends SecurityReview {
     proposalsMade: number;
     proposalsConfirmed: number;
     durationMs: number;
+    /**
+     * What the model step did. `refused` and `failed` mean the review ran on
+     * rules alone, and the user is told so -- never silently.
+     */
+    model: { status: "not-used" | "used" | "refused" | "failed"; name?: string };
   };
 }
 
@@ -105,12 +110,22 @@ export async function runSecurityReview(
   const unverified: ConfirmedAttack[] = [];
   const ownership: OwnershipGap[] = [];
 
+  let model: ReviewResult["stats"]["model"] = { status: "not-used" };
+
   if (proposer !== nullProposer && inventory.doors.length > 0) {
-    const proposals = await proposer.propose({
-      doors: inventory.doors,
-      sinks: inventory.sinks,
-      excerpts: excerptsFor(snapshot, options.maxExcerptBytes ?? 60_000),
-    });
+    let proposals: Awaited<ReturnType<AttackProposer["propose"]>> = [];
+    try {
+      proposals = await proposer.propose({
+        doors: inventory.doors,
+        sinks: inventory.sinks,
+        excerpts: excerptsFor(snapshot, options.maxExcerptBytes ?? 60_000),
+      });
+      model = { status: "used", name: proposer.name };
+    } catch (error) {
+      // The rules' findings already exist and do not depend on the model, so
+      // a refusal or an outage costs its suggestions, not the review.
+      model = { status: error instanceof ProposerRefusedError ? "refused" : "failed", name: proposer.name };
+    }
     proposalsMade = proposals.length;
 
     /**
@@ -187,6 +202,7 @@ export async function runSecurityReview(
       proposalsMade,
       proposalsConfirmed: confirmed.length,
       durationMs: performance.now() - started,
+      model,
     },
   };
 }

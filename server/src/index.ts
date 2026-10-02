@@ -1,5 +1,13 @@
 import { serve } from "@hono/node-server";
-import { createOsvSource, runSecurityReview } from "@aegis/guardrails";
+import { createHash } from "node:crypto";
+import Anthropic from "@anthropic-ai/sdk";
+import {
+  createClaudeProposer,
+  createOsvSource,
+  runSecurityReview,
+  type RepoSnapshot,
+  type ReviewResult,
+} from "@aegis/guardrails";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
@@ -45,9 +53,7 @@ const reviewRequest = z.object({
  */
 async function review(target: string) {
   const ingested = await ingest(config.reviewRoot, target);
-  const result = await runSecurityReview(ingested.snapshot, {
-    ...(config.packageLookup ? { vulnerabilities: createOsvSource() } : {}),
-  });
+  const result = await reviewOnce(ingested.snapshot);
 
   return {
     ...result,
@@ -58,6 +64,36 @@ async function review(target: string) {
       skipped: ingested.skipped,
     },
   };
+}
+
+/**
+ * The last few results, keyed by exactly what was reviewed. With the AI step
+ * on, every review costs money; refreshing the dashboard on unchanged code
+ * must not. Any change to any file is a different key, so a stale result is
+ * never shown for new code.
+ */
+const recent = new Map<string, Promise<ReviewResult>>();
+const proposer = config.aiReview ? createClaudeProposer(new Anthropic() as never) : undefined;
+
+function reviewOnce(snapshot: RepoSnapshot): Promise<ReviewResult> {
+  const hash = createHash("sha256");
+  for (const file of [...snapshot.files].sort((a, b) => a.path.localeCompare(b.path))) {
+    hash.update(file.path).update("\0").update(file.content).update("\0");
+  }
+  const key = hash.digest("hex");
+
+  let pending = recent.get(key);
+  if (!pending) {
+    pending = runSecurityReview(snapshot, {
+      ...(config.packageLookup ? { vulnerabilities: createOsvSource() } : {}),
+      ...(proposer ? { proposer } : {}),
+    });
+    // A failed review is not remembered; the next request tries again.
+    pending.catch(() => recent.delete(key));
+    recent.set(key, pending);
+    if (recent.size > 5) recent.delete(recent.keys().next().value!);
+  }
+  return pending;
 }
 
 app.get("/api/review", async (c) => {
@@ -91,10 +127,7 @@ app.post("/api/github/webhook", bodyLimit({ maxSize: 5 * 1024 * 1024 }), async (
     {
       secret: config.github.webhookSecret,
       credentials: { appId: config.github.appId, privateKey: config.github.privateKey },
-      review: (snapshot) =>
-        runSecurityReview(snapshot, {
-          ...(config.packageLookup ? { vulnerabilities: createOsvSource() } : {}),
-        }),
+      review: reviewOnce,
       // Answer GitHub now, review afterwards.
       schedule: (task) => void task(),
     },
@@ -124,6 +157,7 @@ serve({ fetch: app.fetch, port: config.port }, (info) => {
   console.log(`review API listening on http://localhost:${info.port}`);
   console.log(`reviewing folders under ${config.reviewRoot}`);
   console.log(config.github ? "GitHub App connected" : "GitHub App not configured");
+  console.log(config.aiReview ? "AI suggestions ON (costs API credit per new review)" : "AI suggestions off");
 });
 
 export { app };

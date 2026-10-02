@@ -88,6 +88,13 @@ export interface VerifiedClaim {
 const within = (range: [number, number], position: number): boolean =>
   position >= range[0] && position < range[1];
 
+/** Inside the route: its own code, or the named handler it points to. */
+function belongsTo(door: Door, entity: { id: string; doorId?: string }): boolean {
+  if (entity.doorId === door.id) return true;
+  const at = door.handlerAt;
+  return Boolean(at) && fileOf(entity.id) === at!.path && within(at!.range, positionOf(entity.id));
+}
+
 function positionOf(id: string): number {
   const parsed = Number(id.split(":").pop());
   return Number.isFinite(parsed) ? parsed : 0;
@@ -423,10 +430,45 @@ function mentions(haystack: string, needle: string): boolean {
  * it was wrong. Those must never be conflated: the first is a gap in this file,
  * the second is a gap in whatever made the claim.
  */
+/** Every route a claim's address could mean. A full door id names exactly one. */
+function doorsNamed(name: string, inventory: Inventory): Door[] {
+  const exact = inventory.doors.filter((d) => d.id === name);
+  if (exact.length > 0) return exact;
+  return inventory.doors.filter((d) => d.path === name || d.id.endsWith(`:${name}`));
+}
+
+const VERDICT_STRENGTH: Record<ClaimVerdict, number> = {
+  valid: 0,
+  blocked: 1,
+  undecidable: 2,
+  "no-path": 3,
+  "not-found": 4,
+};
+
+/**
+ * A suggestion often names an address without its method -- "/usersearch" --
+ * when a GET shows the form and a POST runs the search. Each route at that
+ * address is checked on its own and the most definite answer kept; trying only
+ * the first one rejected real problems because the harmless route came first.
+ */
+function eachDoor(
+  claimDoor: string | undefined,
+  inventory: Inventory,
+  check: (door: string) => VerifiedClaim,
+): VerifiedClaim | undefined {
+  if (!claimDoor) return undefined;
+  const doors = doorsNamed(claimDoor, inventory);
+  if (doors.length < 2) return undefined;
+  return doors
+    .map((d) => check(d.id))
+    .sort((a, b) => VERDICT_STRENGTH[a.verdict] - VERDICT_STRENGTH[b.verdict])[0];
+}
+
 export function verifyClaim(claim: Claim, inventory: Inventory): VerifiedClaim {
-  const door = claim.door
-    ? inventory.doors.find((d) => d.path === claim.door || d.id.endsWith(`:${claim.door}`))
-    : undefined;
+  const several = eachDoor(claim.door, inventory, (door) => verifyClaim({ ...claim, door }, inventory));
+  if (several) return several;
+
+  const door = claim.door ? doorsNamed(claim.door, inventory)[0] : undefined;
 
   if (claim.door && !door) {
     return { claim, verdict: "not-found", reason: `No route ${claim.door} exists in this code.` };
@@ -442,7 +484,7 @@ export function verifyClaim(claim: Claim, inventory: Inventory): VerifiedClaim {
    * of verifying a claim is to be able to follow it there.
    */
   const ofKind = inventory.sinks.filter((s) => s.kind === claim.sink && !s.inherentlySafe);
-  const inDoor = door ? ofKind.filter((s) => s.doorId === door.id) : ofKind;
+  const inDoor = door ? ofKind.filter((s) => belongsTo(door, s)) : ofKind;
   const candidateSinks = inDoor.length > 0 ? inDoor : ofKind;
 
   if (candidateSinks.length === 0) {
@@ -458,7 +500,7 @@ export function verifyClaim(claim: Claim, inventory: Inventory): VerifiedClaim {
   }
 
   const candidateSources = inventory.sources.filter((s) => {
-    if (door && s.doorId !== door.id) return false;
+    if (door && !belongsTo(door, s)) return false;
     if (!claim.parameter) return true;
     return mentions(s.expression, claim.parameter) || mentions(claim.parameter, s.binding ?? "");
   });
@@ -602,7 +644,10 @@ export function verifyClaim(claim: Claim, inventory: Inventory): VerifiedClaim {
  * coverage" picks.
  */
 export function verifyOwnership(claim: OwnershipClaim, inventory: Inventory): VerifiedClaim {
-  const door = inventory.doors.find((d) => d.path === claim.door || d.id.endsWith(`:${claim.door}`));
+  const several = eachDoor(claim.door, inventory, (door) => verifyOwnership({ ...claim, door }, inventory));
+  if (several) return several;
+
+  const door = doorsNamed(claim.door, inventory)[0];
   if (!door) {
     return { claim, verdict: "not-found", reason: `No route ${claim.door} exists in this code.` };
   }
@@ -617,7 +662,7 @@ export function verifyOwnership(claim: OwnershipClaim, inventory: Inventory): Ve
 
   const sources = inventory.sources.filter(
     (s) =>
-      s.doorId === door.id &&
+      belongsTo(door, s) &&
       (mentions(s.expression, claim.parameter) || mentions(claim.parameter, s.binding ?? "")),
   );
   if (sources.length === 0) {
@@ -646,13 +691,17 @@ export function verifyOwnership(claim: OwnershipClaim, inventory: Inventory): Ve
     const lookup = lookups.find((sink) => {
       const at = positionOf(sink.id);
       const file = fileOf(sink.id);
-      if (file === path && at <= sourceAt && enclosingFunction(inventory, file, at) === enclosingFunction(inventory, path, sourceAt)) {
+      if (
+        file === path && at <= sourceAt &&
+        enclosingFunction(inventory, file, at) === enclosingFunction(inventory, path, sourceAt) &&
+        !writtenInside(source, sink)
+      ) {
         return false;
       }
       return source.binding
         ? reachesOperands(flow, "tainted", sink.operands, file, at, inventory) ||
           reachesOperands(flow, "washed", sink.operands, file, at, inventory)
-        : sink.doorId === door.id && mentions(sink.expression, source.expression);
+        : belongsTo(door, sink) && writtenInside(source, sink);
     });
     if (!lookup) continue;
 
@@ -665,6 +714,7 @@ export function verifyOwnership(claim: OwnershipClaim, inventory: Inventory): Ve
       }),
     ];
     const asks = (inventory.identities ?? []).find((who) =>
+      !who.displayOnly &&
       visited.some((v) => v.path === who.location.path && within(v.range, positionOf(who.id)))
     );
 

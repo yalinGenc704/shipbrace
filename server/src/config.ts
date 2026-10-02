@@ -25,6 +25,13 @@ const schema = z.object({
    */
   PACKAGE_LOOKUP: z.enum(["on", "off"]).default("on"),
   /**
+   * Whether reviews also ask an AI model where to look. Off by default: it
+   * costs money per review and sends code excerpts to the model provider (see
+   * docs/legal/third-party-services.md). Needs ANTHROPIC_API_KEY.
+   */
+  AI_REVIEW: z.enum(["on", "off"]).default("off"),
+  ANTHROPIC_API_KEY: z.string().optional(),
+  /**
    * The GitHub App. All three or none: with none, the webhook route answers
    * "not configured" and everything else works as before. The private key is
    * read from a file (GitHub hands it out as one) rather than pasted into the
@@ -50,8 +57,18 @@ export const config = {
   reviewRoot: resolve(parsed.data.REVIEW_ROOT),
   allowedOrigins: parsed.data.ALLOWED_ORIGINS.split(",").map((origin) => origin.trim()),
   packageLookup: parsed.data.PACKAGE_LOOKUP === "on",
+  aiReview: aiReviewEnabled(parsed.data),
   github: githubConfig(parsed.data),
 };
+
+function aiReviewEnabled(env: z.infer<typeof schema>): boolean {
+  if (env.AI_REVIEW !== "on") return false;
+  if (!env.ANTHROPIC_API_KEY) {
+    console.error("AI_REVIEW=on needs ANTHROPIC_API_KEY.");
+    process.exit(1);
+  }
+  return true;
+}
 
 function githubConfig(env: z.infer<typeof schema>) {
   const set = [env.GITHUB_APP_ID, env.GITHUB_PRIVATE_KEY_PATH, env.GITHUB_WEBHOOK_SECRET].filter(Boolean);

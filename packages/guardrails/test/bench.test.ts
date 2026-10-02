@@ -36,7 +36,7 @@ test("rules alone prove at least the baseline", async () => {
 
 test("a perfect suggester gets at least the baseline confirmed", async () => {
   const score = await grade(CASES, "perfect");
-  assert.ok(score.real.proven >= 27, `proven ${score.real.proven}, baseline 27`);
+  assert.ok(score.real.proven >= 28, `proven ${score.real.proven}, baseline 28`);
 });
 
 test("a good suggester adds findings the rules cannot raise alone", async () => {

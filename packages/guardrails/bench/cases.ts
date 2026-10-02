@@ -984,6 +984,57 @@ export const CASES: BenchCase[] = [
     ],
   },
   {
+    id: "ownership-orm-shown-only",
+    tests: "A user record is loaded through Sequelize by an id from the form; the signed-in user is only printed, never compared.",
+    files: [
+      file("server/routes/users.js", [
+        'const router = require("express").Router();',
+        'router.post("/useredit", requireLogin, (req, res) => {',
+        "  db.User.find({ where: { id: req.body.id } }).then((user) => { // [A]",
+        "    user.email = req.body.email;",
+        "    user.save();",
+        '    res.render("useredit", { userId: req.user.id });',
+        "  });",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/useredit",
+        parameter: "id",
+        sink: "ownership",
+        real: true,
+        why: "Any signed-in user can change anyone's email by sending a different id.",
+      },
+    ],
+  },
+  {
+    id: "ownership-orm-checked",
+    tests: "The same edit, but the lookup also requires the record to belong to whoever is signed in.",
+    files: [
+      file("server/routes/users.js", [
+        'const router = require("express").Router();',
+        'router.post("/useredit", requireLogin, (req, res) => {',
+        "  db.User.find({ where: { id: req.body.id, ownerId: req.user.id } }).then((user) => { // [A]",
+        "    user.email = req.body.email;",
+        "    user.save();",
+        "  });",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/useredit",
+        parameter: "id",
+        sink: "ownership",
+        real: false,
+        why: "Someone else's record is simply not found.",
+      },
+    ],
+  },
+  {
     id: "ownership-public-page",
     tests: "A public product page looked up by id; there is no owner and no sign-in.",
     files: [

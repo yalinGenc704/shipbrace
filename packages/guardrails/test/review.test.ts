@@ -386,3 +386,15 @@ test("a sign-in check named on the route itself counts as protection", async () 
   // The upload handler is not a sign-in check, so that route is still open.
   assert.deepEqual(item?.risks.map((r) => r.what.split(" (")[0]), ["POST /upload"]);
 });
+
+test("a model that refuses leaves the rules' findings intact and says so", async () => {
+  const { ProposerRefusedError } = await import("../src/analysis/proposer.ts");
+  const review = await runSecurityReview(snap("server/src/a.ts", VULNERABLE), {
+    proposer: { name: "refuses", propose: () => Promise.reject(new ProposerRefusedError("cyber")) },
+  });
+  assert.equal(review.stats.model.status, "refused");
+  const item = review.modules
+    .find((m) => m.id === "injection")
+    ?.items.find((i) => i.id === "injection/database");
+  assert.equal(item?.risks.length, 1, "the rules' own finding must survive the refusal");
+});
