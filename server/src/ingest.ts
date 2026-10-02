@@ -37,10 +37,10 @@ export const DEFAULT_LIMITS: IngestLimits = {
   maxLockfileBytes: 8 * 1024 * 1024,
 };
 
-const LOCKFILE = /^(?:package-lock\.json|bun\.lock|pnpm-lock\.yaml|yarn\.lock)$/;
+export const LOCKFILE = /^(?:package-lock\.json|bun\.lock|pnpm-lock\.yaml|yarn\.lock)$/;
 
 /** Directories never worth reading, and large enough to dominate a walk. */
-const SKIP_DIR =
+export const SKIP_DIR =
   /^(node_modules|\.git|dist|build|coverage|\.next|\.turbo|\.cache|vendor|__pycache__)$/;
 
 /** Only text formats the rules and the oracle can actually reason about. */
@@ -116,9 +116,9 @@ function trackedFiles(directory: string): { tracked: Set<string>; isRepository: 
   };
 }
 
-const looksBinary = (buffer: Buffer): boolean => buffer.subarray(0, 8192).includes(0);
+export const looksBinary = (buffer: Buffer): boolean => buffer.subarray(0, 8192).includes(0);
 
-const wanted = (name: string): boolean => READABLE.test(name) || NAMED.test(name);
+export const wanted = (name: string): boolean => READABLE.test(name) || NAMED.test(name);
 
 export async function ingest(
   root: string,
