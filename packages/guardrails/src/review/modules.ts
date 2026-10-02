@@ -284,6 +284,14 @@ const MODULES: ModuleShape[] = [
         detector: "taint:filesystem",
       },
       {
+        id: "access-control/admin-only",
+        covers: "every page with admin in its address checks the visitor's role on the server",
+        title: "Admin pages check that the visitor is an administrator",
+        question:
+          "Being signed in is not the same as being an administrator. Confirm every page and action meant for administrators checks the role on the server, not only by hiding links in the browser.",
+        detector: "routes:admin-check",
+      },
+      {
         id: "access-control/csrf",
         covers: "cookie sign-in is protected against requests started by other websites",
         title: "Other websites cannot make signed-in visitors do things",
@@ -402,6 +410,14 @@ const MODULES: ModuleShape[] = [
         question:
           "Passwords must never be stored as typed, and never with a fast hash like MD5 or SHA-256. Confirm yours use argon2id or bcrypt -- deliberately slow algorithms that make guessing impractical.",
         detector: "auth:slow-password-hash",
+      },
+      {
+        id: "crypto/no-password-hashes-sent",
+        covers: "no route sends whole user records with their password field",
+        title: "Stored passwords are never sent back to the browser",
+        question:
+          "When a page loads user records, confirm the stored password is left out of what is sent -- even scrambled, it can be cracked.",
+        detector: "routes:no-password-in-responses",
       },
       {
         id: "crypto/data-classification",

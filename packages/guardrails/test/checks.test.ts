@@ -233,3 +233,57 @@ test("every risk a check produces carries what, impact, fix, and no jargon", () 
     }
   }
 });
+
+// --- admin pages and password hashes ---------------------------------------------
+
+const itemOf = async (files: Array<{ path: string; content: string }>, id: string) =>
+  (await runSecurityReview(snapshotFromFiles(files))).modules.flatMap((m) => m.items).find((i) => i.id === id)!;
+
+const USER_MODEL = {
+  path: "server/models/user.js",
+  content: "module.exports = (s, DataTypes) => s.define('User', { email: DataTypes.STRING, password: { type: DataTypes.STRING } });",
+};
+
+test("an admin page that only requires signing in is reported", async () => {
+  const item = await itemOf([{
+    path: "server/routes.js",
+    content: 'router.get("/admin/users", requireLogin, (req, res) => res.json(listAll()));',
+  }], "access-control/admin-only");
+  assert.equal(item.status, "action-needed");
+  assert.equal(item.risks[0]?.grade, "high");
+});
+
+test("an admin page with a role check passes, and says what was checked", async () => {
+  for (const content of [
+    'router.get("/admin/users", requireLogin, requireAdmin, (req, res) => res.json(listAll()));',
+    'router.get("/admin/users", requireLogin, (req, res) => { if (req.user.role !== "admin") return res.sendStatus(403); res.json(listAll()); });',
+  ]) {
+    const item = await itemOf([{ path: "server/routes.js", content }], "access-control/admin-only");
+    assert.equal(item.status, "pass", content);
+    assert.ok(item.covers);
+  }
+});
+
+test("showing the role in the page is not a role check", async () => {
+  const item = await itemOf([{
+    path: "server/routes.js",
+    content: 'router.get("/admin", requireLogin, (req, res) => res.render("admin", { admin: req.user.role == "admin" }));',
+  }], "access-control/admin-only");
+  assert.equal(item.status, "action-needed");
+});
+
+test("sending whole user records with their password is reported", async () => {
+  const item = await itemOf([USER_MODEL, {
+    path: "server/routes.js",
+    content: 'router.get("/api/users", requireLogin, (req, res) => { db.User.findAll({}).then(users => res.json({ users: users })); });',
+  }], "crypto/no-password-hashes-sent");
+  assert.equal(item.status, "action-needed");
+});
+
+test("leaving the password out of the lookup passes", async () => {
+  const item = await itemOf([USER_MODEL, {
+    path: "server/routes.js",
+    content: 'router.get("/api/users", requireLogin, (req, res) => { db.User.findAll({ attributes: { exclude: ["password"] } }).then(users => res.json({ users })); });',
+  }], "crypto/no-password-hashes-sent");
+  assert.equal(item.status, "pass");
+});

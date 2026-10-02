@@ -540,7 +540,113 @@ const csrfProtection: ProjectCheck = {
   },
 };
 
+// --- A01: admin pages check for an admin ---------------------------------------
+
+/** The code a route runs: its own body, or the named handler it points to. */
+function handlerText(snapshot: RepoSnapshot, door: Inventory["doors"][number]): string {
+  const at = door.handlerAt ?? { path: door.location.path, range: door.bodyRange };
+  const file = snapshot.files.find((f) => f.path === at.path);
+  return file ? file.content.slice(at.range[0], at.range[1]) : "";
+}
+
+const ROLE_GUARD = /admin|role|permission|authori[sz]e|isStaff|isSuperuser/i;
+/** A decision on the role inside the handler -- an `if` that tests it. */
+const ROLE_DECISION = /\bif\s*\([^)]*\b(?:role|roles|isAdmin|is_admin|admin|permissions?|isStaff)\b/;
+
+const adminOnly: ProjectCheck = {
+  id: "routes:admin-check",
+  itemId: "access-control/admin-only",
+
+  run(snapshot, inventory) {
+    // A route whose own address says it is for administrators.
+    const adminRoutes = inventory.doors.filter((d) => /(?:^|\/)admin(?:\/|$|[-_])/i.test(d.path));
+    if (adminRoutes.length === 0) {
+      return {
+        status: "not-applicable",
+        reason: "No pages with \"admin\" in their address were found. If some pages are meant for administrators only, confirm each one checks the visitor's role on the server.",
+      };
+    }
+
+    const risks: Risk[] = [];
+    for (const door of adminRoutes) {
+      if (door.guards.some((g) => ROLE_GUARD.test(g))) continue;
+      const code = handlerText(snapshot, door);
+      if (ROLE_DECISION.test(code)) continue;
+      const sendsData = /\.json\s*\(/.test(code);
+      risks.push(
+        risk(
+          "check/admin-without-role-check",
+          sendsData ? "high" : "medium",
+          `${door.method} ${door.path} (${door.location.path} line ${door.location.line}) is an admin page, but nothing on the server checks that the visitor is an administrator.`,
+          sendsData
+            ? "Any signed-in user -- or anyone, if signing in is not required -- can call it and get data meant only for administrators. Hiding the admin menu in the browser does not stop them; they only need the address."
+            : "Anyone who reaches this page sees what administrators see. A check that only hides links in the browser can be skipped by typing the address.",
+          "Add a check on the server that the signed-in user has the admin role -- a middleware such as `requireAdmin` on every admin route, or a test of the role at the top of the handler that refuses everyone else.",
+          door.location,
+        ),
+      );
+    }
+    return risks.length > 0 ? { status: "risks", risks } : { status: "pass" };
+  },
+};
+
+// --- A04: password hashes are never sent to the browser -------------------------
+
+const USER_MODEL = "(?:User|Users|Account|Member|Customer|Admin)\\w*";
+
+const passwordHashesSent: ProjectCheck = {
+  id: "routes:no-password-in-responses",
+  itemId: "crypto/no-password-hashes-sent",
+
+  run(snapshot, inventory) {
+    const files = sourceFiles(snapshot);
+    // Only a project whose user records actually carry a password.
+    const hasPasswordField = anyMatch(files, /\bpassword\w*\s*:\s*(?:\{|DataTypes|Sequelize|String|text\(|varchar|type\b)/i);
+    if (!hasPasswordField) {
+      return { status: "not-applicable", reason: "No user records with a password field were found in this code." };
+    }
+    // Any sign that the password is removed before records leave counts --
+    // in the model (a default scope, toJSON) or at the lookup.
+    const removedSomewhere = anyMatch(
+      files,
+      /exclude\s*:\s*\[[^\]]*["'`]password|select\s*\(\s*["'`]-password|password\w*\s*:\s*(?:false|0)\b|delete\s+[\w.]+\.password|toJSON|toSafe\w*|defaultScope|omit\s*\(/i,
+    );
+    if (removedSomewhere) return { status: "pass" };
+
+    const lookups = [
+      new RegExp(`(?:const|let|var)\\s+(\\w+)\\s*=\\s*await\\s+[\\w.]*\\b${USER_MODEL}\\.find\\w*\\(`, "g"),
+      new RegExp(`\\b${USER_MODEL}\\.find\\w*\\([^)]*\\)\\s*\\.then\\(\\s*(?:async\\s*)?\\(?\\s*(\\w+)\\s*\\)?\\s*=>`, "g"),
+    ];
+    const risks: Risk[] = [];
+    for (const door of inventory.doors) {
+      const code = handlerText(snapshot, door);
+      for (const re of lookups) {
+        for (const match of code.matchAll(re)) {
+          const name = match[1]!;
+          const sent = new RegExp(
+            `\\.(?:json|send)\\s*\\(\\s*(?:${name}\\s*\\)|\\{[^}]*(?:\\b${name}\\s*[,}]|:\\s*${name}\\s*[,}]))`,
+          ).test(code);
+          if (!sent) continue;
+          risks.push(
+            risk(
+              "check/password-hash-in-response",
+              "high",
+              `${door.method} ${door.path} (${door.location.path} line ${door.location.line}) sends whole user records back, password field included.`,
+              "Even scrambled, stored passwords can be cracked offline once someone has them -- quickly for common passwords -- and people reuse passwords across sites.",
+              "Leave the password out when loading users for a response (for example `attributes: { exclude: [\"password\"] }` in Sequelize, `.select(\"-password\")` in Mongoose), or send only the fields the page needs.",
+              door.location,
+            ),
+          );
+        }
+      }
+    }
+    return risks.length > 0 ? { status: "risks", risks } : { status: "pass" };
+  },
+};
+
 export const projectChecks: ProjectCheck[] = [
+  adminOnly,
+  passwordHashesSent,
   sessionSecret,
   csrfProtection,
   exposedServices,

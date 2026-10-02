@@ -64,7 +64,7 @@ Bun and Docker are **not installed** on this machine, so the Bun-based root
 scripts fail (`npm test` → "'bun' is not recognized"). Use Node directly:
 
 ```bash
-# all tests (expect 138 pass, 1 skipped -- symlinks need elevation on Windows)
+# all tests (expect 144 pass, 1 skipped -- symlinks need elevation on Windows)
 node --experimental-strip-types --test packages/guardrails/test/*.test.ts packages/scaffold/test/*.test.ts server/test/*.test.ts
 
 # review API on :3000. Set REVIEW_ROOT explicitly: npm runs workspace scripts
@@ -117,6 +117,11 @@ print its value. Prepaid credits with auto-reload off, so it cannot overspend.
   code, and missing CSRF protection on cookie sign-in (new item
   `access-control/csrf`) are detected. MongoDB-style filters taking request
   values inline, and `$where` built from values, are `nosql` operations.
+- **Admin pages and password hashes** (project checks): a route with
+  `admin` in its address needs a role-ish guard or an `if` testing the role
+  (showing the role in a page does not count); a route that loads user
+  records (`User.find*`) and sends them whole is reported when the project
+  has a password field and no sign of removing it anywhere. DVNA: both found.
 - **Page templates** (EJS, Handlebars, Pug, Nunjucks/Swig): `res.render(view,
   locals)` is an html operation only for the values the template prints raw
   (`<%-`, `{{{`, `!{`, `| safe`, autoescape off). Plain reassignments
