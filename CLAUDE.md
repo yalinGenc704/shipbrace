@@ -106,12 +106,15 @@ print its value. Prepaid credits with auto-reload off, so it cannot overspend.
 
 ## Current state and known gaps
 
-- **Benchmark (31 apps, 20 real problems, 12 safe decoys), 2026-10-01:** rules
-  alone prove 14; a perfect suggester proves 16 (the two extra are ownership
-  gaps, which only a suggester can raise); **zero** false alarms. Remaining
-  misses: Hono `c.html()` is not a recognised sink; an `.includes()` that only
-  logs is treated as a blocking allowlist; any `.parse()` is trusted as
-  validation even for `z.string()`; component props are not inputs.
+- **Benchmark (35 apps, 20 real problems, 16 safe decoys), 2026-10-01:** rules
+  alone prove 17; a perfect suggester and the real model (claude-opus-5-5)
+  prove 19 (the extra two are ownership gaps, which only a suggester can
+  raise); **zero** false alarms. Only miss: component props (e.g. a stored
+  comment rendered as raw HTML) are not recognised as inputs; it appears under
+  "worth a look". Fixed 2026-10-01: Hono `c.html()` with an untagged template
+  is an html operation (the escaping `html` tagged template is safe); an `.includes()` in an `if` whose
+  branches never return/throw is not a check; a zod schema made only of
+  unconstrained text (`z.string()`, defined in the same file) is not validation.
 - **The model's job (user decision, 2026-10-01):** pairing covers every
   input → operation claim, so the model's distinct contribution is ownership
   claims: judging which records are private. `verifyOwnership` decides them by
@@ -152,7 +155,7 @@ print its value. Prepaid credits with auto-reload off, so it cannot overspend.
 1. Detect uploaded files, repository content, and environment values as sources.
 2. Before any second user: the disclosures and per-user switches in
    `docs/legal/third-party-services.md` section 4.
-3. Fix the checker misses the benchmark found (see Current state).
+3. Treat component props carrying stored content as inputs (the last benchmark miss).
 4. Remove or clearly deprecate the legacy exports above.
 
 See `docs/architecture.md` for the reasoning behind these decisions.

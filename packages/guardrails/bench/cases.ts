@@ -215,6 +215,62 @@ export const CASES: BenchCase[] = [
     ],
   },
   {
+    id: "sql-schema-uuid",
+    tests: "The form is checked to be an ID in a fixed format before the query.",
+    files: [
+      file("server/src/index.ts", [
+        'import { z } from "zod";',
+        ...HEAD,
+        "const Lookup = z.object({ id: z.string().uuid() });",
+        "",
+        'app.post("/api/orders/lookup", async (c) => {',
+        "  const body = await c.req.json();",
+        "  const input = Lookup.parse(body);",
+        "  const rows = await db.query(`SELECT * FROM orders WHERE id = '${input.id}'`); // [A]",
+        "  return c.json(rows);",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/api/orders/lookup",
+        parameter: "body",
+        sink: "sql",
+        real: false,
+        why: "Only letters, digits and dashes in a fixed pattern get through.",
+      },
+    ],
+  },
+  {
+    id: "sql-schema-mixed",
+    tests: "A form with a free-text note and a number; only the number reaches the query.",
+    files: [
+      file("server/src/index.ts", [
+        'import { z } from "zod";',
+        ...HEAD,
+        "const Update = z.object({ note: z.string(), qty: z.number() });",
+        "",
+        'app.post("/api/cart/update", async (c) => {',
+        "  const body = await c.req.json();",
+        "  const input = Update.parse(body);",
+        "  await db.query(`UPDATE cart SET qty = ${input.qty} WHERE id = 1`); // [A]",
+        "  return c.json({ ok: true });",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/api/cart/update",
+        parameter: "body",
+        sink: "sql",
+        real: false,
+        why: "A checked number cannot carry query text.",
+      },
+    ],
+  },
+  {
     id: "sql-unrelated-param",
     tests: "A route reads a value but never uses it in the query.",
     files: [
@@ -664,6 +720,31 @@ export const CASES: BenchCase[] = [
     ],
   },
 
+  {
+    id: "html-hono-escaped",
+    tests: "The same search page, built with Hono's html helper, which escapes values.",
+    files: [
+      file("server/src/index.ts", [
+        'import { html } from "hono/html";',
+        ...HEAD,
+        'app.get("/search", (c) => {',
+        '  const q = c.req.query("q");',
+        "  return c.html(html`<h1>Results for ${q}</h1>`); // [A]",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/search",
+        parameter: "q",
+        sink: "html",
+        real: false,
+        why: "The html helper turns script tags into harmless text.",
+      },
+    ],
+  },
+
   // --- redirects -----------------------------------------------------------
   {
     id: "redirect-open",
@@ -735,6 +816,34 @@ export const CASES: BenchCase[] = [
         sink: "redirect",
         real: true,
         why: "The check writes a warning and then redirects anyway.",
+      },
+    ],
+  },
+
+  {
+    id: "redirect-allowlist-stored",
+    tests: "The allowlist answer is saved first, then used to refuse.",
+    files: [
+      file("server/src/index.ts", [
+        ...HEAD,
+        'const ALLOWED = ["/dashboard", "/settings"];',
+        "",
+        'app.get("/after-login", (c) => {',
+        '  const next = c.req.query("next");',
+        "  const allowed = ALLOWED.includes(next);",
+        '  if (!allowed) return c.redirect("/dashboard");',
+        "  return c.redirect(next); // [A]",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/after-login",
+        parameter: "next",
+        sink: "redirect",
+        real: false,
+        why: "Anything not on the list is still refused, one step later.",
       },
     ],
   },

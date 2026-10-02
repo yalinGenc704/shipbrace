@@ -81,13 +81,15 @@ const COPY: Partial<Record<SinkKind, SinkCopy>> = {
     confidence: "possible",
     title: "Raw HTML is inserted into the page without escaping",
     why:
-      "React normally neutralises HTML in your data so that text stays text. This line " +
-      "turns that protection off for one value. If that value ever contains something a " +
-      "user supplied, their markup -- including scripts that read logged-in sessions -- " +
-      "will run in your visitors' browsers.",
+      "Pages normally turn special characters in your data into plain text, so text stays " +
+      "text. This line skips that protection for a value. If that value ever contains " +
+      "something a user supplied, their markup -- including scripts that read logged-in " +
+      "sessions -- will run in your visitors' browsers.",
     fix:
-      "If the content is plain text, render it as `{value}` and delete this prop. If it " +
-      "genuinely must be HTML, sanitise it with a library such as DOMPurify first.",
+      "Let the page escape the value for you: in React render it as `{value}` instead of " +
+      "using dangerouslySetInnerHTML; on a Hono server use the html`` helper instead of a " +
+      "plain template. If it genuinely must be HTML, clean it with a library such as " +
+      "DOMPurify first.",
     learnMore: "/explain/xss",
   },
 };
