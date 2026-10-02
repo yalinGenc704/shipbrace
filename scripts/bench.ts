@@ -38,6 +38,11 @@ function report(score: Score): void {
     for (const o of guessed) console.log(`    - ${o.caseId} [${o.entry.marker}]: ${o.explanation}`);
   }
 
+  if (score.refusals.length > 0) {
+    console.log(`\n  the model REFUSED on ${score.refusals.length} app(s):`);
+    for (const r of score.refusals) console.log(`    - ${r.caseId}: ${r.reason}`);
+  }
+
   const missed = score.outcomes.filter((o) => o.entry.real && !o.reported && !o.lead);
   if (missed.length > 0) {
     console.log("\n  missed:");

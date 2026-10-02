@@ -1,7 +1,7 @@
 import { buildInventoryFromAst } from "../src/analysis/inventory-ast.ts";
 import type { Inventory } from "../src/analysis/inventory.ts";
 import type { AttackProposal } from "../src/analysis/oracle.ts";
-import type { AttackProposer } from "../src/analysis/proposer.ts";
+import { ProposerRefusedError, type AttackProposer } from "../src/analysis/proposer.ts";
 import { verifyClaim, verifyOwnership } from "../src/analysis/verify.ts";
 import type { Risk } from "../src/review/modules.ts";
 import { runSecurityReview } from "../src/review/pipeline.ts";
@@ -64,6 +64,8 @@ export interface Score {
   /** Risks on lines the key does not mark. Counted as false alarms. */
   unexpected: Unexpected[];
   proposals: { made: number; confirmed: number };
+  /** Cases where the model declined, with its stated reason. */
+  refusals: Array<{ caseId: string; reason: string }>;
 }
 
 /** Lines carrying each `// [X]` marker, so the key can name lines without numbers. */
@@ -117,16 +119,36 @@ function perfectSuggester(benchCase: BenchCase): AttackProposer {
 }
 
 /** Wraps a real proposer to remember what it said, so a miss can be attributed. */
-function recording(inner: AttackProposer): { proposer: AttackProposer; said: AttackProposal[] } {
+/**
+ * Wraps a real proposer to remember what it said, so a miss can be attributed.
+ *
+ * A refusal is recorded rather than thrown: whether the model declines on
+ * vulnerable code is one of the things this benchmark exists to measure. Any
+ * other failure (network, credit) still stops the run, so a broken run is
+ * never mistaken for a model that found nothing.
+ */
+function recording(
+  inner: AttackProposer,
+): { proposer: AttackProposer; said: AttackProposal[]; refusals: string[] } {
   const said: AttackProposal[] = [];
+  const refusals: string[] = [];
   return {
     said,
+    refusals,
     proposer: {
       name: inner.name,
       propose: async (context) => {
-        const proposals = await inner.propose(context);
-        said.push(...proposals);
-        return proposals;
+        try {
+          const proposals = await inner.propose(context);
+          said.push(...proposals);
+          return proposals;
+        } catch (error) {
+          if (error instanceof ProposerRefusedError) {
+            refusals.push(error.message);
+            return [];
+          }
+          throw error;
+        }
       },
     },
   };
@@ -220,6 +242,7 @@ export async function gradeCase(
     outcomes,
     unexpected,
     proposals: { made: review.stats.proposalsMade, confirmed: review.stats.proposalsConfirmed },
+    refusals: (recorder?.refusals ?? []).map((reason) => ({ caseId: benchCase.id, reason })),
   };
 }
 
@@ -235,6 +258,7 @@ export async function grade(
     outcomes: [],
     unexpected: [],
     proposals: { made: 0, confirmed: 0 },
+    refusals: [],
   };
 
   for (const benchCase of cases) {
@@ -250,6 +274,7 @@ export async function grade(
     score.unexpected.push(...result.unexpected);
     score.proposals.made += result.proposals.made;
     score.proposals.confirmed += result.proposals.confirmed;
+    score.refusals.push(...result.refusals);
   }
   return score;
 }

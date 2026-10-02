@@ -133,9 +133,11 @@ print its value. Prepaid credits with auto-reload off, so it cannot overspend.
 - Uploaded files, repository content, and environment values are declared as
   input kinds but **not detected**. This matters for a product that ingests
   other people's repositories.
-- The Claude proposer **refused** (cyber usage policy) on a deliberately
-  vulnerable test app, even with the defensive prompt. It analysed clean code
-  fine. Unreliable precisely when needed. Do not work around a refusal.
+- The Claude proposer once **refused** (cyber usage policy) on a deliberately
+  vulnerable test app. On 2026-10-01, with the defensive prompt and the
+  ownership task, claude-opus-5-5 ran on all 31 benchmark apps with **no
+  refusals** and matched the perfect suggester exactly (16 of 20 proven, 0
+  false alarms, 29 suggestions, 16 confirmed). Do not work around a refusal.
 - The verifier follows a value through any number of plain function calls,
   across files. It does not follow method calls (`obj.fn(x)`), and a helper
   name defined twice, unknown code, or destructured parameters make the
@@ -150,8 +152,7 @@ print its value. Prepaid credits with auto-reload off, so it cannot overspend.
 1. Detect uploaded files, repository content, and environment values as sources.
 2. Before any second user: the disclosures and per-user switches in
    `docs/legal/third-party-services.md` section 4.
-3. Test the refusal across several vulnerable repositories to learn whether it
-   is systematic.
+3. Fix the checker misses the benchmark found (see Current state).
 4. Remove or clearly deprecate the legacy exports above.
 
 See `docs/architecture.md` for the reasoning behind these decisions.
