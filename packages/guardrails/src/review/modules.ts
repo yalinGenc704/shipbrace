@@ -1,5 +1,5 @@
 import type { CodeLocation, Finding } from "../types.ts";
-import type { Inventory } from "../analysis/inventory.ts";
+import type { Door, Inventory, Sink, TaintSource } from "../analysis/inventory.ts";
 import type { ConfirmedAttack, TaintPath } from "../analysis/oracle.ts";
 import type { CheckOutcome } from "./checks.ts";
 
@@ -41,6 +41,27 @@ export interface Risk {
   confirmedBy: "oracle" | "rule";
 }
 
+/**
+ * A line built in a risky way, where nothing proved a visitor's input reaches it.
+ *
+ * These come from the pattern check, which looks at how a line is written and
+ * not at where its values come from. It catches problems the tracing cannot yet
+ * follow, but it also fires on code that is safe -- a query pasting in a fixed
+ * table name, or a value already turned into a number. Calling those risks
+ * taught users to ignore risks. So they are kept, framed as what they are: a
+ * place worth a look, never counted as a risk and never graded.
+ */
+export interface Unproven {
+  id: string;
+  /** What about the line looks risky, with its location. */
+  what: string;
+  /** Why it would matter if a visitor's input does reach it. */
+  why: string;
+  /** What to check, or change, to settle it. */
+  check: string;
+  location?: CodeLocation;
+}
+
 export type ItemStatus = "pass" | "action-needed" | "needs-your-review";
 
 export interface ActionItem {
@@ -65,13 +86,23 @@ export interface ActionItem {
    * the same.
    */
   notApplicable?: string;
+  /**
+   * Who was asked and on what terms, for a check that sends anything outside
+   * the platform. Shown with the item whatever its status, because telling
+   * people what left their system, and crediting the data's source, does not
+   * depend on whether anything was found.
+   */
+  notice?: string;
   status: ItemStatus;
+  /** Proven problems only. */
   risks: Risk[];
+  /** Places worth a look that nothing proved. Never counted as risks. */
+  unproven: Unproven[];
 }
 
 export interface ReviewModule {
   id: string;
-  /** e.g. "A01:2021". */
+  /** e.g. "A01:2025". */
   owasp: string;
   /** 1 is most important, matching OWASP's ranking. */
   rank: number;
@@ -91,6 +122,8 @@ export interface SecurityReview {
     awaitingReview: number;
     /** Modules with nothing outstanding. */
     clear: number;
+    /** Places worth a look, counted apart from risks. */
+    unproven: number;
   };
   /**
    * Model proposals the oracle could not verify. Shown separately, never as
@@ -98,29 +131,6 @@ export interface SecurityReview {
    */
   unverified: Array<{ door: string; rationale: string; whyNotShown: string }>;
 }
-
-/** Where each detection rule belongs in the ten. */
-const RULE_TO_MODULE: Record<string, string> = {
-  "secrets/hardcoded-credential": "cryptographic-failures",
-  "secrets/committed-dotenv": "cryptographic-failures",
-  "secrets/client-exposed-env": "cryptographic-failures",
-  "auth/default-jwt-secret": "cryptographic-failures",
-  "injection/sql-string-building": "injection",
-  "injection/shell-string-building": "injection",
-  "injection/unescaped-html": "injection",
-  "auth/permissive-cors": "misconfiguration",
-  "auth/token-in-localstorage": "authentication-failures",
-};
-
-const SINK_TO_MODULE: Record<string, string> = {
-  sql: "injection",
-  shell: "injection",
-  html: "injection",
-  "dynamic-code": "injection",
-  filesystem: "access-control",
-  redirect: "access-control",
-  "outbound-request": "ssrf",
-};
 
 /** Severity of an unsanitised path, by what it reaches. */
 const SINK_GRADE: Record<string, Grade> = {
@@ -211,7 +221,7 @@ interface ModuleShape {
   rank: number;
   title: string;
   summary: string;
-  items: Array<Omit<ActionItem, "status" | "risks">>;
+  items: Array<Omit<ActionItem, "status" | "risks" | "unproven" | "notice">>;
 }
 
 /**
@@ -222,14 +232,22 @@ interface ModuleShape {
  * passed -- the checklist is honest about its own coverage, which is the only
  * way a user can tell which parts they still own.
  */
+/**
+ * The ten modules: the OWASP Top 10:2025, in OWASP's order.
+ *
+ * Item ids are stable across editions. When 2025 folded server-side request
+ * forgery into access control and split supply-chain problems out of integrity,
+ * the items moved module but kept their ids, so a user's "I've checked this"
+ * ticks survive the move.
+ */
 const MODULES: ModuleShape[] = [
   {
     id: "access-control",
-    owasp: "A01:2021",
+    owasp: "A01:2025",
     rank: 1,
     title: "Who is allowed to do what",
     summary:
-      "The most common serious problem in web applications. It means a page or action that should be restricted can be reached by someone who should not reach it -- often just by editing the address bar.",
+      "The most common serious problem in web applications. It means a page or action that should be restricted can be reached by someone who should not reach it -- often just by editing the address bar. It also covers your server being tricked into fetching addresses a visitor chose, which reaches systems the visitor never could.",
     items: [
       {
         id: "access-control/unguarded-routes",
@@ -248,12 +266,94 @@ const MODULES: ModuleShape[] = [
         title: "File access cannot be steered outside its intended folder",
         detector: "taint:filesystem",
       },
+      {
+        id: "ssrf/url-allowlist",
+        title: "Visitor-supplied addresses are checked against an allowlist",
+        detector: "taint:outbound-request",
+      },
+      {
+        id: "ssrf/internal-ranges",
+        title: "Requests to private network addresses are blocked",
+        question:
+          "Confirm your server refuses to fetch addresses on your own private network, including the cloud metadata address that hands out credentials.",
+        detector: null,
+      },
+    ],
+  },
+  {
+    id: "misconfiguration",
+    owasp: "A02:2025",
+    rank: 2,
+    title: "Settings that leave the door open",
+    summary:
+      "The code can be correct while the settings around it are not -- an overly permissive sharing rule, a debug mode left on, a default password never changed.",
+    items: [
+      { id: "config/cors", title: "Only your own sites can call your API", detector: "rules:cors" },
+      {
+        id: "config/security-headers",
+        title: "Standard protective headers are switched on",
+        question:
+          "Confirm your server sets the standard protective headers. They cost nothing and close a whole class of browser-side attacks.",
+        detector: "server:protective-headers",
+      },
+      {
+        id: "config/exposed-services",
+        title: "The database is not reachable from the internet",
+        question:
+          "Confirm your database does not publish a port to the outside world. It should be reachable only by your own application.",
+        detector: "compose:no-public-database",
+      },
+    ],
+  },
+  {
+    id: "supply-chain",
+    owasp: "A03:2025",
+    rank: 3,
+    title: "Building blocks you did not write",
+    summary:
+      "Your application is built from packages written by other people, and built and shipped by automated tools. A flaw or a break-in anywhere along that chain ends up inside your application, even if your own code is perfect.",
+    items: [
+      {
+        id: "components/known-vulnerabilities",
+        title: "No dependency has a known published vulnerability",
+        question:
+          "If this could not be checked automatically, run your package manager's audit command (for example npm audit) and review what it reports.",
+        detector: "osv:known-vulnerabilities",
+      },
+      {
+        id: "components/abandoned",
+        title: "No dependency is unmaintained or pulled from an unofficial source",
+        question:
+          "A package that has not been updated in years will not be fixed when a flaw is found in it. Check the ones your app depends on most heavily.",
+        detector: null,
+      },
+      {
+        id: "components/pinned",
+        title: "Versions are pinned so builds are reproducible",
+        question:
+          "Confirm your dependency versions are exact rather than ranges, so the code you reviewed is the code that ships.",
+        detector: "manifest:exact-versions",
+      },
+      {
+        id: "integrity/lockfile",
+        title: "A lockfile records exactly which package versions are installed",
+        question:
+          "Confirm a lockfile is committed. Without one, two installs of the same code can pull different package versions.",
+        detector: "manifest:lockfile-committed",
+      },
+      {
+        id: "integrity/ci-permissions",
+        title: "Automated build steps cannot be modified by contributors",
+        question:
+          "Your build pipeline usually holds deployment credentials. Confirm who is able to change what it runs.",
+        detector: null,
+      },
     ],
   },
   {
     id: "cryptographic-failures",
-    owasp: "A02:2021",
-    rank: 2,
+    owasp: "A04:2025",
+    rank: 4,
     title: "Protecting passwords, keys, and personal data",
     summary:
       "Covers secrets that should never be readable -- API keys, signing keys, passwords -- and sensitive data that should be protected in transit and at rest.",
@@ -281,8 +381,8 @@ const MODULES: ModuleShape[] = [
   },
   {
     id: "injection",
-    owasp: "A03:2021",
-    rank: 3,
+    owasp: "A05:2025",
+    rank: 5,
     title: "Visitor input being treated as instructions",
     summary:
       "Happens when something a visitor types is pasted into a command, a database query, or a page, and gets treated as an instruction rather than as text. This is the category the automated attack analysis targets most directly.",
@@ -306,8 +406,8 @@ const MODULES: ModuleShape[] = [
   },
   {
     id: "insecure-design",
-    owasp: "A04:2021",
-    rank: 4,
+    owasp: "A06:2025",
+    rank: 6,
     title: "Gaps in how the feature was designed",
     summary:
       "Some problems are not mistakes in the code -- the code does exactly what it was asked to. These are gaps in what was asked for, so no automated tool can find them. They need your knowledge of how the product is supposed to work.",
@@ -336,71 +436,8 @@ const MODULES: ModuleShape[] = [
     ],
   },
   {
-    id: "misconfiguration",
-    owasp: "A05:2021",
-    rank: 5,
-    title: "Settings that leave the door open",
-    summary:
-      "The code can be correct while the settings around it are not -- an overly permissive sharing rule, a debug mode left on, a default password never changed.",
-    items: [
-      { id: "config/cors", title: "Only your own sites can call your API", detector: "rules:cors" },
-      {
-        id: "config/security-headers",
-        title: "Standard protective headers are switched on",
-        question:
-          "Confirm your server sets the standard protective headers. They cost nothing and close a whole class of browser-side attacks.",
-        detector: "server:protective-headers",
-      },
-      {
-        id: "config/exposed-services",
-        title: "The database is not reachable from the internet",
-        question:
-          "Confirm your database does not publish a port to the outside world. It should be reachable only by your own application.",
-        detector: "compose:no-public-database",
-      },
-      {
-        id: "config/error-detail",
-        title: "Error messages shown to visitors do not reveal internals",
-        question:
-          "A stack trace or raw database error tells an attacker how your system is built. Confirm visitors see a short message and the detail goes to your logs instead.",
-        detector: "server:no-internal-errors-returned",
-      },
-    ],
-  },
-  {
-    id: "vulnerable-components",
-    owasp: "A06:2021",
-    rank: 6,
-    title: "Outdated or known-vulnerable building blocks",
-    summary:
-      "Your application is built on packages written by other people. When a security flaw is found in one of them, every application using it inherits the flaw until it is updated.",
-    items: [
-      {
-        id: "components/known-vulnerabilities",
-        title: "No dependency has a known published vulnerability",
-        question:
-          "This needs a live vulnerability database, which is not wired up yet. Until it is, run your package manager's audit command and review what it reports.",
-        detector: null,
-      },
-      {
-        id: "components/abandoned",
-        title: "No dependency is unmaintained or pulled from an unofficial source",
-        question:
-          "A package that has not been updated in years will not be fixed when a flaw is found in it. Check the ones your app depends on most heavily.",
-        detector: null,
-      },
-      {
-        id: "components/pinned",
-        title: "Versions are pinned so builds are reproducible",
-        question:
-          "Confirm your dependency versions are exact rather than ranges, so the code you reviewed is the code that ships.",
-        detector: "manifest:exact-versions",
-      },
-    ],
-  },
-  {
     id: "authentication-failures",
-    owasp: "A07:2021",
+    owasp: "A07:2025",
     rank: 7,
     title: "Proving who someone is",
     summary:
@@ -436,26 +473,12 @@ const MODULES: ModuleShape[] = [
   },
   {
     id: "integrity-failures",
-    owasp: "A08:2021",
+    owasp: "A08:2025",
     rank: 8,
-    title: "Trusting code and data that could have been tampered with",
+    title: "Trusting data that could have been tampered with",
     summary:
-      "Covers where your code comes from and whether anything could alter it on the way -- an unpinned dependency, an unsigned update, data accepted from elsewhere without checking.",
+      "Covers data and code your application accepts as genuine without checking -- a script loaded from someone else's site, a cookie the visitor could edit, data arriving from another system.",
     items: [
-      {
-        id: "integrity/lockfile",
-        title: "A lockfile records exactly which package versions are installed",
-        question:
-          "Confirm a lockfile is committed. Without one, two installs of the same code can pull different package versions.",
-        detector: "manifest:lockfile-committed",
-      },
-      {
-        id: "integrity/ci-permissions",
-        title: "Automated build steps cannot be modified by contributors",
-        question:
-          "Your build pipeline usually holds deployment credentials. Confirm who is able to change what it runs.",
-        detector: null,
-      },
       {
         id: "integrity/untrusted-deserialization",
         title: "Data from outside is validated before being used",
@@ -463,15 +486,29 @@ const MODULES: ModuleShape[] = [
           "Data arriving from another system is no more trustworthy than data typed by a visitor. Confirm it is checked against an expected shape before use.",
         detector: null,
       },
+      {
+        id: "integrity/third-party-scripts",
+        title: "Scripts loaded from other websites cannot be swapped without you noticing",
+        question:
+          "If a page loads a script straight from another site (a CDN), whoever controls that site can change what runs on your pages. Confirm each such script is pinned to an exact version and carries an integrity check, or is served from your own server.",
+        detector: null,
+      },
+      {
+        id: "integrity/client-data",
+        title: "Anything the browser hands back is signed or re-checked",
+        question:
+          "Cookies, hidden form fields, and saved settings travel through the visitor's browser, where they can be edited. Confirm anything you rely on -- a role, a price, an account id -- is either signed so edits are detected, or looked up again on the server.",
+        detector: null,
+      },
     ],
   },
   {
     id: "logging-monitoring",
-    owasp: "A09:2021",
+    owasp: "A09:2025",
     rank: 9,
     title: "Noticing when something goes wrong",
     summary:
-      "If an attack succeeds and nobody notices, it continues. The average intrusion goes undetected for months. This module is about being able to tell that something happened, and when.",
+      "If an attack succeeds and nobody notices, it continues. The average intrusion goes undetected for months. This module is about being able to tell that something happened, and when -- and making sure someone is told.",
     items: [
       {
         id: "logging/auth-events",
@@ -497,23 +534,32 @@ const MODULES: ModuleShape[] = [
     ],
   },
   {
-    id: "ssrf",
-    owasp: "A10:2021",
+    id: "exceptional-conditions",
+    owasp: "A10:2025",
     rank: 10,
-    title: "Your server being tricked into fetching things",
+    title: "When something unexpected happens",
     summary:
-      "If your application fetches a web address that a visitor supplies, they can point it at systems only your server can reach -- internal dashboards, cloud configuration services -- and read the reply.",
+      "Errors are where applications behave least predictably. A check that crashes might let everyone through, an error message might reveal how the system is built, and one malformed request might bring the whole thing down.",
     items: [
       {
-        id: "ssrf/url-allowlist",
-        title: "Visitor-supplied addresses are checked against an allowlist",
-        detector: "taint:outbound-request",
+        id: "config/error-detail",
+        title: "Error messages shown to visitors do not reveal internals",
+        question:
+          "A stack trace or raw database error tells an attacker how your system is built. Confirm visitors see a short message and the detail goes to your logs instead.",
+        detector: "server:no-internal-errors-returned",
       },
       {
-        id: "ssrf/internal-ranges",
-        title: "Requests to private network addresses are blocked",
+        id: "errors/fail-closed",
+        title: "When a check breaks, the answer is no",
         question:
-          "Confirm your server refuses to fetch addresses on your own private network, including the cloud metadata address that hands out credentials.",
+          "If a permission check, a payment call, or a sign-in lookup throws an error, the safe outcome is to refuse. Confirm none of your error handlers quietly carry on as if the check had passed.",
+        detector: null,
+      },
+      {
+        id: "errors/unhandled",
+        title: "One unexpected request cannot crash or stall the application",
+        question:
+          "Confirm unexpected errors are caught and answered with a short message, and that oversized or malformed requests are refused early rather than left to exhaust memory or hang.",
         detector: null,
       },
     ],
@@ -576,6 +622,38 @@ function riskFromFinding(finding: Finding): Risk {
   };
 }
 
+/** A route where a visitor's input picks a record and nothing ties it to its owner. */
+export interface OwnershipGap {
+  door: Door;
+  source: TaintSource;
+  sink: Sink;
+  via: string[];
+}
+
+function riskFromOwnership(gap: OwnershipGap): Risk {
+  const entry = SOURCE_COPY[gap.source.kind] ?? "something a visitor controls";
+  const at = `${gap.sink.location.path} line ${gap.sink.location.line}`;
+
+  return {
+    id: riskId("access-control/ownership", gap.sink.location),
+    grade: "high",
+    what:
+      `${gap.door.method} ${gap.door.path} looks up a record using ${entry} (${at}) and never ` +
+      `checks that the record belongs to the person who is signed in.`,
+    impact:
+      "If these records belong to individual people -- invoices, messages, orders, profiles -- " +
+      "anyone with an account can read or change someone else's just by changing that value. " +
+      "This is the most common serious flaw in web applications.",
+    fix:
+      "Include the signed-in person in the lookup, for example by adding \"AND owner_id = \" and " +
+      "the signed-in user's id to the query, or check the record's owner before returning it. " +
+      "If every signed-in user is meant to see these records, it is fine as it is -- mark it reviewed.",
+    location: gap.sink.location,
+    evidence: `${gap.source.expression} → ${gap.via.join(" → ")} → ${gap.sink.expression}`,
+    confirmedBy: "oracle",
+  };
+}
+
 export interface ReviewInput {
   findings: Finding[];
   paths: TaintPath[];
@@ -584,7 +662,9 @@ export interface ReviewInput {
   confirmed?: ConfirmedAttack[];
   unverified?: ConfirmedAttack[];
   /** Project-level check outcomes, keyed by the action item they answer. */
-  checks?: Map<string, CheckOutcome & { detector: string }>;
+  checks?: Map<string, CheckOutcome & { detector: string; notice?: string }>;
+  /** Ownership gaps a suggestion pointed at and the rules confirmed. */
+  ownership?: OwnershipGap[];
 }
 
 /** Which action item a given risk belongs to, within its module. */
@@ -610,8 +690,34 @@ const ITEM_FOR_SINK: Record<string, string> = {
   "outbound-request": "ssrf/url-allowlist",
 };
 
+/**
+ * Pattern rules that judge a line by how it is written, not by where its values
+ * come from. Their findings are leads, not proof: see `Unproven`.
+ *
+ * Rules outside this set stay risks. A key written into the code is the
+ * problem itself; there is no path left to prove.
+ */
+const UNPROVEN_RULES = new Set([
+  "injection/sql-string-building",
+  "injection/shell-string-building",
+  "injection/unescaped-html",
+]);
+
+function unprovenFromFinding(finding: Finding): Unproven {
+  return {
+    id: riskId(finding.ruleId, finding.location),
+    what: finding.location
+      ? `${finding.title} (${finding.location.path} line ${finding.location.line}).`
+      : `${finding.title}.`,
+    why: finding.why,
+    check: finding.fix?.description ?? "Open the detailed view to see the affected code.",
+    ...(finding.location ? { location: finding.location } : {}),
+  };
+}
+
 export function buildReview(input: ReviewInput): SecurityReview {
   const risksByItem = new Map<string, Risk[]>();
+  const unprovenByItem = new Map<string, Unproven[]>();
 
   /**
    * Two detectors reaching the same line have found one problem, not two. The
@@ -621,10 +727,15 @@ export function buildReview(input: ReviewInput): SecurityReview {
    */
   const attach = (itemId: string, risk: Risk): void => {
     const existing = risksByItem.get(itemId) ?? [];
-    const sameSpot = existing.findIndex(
-      (r) =>
-        r.location?.path === risk.location?.path && r.location?.line === risk.location?.line,
-    );
+    // Without a location there is no "same line" to collide on: two flawed
+    // packages are two problems. Comparing missing locations as equal dropped
+    // every one after the first.
+    const sameSpot = risk.location
+      ? existing.findIndex(
+        (r) =>
+          r.location?.path === risk.location?.path && r.location?.line === risk.location?.line,
+      )
+      : existing.findIndex((r) => r.id === risk.id);
 
     if (sameSpot !== -1) {
       const incumbent = existing[sameSpot]!;
@@ -646,7 +757,24 @@ export function buildReview(input: ReviewInput): SecurityReview {
 
   for (const finding of input.findings) {
     const itemId = ITEM_FOR_RULE[finding.ruleId];
-    if (itemId) attach(itemId, riskFromFinding(finding));
+    if (!itemId) continue;
+    if (!UNPROVEN_RULES.has(finding.ruleId)) {
+      attach(itemId, riskFromFinding(finding));
+      continue;
+    }
+    // Traced to the same line already: the proven risk says it all.
+    const proven = (risksByItem.get(itemId) ?? []).some(
+      (r) =>
+        r.location?.path === finding.location?.path && r.location?.line === finding.location?.line,
+    );
+    if (proven) continue;
+    const leads = unprovenByItem.get(itemId) ?? [];
+    leads.push(unprovenFromFinding(finding));
+    unprovenByItem.set(itemId, leads);
+  }
+
+  for (const gap of input.ownership ?? []) {
+    attach("access-control/object-ownership", riskFromOwnership(gap));
   }
 
   for (const [itemId, outcome] of input.checks ?? []) {
@@ -687,19 +815,24 @@ export function buildReview(input: ReviewInput): SecurityReview {
     summary: shape.summary,
     items: shape.items.map((item): ActionItem => {
       const risks = (risksByItem.get(item.id) ?? []).sort(byGrade);
+      const unproven = unprovenByItem.get(item.id) ?? [];
       const outcome = input.checks?.get(item.id);
       const blocked = outcome?.status === "not-applicable" ? outcome.reason : undefined;
+      const notice = outcome?.notice;
 
       return {
         ...item,
         ...(blocked ? { notApplicable: blocked } : {}),
+        ...(notice ? { notice } : {}),
         risks,
+        unproven,
         // "pass" needs a detector that actually ran and found nothing. A
         // detector that could not run here is not a pass, and neither is the
         // absence of one -- both hand the item back to the user.
+        // An unproven lead is not a pass either: someone has to look at it.
         status: risks.length > 0
           ? "action-needed"
-          : blocked || !item.detector
+          : blocked || !item.detector || unproven.length > 0
           ? "needs-your-review"
           : "pass",
       };
@@ -720,7 +853,7 @@ const GRADE_ORDER: Record<Grade, number> = { high: 0, medium: 1, low: 2 };
 const byGrade = (a: Risk, b: Risk): number => GRADE_ORDER[a.grade] - GRADE_ORDER[b.grade];
 
 function summarise(modules: ReviewModule[]): SecurityReview["summary"] {
-  const summary = { high: 0, medium: 0, low: 0, awaitingReview: 0, clear: 0 };
+  const summary = { high: 0, medium: 0, low: 0, awaitingReview: 0, clear: 0, unproven: 0 };
 
   for (const module of modules) {
     let outstanding = 0;
@@ -734,6 +867,7 @@ function summarise(modules: ReviewModule[]): SecurityReview["summary"] {
         summary[risk.grade]++;
         outstanding++;
       }
+      summary.unproven += item.unproven.length;
     }
     if (outstanding === 0) summary.clear++;
   }

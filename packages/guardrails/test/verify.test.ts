@@ -207,3 +207,224 @@ test("every rejection says which step failed", () => {
     assert.ok(result.reason.length > 15, `thin reason: ${result.reason}`);
   }
 });
+
+// --- following a value as far as it goes ------------------------------------
+
+const files = (entries: Record<string, string[]>) =>
+  buildInventoryFromAst(
+    snapshotFromFiles(Object.entries(entries).map(([path, lines]) => ({ path, content: lines.join("\n") }))),
+  );
+
+const THREE_HOPS = {
+  "server/src/repo.ts": [
+    "export function runQuery(text) {",
+    "  return pool.unsafe(`SELECT * FROM docs WHERE title = '${text}'`);",
+    "}",
+  ],
+  "server/src/search.ts": [
+    'import { runQuery } from "./repo.ts";',
+    "export function searchTitles(term) {",
+    "  const cleaned = term.trim();",
+    "  return runQuery(cleaned);",
+    "}",
+  ],
+  "server/src/service.ts": [
+    'import { searchTitles } from "./search.ts";',
+    "export function handleSearch(q) {",
+    "  return searchTitles(q);",
+    "}",
+  ],
+  "server/src/index.ts": [
+    'import { handleSearch } from "./service.ts";',
+    'app.get("/api/search", async (c) => {',
+    '  const q = c.req.query("q");',
+    "  return c.json(await handleSearch(q));",
+    "});",
+  ],
+};
+
+test("a value is followed through three functions in three files", () => {
+  const result = verifyClaim({ door: "/api/search", parameter: "q", sink: "sql" }, files(THREE_HOPS));
+  assert.equal(result.verdict, "valid", result.reason);
+});
+
+test("a check two functions deep still blocks the claim", () => {
+  const inventory = files({
+    ...THREE_HOPS,
+    "server/src/search.ts": [
+      'import { runQuery } from "./repo.ts";',
+      "export function searchTitles(term) {",
+      "  const cleaned = Number(term);",
+      "  return runQuery(cleaned);",
+      "}",
+    ],
+  });
+  const result = verifyClaim({ door: "/api/search", parameter: "q", sink: "sql" }, inventory);
+  assert.equal(result.verdict, "blocked", result.reason);
+});
+
+test("a helper shared by a safe and an unsafe route is judged per route", () => {
+  const inventory = files({
+    "server/src/index.ts": [
+      "function lookup(key) {",
+      "  return db.query(`SELECT * FROM items WHERE id = ${key}`);",
+      "}",
+      'app.get("/api/safe/:id", async (c) => {',
+      '  const raw = c.req.param("id");',
+      "  const id = Number(raw);",
+      "  return c.json(await lookup(id));",
+      "});",
+      'app.get("/api/unsafe/:id", async (c) => {',
+      '  const id = c.req.param("id");',
+      "  return c.json(await lookup(id));",
+      "});",
+    ],
+  });
+  assert.equal(verifyClaim({ door: "/api/safe/:id", parameter: "id", sink: "sql" }, inventory).verdict, "blocked");
+  assert.equal(verifyClaim({ door: "/api/unsafe/:id", parameter: "id", sink: "sql" }, inventory).verdict, "valid");
+});
+
+test("a value handed to code that was not reviewed is undecidable, not safe", () => {
+  const inventory = files({
+    "server/src/index.ts": [
+      'import { renderReport } from "some-package";',
+      'app.get("/api/reports", async (c) => {',
+      '  const name = c.req.query("name");',
+      "  const table = 'reports';",
+      "  await db.query(`SELECT * FROM ${table}`);",
+      "  return c.json(await renderReport(name));",
+      "});",
+    ],
+  });
+  const result = verifyClaim({ door: "/api/reports", parameter: "name", sink: "sql" }, inventory);
+  assert.equal(result.verdict, "undecidable", result.reason);
+  assert.match(result.reason, /renderReport/);
+});
+
+test("a helper name defined twice is undecidable rather than guessed", () => {
+  const inventory = files({
+    "server/src/a.ts": ["export function load(v) {", "  return db.query(`SELECT * FROM a WHERE id = ${v}`);", "}"],
+    "server/src/b.ts": ["export function load(v) {", "  return 1;", "}"],
+    "server/src/index.ts": [
+      'app.get("/api/x", async (c) => {',
+      '  const v = c.req.query("v");',
+      "  return c.json(await load(v));",
+      "});",
+    ],
+  });
+  const result = verifyClaim({ door: "/api/x", parameter: "v", sink: "sql" }, inventory);
+  assert.equal(result.verdict, "undecidable", result.reason);
+});
+
+test("with no model at all, the review proves a path through a helper", async () => {
+  const { runSecurityReview } = await import("../src/review/pipeline.ts");
+  const review = await runSecurityReview(
+    snapshotFromFiles([
+      {
+        path: "server/src/index.ts",
+        content: [
+          "function findProject(slug) {",
+          "  return db.query(`SELECT * FROM projects WHERE slug = '${slug}'`);",
+          "}",
+          'app.get("/api/projects/:slug", async (c) => {',
+          '  const slug = c.req.param("slug");',
+          "  return c.json(await findProject(slug));",
+          "});",
+        ].join("\n"),
+      },
+    ]),
+  );
+  const item = review.modules
+    .find((m) => m.id === "injection")
+    ?.items.find((i) => i.id === "injection/database");
+
+  assert.equal(item?.risks.length, 1);
+  assert.equal(item?.risks[0]?.confirmedBy, "oracle");
+  assert.equal(review.stats.pairedConfirmed, 1);
+  assert.equal(review.stats.proposalsMade, 0, "no model was involved");
+});
+
+// --- one user reaching another's records ----------------------------------------
+
+const SIGNED_IN = ['app.use("/api/*", requireUser);'];
+
+test("an ownership claim holds when nothing asks who is signed in", async () => {
+  const { verifyOwnership } = await import("../src/analysis/verify.ts");
+  const inventory = inv([
+    ...SIGNED_IN,
+    'app.get("/api/invoices/:id", async (c) => {',
+    '  const id = c.req.param("id");',
+    "  return c.json(await sql`SELECT * FROM invoices WHERE id = ${id}`);",
+    "});",
+  ]);
+  const result = verifyOwnership({ door: "/api/invoices/:id", parameter: "id" }, inventory);
+  assert.equal(result.verdict, "valid", result.reason);
+});
+
+test("asking who is signed in blocks an ownership claim", async () => {
+  const { verifyOwnership } = await import("../src/analysis/verify.ts");
+  for (const ask of ['c.get("userId")', "c.var.user", "await getSession(c)"]) {
+    const inventory = inv([
+      ...SIGNED_IN,
+      'app.get("/api/invoices/:id", async (c) => {',
+      '  const id = c.req.param("id");',
+      `  const me = ${ask};`,
+      "  return c.json(await sql`SELECT * FROM invoices WHERE id = ${id} AND owner = ${me}`);",
+      "});",
+    ]);
+    const result = verifyOwnership({ door: "/api/invoices/:id", parameter: "id" }, inventory);
+    assert.equal(result.verdict, "blocked", `${ask}: ${result.reason}`);
+  }
+});
+
+test("an unrelated cache lookup is not mistaken for asking who is signed in", async () => {
+  const { verifyOwnership } = await import("../src/analysis/verify.ts");
+  const inventory = inv([
+    ...SIGNED_IN,
+    'app.get("/api/invoices/:id", async (c) => {',
+    '  const id = c.req.param("id");',
+    '  const hit = cache.get("user");',
+    "  return c.json(hit ?? await sql`SELECT * FROM invoices WHERE id = ${id}`);",
+    "});",
+  ]);
+  const result = verifyOwnership({ door: "/api/invoices/:id", parameter: "id" }, inventory);
+  assert.equal(result.verdict, "valid", result.reason);
+});
+
+test("an ownership claim on a route with no sign-in is not this problem", async () => {
+  const { verifyOwnership } = await import("../src/analysis/verify.ts");
+  const result = verifyOwnership({ door: "/api/reports/:id", parameter: "id" }, inv(VULNERABLE));
+  assert.equal(result.verdict, "no-path");
+  assert.match(result.reason, /does not require signing in/);
+});
+
+test("a confirmed ownership gap lands on the checklist as a high risk", async () => {
+  const { runSecurityReview } = await import("../src/review/pipeline.ts");
+  const review = await runSecurityReview(
+    snapshotFromFiles([{
+      path: "server/src/index.ts",
+      content: [
+        ...SIGNED_IN,
+        'app.get("/api/invoices/:id", async (c) => {',
+        '  const id = c.req.param("id");',
+        "  return c.json(await sql`SELECT * FROM invoices WHERE id = ${id}`);",
+        "});",
+      ].join("\n"),
+    }]),
+    {
+      proposer: {
+        name: "scripted",
+        propose: () =>
+          Promise.resolve([
+            { door: "/api/invoices/:id", parameter: "id", payload: "", expectedSink: "ownership", rationale: "invoices are per customer" },
+          ]),
+      },
+    },
+  );
+  const item = review.modules
+    .find((m) => m.id === "access-control")
+    ?.items.find((i) => i.id === "access-control/object-ownership");
+  assert.equal(item?.status, "action-needed");
+  assert.equal(item?.risks[0]?.grade, "high");
+  assert.match(item?.risks[0]?.what ?? "", /never checks that the record belongs/);
+});

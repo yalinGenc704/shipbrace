@@ -1,5 +1,5 @@
 import { serve } from "@hono/node-server";
-import { runSecurityReview } from "@aegis/guardrails";
+import { createOsvSource, runSecurityReview } from "@aegis/guardrails";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
@@ -43,7 +43,9 @@ const reviewRequest = z.object({
  */
 async function review(target: string) {
   const ingested = await ingest(config.reviewRoot, target);
-  const result = await runSecurityReview(ingested.snapshot);
+  const result = await runSecurityReview(ingested.snapshot, {
+    ...(config.packageLookup ? { vulnerabilities: createOsvSource() } : {}),
+  });
 
   return {
     ...result,
@@ -79,7 +81,7 @@ app.post("/api/review", async (c) => {
  * Error responses carry a fixed message, never the underlying detail.
  *
  * A filesystem error names real paths on the host, and the product's own
- * checklist flags exactly this leak under A05. The detail goes to the log,
+ * checklist flags exactly this leak under A10. The detail goes to the log,
  * where only the operator sees it.
  */
 function failure(c: Parameters<Parameters<Hono["get"]>[1]>[0], error: unknown) {

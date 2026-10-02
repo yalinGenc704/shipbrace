@@ -15,9 +15,11 @@ absorb engineering choices yourself.
 ```
 inventory  → find routes, untrusted inputs, dangerous operations
 enumerate  → rules find the paths they can on their own        (no model)
-propose    → a model suggests ways in                          (optional)
+pair       → rules suggest every input × operation kind        (no model)
+propose    → a model suggests ways in, and which records are   (optional)
+             private ("ownership" claims, `verifyOwnership`)
 verify     → rules decide each suggestion on its own terms     (no model)
-review     → ten OWASP modules for the user
+review     → ten OWASP Top 10:2025 modules for the user
 ```
 
 - Nothing a model says becomes a finding unless `verifyClaim` returns `valid`.
@@ -42,6 +44,10 @@ review     → ten OWASP modules for the user
 | `server/` | Stateless review API (`GET`/`POST /api/review`) |
 | `app/` | React dashboard rendering the checklist |
 | `scripts/simulate.ts` | Reviews a folder with and without a model and reports the difference |
+| `packages/guardrails/bench/` | **The benchmark.** Sample apps with a known answer key (`cases.ts`) and the grader (`grade.ts`). `test/bench.test.ts` ratchets the scores |
+| `packages/guardrails/src/review/vulnerabilities.ts` | Known flaws in installed packages via OSV.dev (A03). Off unless a `VulnerabilitySource` is passed; the server passes one |
+| `docs/legal/third-party-services.md` | What leaves the platform, what users must be told, draft privacy-policy text |
+| `scripts/bench.ts` | Prints the benchmark scores: rules alone, perfect suggester, optionally a real model |
 
 ### Do not use these — they are legacy and still exported
 
@@ -58,15 +64,19 @@ Bun and Docker are **not installed** on this machine, so the Bun-based root
 scripts fail (`npm test` → "'bun' is not recognized"). Use Node directly:
 
 ```bash
-# all tests (expect 100 pass, 1 skipped -- symlinks need elevation on Windows)
+# all tests (expect 127 pass, 1 skipped -- symlinks need elevation on Windows)
 node --experimental-strip-types --test packages/guardrails/test/*.test.ts packages/scaffold/test/*.test.ts server/test/*.test.ts
 
 # review API on :3000. Set REVIEW_ROOT explicitly: npm runs workspace scripts
 # from inside server/, so without it only that one folder is reviewed.
+# PACKAGE_LOOKUP=off keeps it fully offline (no OSV.dev lookups).
 REVIEW_ROOT="$PWD" npm start --workspace @aegis/server
 
 # dashboard on :5173 (falls back to app/src/fixtures/review.json without the API)
 npm run dev --workspace @aegis/app
+
+# benchmark scores (add --model, with --env-file=.env, to include Claude; costs credit)
+node --experimental-strip-types scripts/bench.ts
 
 # compare review with and without a model (costs API credit)
 node --experimental-strip-types --env-file=.env scripts/simulate.ts <folder>
@@ -80,6 +90,8 @@ print its value. Prepaid credits with auto-reload off, so it cannot overspend.
 - **No false "pass".** A checklist item may report `pass` only if a detector
   actually ran. No detector, or one that could not run (`not-applicable`), hands
   the item back to the user. There is a test for this.
+- **Only proof is a risk.** Anything styled as a risk must be traced or be the
+  problem itself. Unproven pattern hits are leads (`unproven`), never risks.
 - **No warnings on correct code.** Several fixed bugs were warnings about code
   that was already right (a key in an ignored `.env`; `spawnSync` with an
   argument array). These teach users to ignore the tool. Treat one as a defect.
@@ -94,22 +106,50 @@ print its value. Prepaid credits with auto-reload off, so it cannot overspend.
 
 ## Current state and known gaps
 
+- **Benchmark (31 apps, 20 real problems, 12 safe decoys), 2026-10-01:** rules
+  alone prove 14; a perfect suggester proves 16 (the two extra are ownership
+  gaps, which only a suggester can raise); **zero** false alarms. Remaining
+  misses: Hono `c.html()` is not a recognised sink; an `.includes()` that only
+  logs is treated as a blocking allowlist; any `.parse()` is trusted as
+  validation even for `z.string()`; component props are not inputs.
+- **The model's job (user decision, 2026-10-01):** pairing covers every
+  input → operation claim, so the model's distinct contribution is ownership
+  claims: judging which records are private. `verifyOwnership` decides them by
+  rules: route requires sign-in, input reaches a query (even a parameterised
+  one), nothing on the way asks who is signed in (`inventory.identities`).
+  Asking at all counts as checking (errs to silence).
+- **Data leaving the platform.** OSV.dev gets public package names + versions
+  only (user approved 2026-10-01; CC-BY attribution shown via `ActionItem.notice`).
+  The model gets code excerpts: `.js/.ts` files only, through `redact()`.
+  Before 2026-10-01 excerpts were sent whole, `.env` files included. Disclosure
+  before first send and per-user opt-outs are **not built** (no sign-up yet);
+  see `docs/legal/third-party-services.md`.
+- **Risks are proven; pattern hits are leads.** The sink pattern rules
+  (`UNPROVEN_RULES` in `review/modules.ts`) judge how a line is written, not
+  where its values come from, and fired on safe code. Their findings go to
+  `ActionItem.unproven` ("Worth a look, not proven" on the dashboard), are
+  never graded or counted as risks, and set the item to `needs-your-review`.
+  The user chose this on 2026-10-01. Other rules (e.g. hardcoded keys) stay risks.
 - Uploaded files, repository content, and environment values are declared as
   input kinds but **not detected**. This matters for a product that ingests
   other people's repositories.
 - The Claude proposer **refused** (cyber usage policy) on a deliberately
   vulnerable test app, even with the defensive prompt. It analysed clean code
   fine. Unreliable precisely when needed. Do not work around a refusal.
-- The verifier follows a value one call deep into another function. Chains that
-  continue further are not followed and come back unproven.
-- 13 of 31 checklist items have no detector and are left to the user.
+- The verifier follows a value through any number of plain function calls,
+  across files. It does not follow method calls (`obj.fn(x)`), and a helper
+  name defined twice, unknown code, or destructured parameters make the
+  claim `undecidable` (never `no-path`).
+- 17 of 35 checklist items have no detector and are left to the user. The
+  checklist follows OWASP Top 10:2025; the four items added for its new
+  categories (A03 supply chain, A10 exceptional conditions) have no detector yet.
 - No GitHub integration, persistence, or webhooks yet.
 
 ## Next steps
 
 1. Detect uploaded files, repository content, and environment values as sources.
-2. Generate claims without a model: a pattern catalogue, or pairing every source
-   with every sink and letting the verifier decide (cheap because checking is).
+2. Before any second user: the disclosures and per-user switches in
+   `docs/legal/third-party-services.md` section 4.
 3. Test the refusal across several vulnerable repositories to learn whether it
    is systematic.
 4. Remove or clearly deprecate the legacy exports above.

@@ -74,7 +74,7 @@ function risk(
   };
 }
 
-// --- A05: the database must not be reachable from outside --------------------
+// --- A02: the database must not be reachable from outside --------------------
 
 /**
  * Reads the compose file by indentation rather than with a YAML parser, which
@@ -139,7 +139,7 @@ const exposedServices: ProjectCheck = {
   },
 };
 
-// --- A05: protective headers -------------------------------------------------
+// --- A02: protective headers -------------------------------------------------
 
 const securityHeaders: ProjectCheck = {
   id: "server:protective-headers",
@@ -175,7 +175,7 @@ const securityHeaders: ProjectCheck = {
   },
 };
 
-// --- A05: error detail must not leak -----------------------------------------
+// --- A10: error detail must not leak -----------------------------------------
 
 const errorDetail: ProjectCheck = {
   id: "server:no-internal-errors-returned",
@@ -207,7 +207,7 @@ const errorDetail: ProjectCheck = {
   },
 };
 
-// --- A06: versions must be pinned --------------------------------------------
+// --- A03: versions must be pinned --------------------------------------------
 
 const pinnedVersions: ProjectCheck = {
   id: "manifest:exact-versions",
@@ -245,7 +245,7 @@ const pinnedVersions: ProjectCheck = {
   },
 };
 
-// --- A08: a lockfile must exist ----------------------------------------------
+// --- A03: a lockfile must exist ----------------------------------------------
 
 const lockfilePresent: ProjectCheck = {
   id: "manifest:lockfile-committed",
@@ -277,7 +277,7 @@ const lockfilePresent: ProjectCheck = {
   },
 };
 
-// --- A02: password storage ---------------------------------------------------
+// --- A04: password storage ---------------------------------------------------
 
 const passwordStorage: ProjectCheck = {
   id: "auth:slow-password-hash",
@@ -363,7 +363,7 @@ const sessionExpiry: ProjectCheck = {
   },
 };
 
-// --- A04: rate limiting ------------------------------------------------------
+// --- A06: rate limiting ------------------------------------------------------
 
 const rateLimiting: ProjectCheck = {
   id: "server:rate-limiting-present",

@@ -2,10 +2,10 @@
   "modules": [
     {
       "id": "access-control",
-      "owasp": "A01:2021",
+      "owasp": "A01:2025",
       "rank": 1,
       "title": "Who is allowed to do what",
-      "summary": "The most common serious problem in web applications. It means a page or action that should be restricted can be reached by someone who should not reach it -- often just by editing the address bar.",
+      "summary": "The most common serious problem in web applications. It means a page or action that should be restricted can be reached by someone who should not reach it -- often just by editing the address bar. It also covers your server being tricked into fetching addresses a visitor chose, which reaches systems the visitor never could.",
       "items": [
         {
           "id": "access-control/unguarded-routes",
@@ -21,7 +21,7 @@
               "location": {
                 "path": "server/src/api.ts",
                 "line": 12,
-                "excerpt": "app.post(\"/api/admin/purge\""
+                "excerpt": "app.post(\"/api/admin/purge\", async (c) => {"
               },
               "confirmedBy": "oracle"
             },
@@ -34,7 +34,7 @@
               "location": {
                 "path": "server/src/api.ts",
                 "line": 6,
-                "excerpt": "app.get(\"/api/reports/:id\""
+                "excerpt": "app.get(\"/api/reports/:id\", async (c) => {"
               },
               "confirmedBy": "oracle"
             },
@@ -47,11 +47,12 @@
               "location": {
                 "path": "server/src/api.ts",
                 "line": 18,
-                "excerpt": "app.get(\"/api/preview\""
+                "excerpt": "app.get(\"/api/preview\", async (c) => {"
               },
               "confirmedBy": "oracle"
             }
           ],
+          "unproven": [],
           "status": "action-needed"
         },
         {
@@ -60,6 +61,7 @@
           "question": "If one customer changed a number in the address bar, would they see another customer's data? Automated checks cannot tell whose record is whose -- only you know that.",
           "detector": null,
           "risks": [],
+          "unproven": [],
           "status": "needs-your-review"
         },
         {
@@ -67,14 +69,154 @@
           "title": "File access cannot be steered outside its intended folder",
           "detector": "taint:filesystem",
           "risks": [],
+          "unproven": [],
           "status": "pass"
+        },
+        {
+          "id": "ssrf/url-allowlist",
+          "title": "Visitor-supplied addresses are checked against an allowlist",
+          "detector": "taint:outbound-request",
+          "risks": [
+            {
+              "id": "taint/outbound-request@server/src/api.ts:20",
+              "grade": "medium",
+              "what": "On GET /api/preview, a value from the part of the address after the question mark is used directly in a request your server makes to another address at server/src/api.ts line 20, with nothing in between checking that the value is what you expect.",
+              "impact": "Someone could make your server fetch addresses of their choosing, including private systems on your own network that the outside world cannot normally reach.",
+              "fix": "Check the address against a list of destinations you allow before fetching it, and refuse anything pointing at a private network address -- including the cloud metadata address, which hands out credentials.",
+              "location": {
+                "path": "server/src/api.ts",
+                "line": 20,
+                "excerpt": "const upstream = await fetch(target);"
+              },
+              "evidence": "c.req.query(\"url\") → target → upstream → fetch(target)",
+              "confirmedBy": "oracle"
+            }
+          ],
+          "unproven": [],
+          "status": "action-needed"
+        },
+        {
+          "id": "ssrf/internal-ranges",
+          "title": "Requests to private network addresses are blocked",
+          "question": "Confirm your server refuses to fetch addresses on your own private network, including the cloud metadata address that hands out credentials.",
+          "detector": null,
+          "risks": [],
+          "unproven": [],
+          "status": "needs-your-review"
+        }
+      ]
+    },
+    {
+      "id": "misconfiguration",
+      "owasp": "A02:2025",
+      "rank": 2,
+      "title": "Settings that leave the door open",
+      "summary": "The code can be correct while the settings around it are not -- an overly permissive sharing rule, a debug mode left on, a default password never changed.",
+      "items": [
+        {
+          "id": "config/cors",
+          "title": "Only your own sites can call your API",
+          "detector": "rules:cors",
+          "risks": [],
+          "unproven": [],
+          "status": "pass"
+        },
+        {
+          "id": "config/security-headers",
+          "title": "Standard protective headers are switched on",
+          "question": "Confirm your server sets the standard protective headers. They cost nothing and close a whole class of browser-side attacks.",
+          "detector": "server:protective-headers",
+          "risks": [
+            {
+              "id": "check/missing-security-headers@server/src/api.ts:4",
+              "grade": "medium",
+              "what": "No protective response headers are configured in server/src/api.ts.",
+              "impact": "Browsers offer several protections that only switch on when your server asks for them -- refusing to let your site be framed by someone else's, and refusing to run scripts from places you did not approve. Without them, a small problem elsewhere in the site becomes a much larger one.",
+              "fix": "Add Hono's `secureHeaders()` middleware near the top of your server file. It is one line and needs no configuration to be useful.",
+              "location": {
+                "path": "server/src/api.ts",
+                "line": 4,
+                "excerpt": "const app = new Hono();"
+              },
+              "confirmedBy": "rule"
+            }
+          ],
+          "unproven": [],
+          "status": "action-needed"
+        },
+        {
+          "id": "config/exposed-services",
+          "title": "The database is not reachable from the internet",
+          "question": "Confirm your database does not publish a port to the outside world. It should be reachable only by your own application.",
+          "detector": "compose:no-public-database",
+          "notApplicable": "This project has no docker-compose file, so there is nothing to read.",
+          "risks": [],
+          "unproven": [],
+          "status": "needs-your-review"
+        }
+      ]
+    },
+    {
+      "id": "supply-chain",
+      "owasp": "A03:2025",
+      "rank": 3,
+      "title": "Building blocks you did not write",
+      "summary": "Your application is built from packages written by other people, and built and shipped by automated tools. A flaw or a break-in anywhere along that chain ends up inside your application, even if your own code is perfect.",
+      "items": [
+        {
+          "id": "components/known-vulnerabilities",
+          "title": "No dependency has a known published vulnerability",
+          "question": "If this could not be checked automatically, run your package manager's audit command (for example npm audit) and review what it reports.",
+          "detector": "osv:known-vulnerabilities",
+          "notApplicable": "Checking packages against the public list of known flaws is switched off. Run your package manager's audit command instead.",
+          "risks": [],
+          "unproven": [],
+          "status": "needs-your-review"
+        },
+        {
+          "id": "components/abandoned",
+          "title": "No dependency is unmaintained or pulled from an unofficial source",
+          "question": "A package that has not been updated in years will not be fixed when a flaw is found in it. Check the ones your app depends on most heavily.",
+          "detector": null,
+          "risks": [],
+          "unproven": [],
+          "status": "needs-your-review"
+        },
+        {
+          "id": "components/pinned",
+          "title": "Versions are pinned so builds are reproducible",
+          "question": "Confirm your dependency versions are exact rather than ranges, so the code you reviewed is the code that ships.",
+          "detector": "manifest:exact-versions",
+          "notApplicable": "No package.json was found in this project.",
+          "risks": [],
+          "unproven": [],
+          "status": "needs-your-review"
+        },
+        {
+          "id": "integrity/lockfile",
+          "title": "A lockfile records exactly which package versions are installed",
+          "question": "Confirm a lockfile is committed. Without one, two installs of the same code can pull different package versions.",
+          "detector": "manifest:lockfile-committed",
+          "notApplicable": "No package.json was found in this project.",
+          "risks": [],
+          "unproven": [],
+          "status": "needs-your-review"
+        },
+        {
+          "id": "integrity/ci-permissions",
+          "title": "Automated build steps cannot be modified by contributors",
+          "question": "Your build pipeline usually holds deployment credentials. Confirm who is able to change what it runs.",
+          "detector": null,
+          "risks": [],
+          "unproven": [],
+          "status": "needs-your-review"
         }
       ]
     },
     {
       "id": "cryptographic-failures",
-      "owasp": "A02:2021",
-      "rank": 2,
+      "owasp": "A04:2025",
+      "rank": 4,
       "title": "Protecting passwords, keys, and personal data",
       "summary": "Covers secrets that should never be readable -- API keys, signing keys, passwords -- and sensitive data that should be protected in transit and at rest.",
       "items": [
@@ -98,6 +240,7 @@
               "confirmedBy": "rule"
             }
           ],
+          "unproven": [],
           "status": "action-needed"
         },
         {
@@ -107,6 +250,7 @@
           "detector": "auth:slow-password-hash",
           "notApplicable": "This application does not appear to handle passwords.",
           "risks": [],
+          "unproven": [],
           "status": "needs-your-review"
         },
         {
@@ -115,14 +259,15 @@
           "question": "List what you collect that would matter if it leaked -- names, emails, payment details, health information. Some of it carries legal obligations.",
           "detector": null,
           "risks": [],
+          "unproven": [],
           "status": "needs-your-review"
         }
       ]
     },
     {
       "id": "injection",
-      "owasp": "A03:2021",
-      "rank": 3,
+      "owasp": "A05:2025",
+      "rank": 5,
       "title": "Visitor input being treated as instructions",
       "summary": "Happens when something a visitor types is pasted into a command, a database query, or a page, and gets treated as an instruction rather than as text. This is the category the automated attack analysis targets most directly.",
       "items": [
@@ -140,12 +285,13 @@
               "location": {
                 "path": "server/src/api.ts",
                 "line": 8,
-                "excerpt": "`SELECT * FROM reports WHERE id = ${id}`"
+                "excerpt": "const rows = await db.query(`SELECT * FROM reports WHERE id = ${id}`);"
               },
-              "evidence": "req.param(\"id\") → id → rows → `SELECT * FROM reports WHERE id = ${id}`",
+              "evidence": "c.req.param(\"id\") → id → rows → `SELECT * FROM reports WHERE id = ${id}`",
               "confirmedBy": "oracle"
             }
           ],
+          "unproven": [],
           "status": "action-needed"
         },
         {
@@ -162,42 +308,41 @@
               "location": {
                 "path": "server/src/api.ts",
                 "line": 14,
-                "excerpt": "execSync(`rm -rf ${body.path}`)"
+                "excerpt": "execSync(`rm -rf ${body.path}`);"
               },
-              "evidence": "req.json() → body → execSync(`rm -rf ${body.path}`)",
+              "evidence": "c.req.json() → body → execSync(`rm -rf ${body.path}`)",
               "confirmedBy": "oracle"
             }
           ],
+          "unproven": [],
           "status": "action-needed"
         },
         {
           "id": "injection/page-content",
           "title": "Visitor-supplied content cannot inject scripts into pages",
           "detector": "taint:html",
-          "risks": [
+          "risks": [],
+          "unproven": [
             {
               "id": "injection/unescaped-html@app/src/Profile.tsx:4",
-              "grade": "high",
               "what": "Raw HTML is inserted into the page without escaping (app/src/Profile.tsx line 4).",
-              "impact": "React normally neutralises HTML in your data so that text stays text. This line turns that protection off for one value. If that value ever contains something a user supplied, their markup -- including scripts that read logged-in sessions -- will run in your visitors' browsers.",
-              "fix": "If the content is plain text, render it as `{value}` and delete this prop. If it genuinely must be HTML, sanitise it with a library such as DOMPurify first.",
+              "why": "React normally neutralises HTML in your data so that text stays text. This line turns that protection off for one value. If that value ever contains something a user supplied, their markup -- including scripts that read logged-in sessions -- will run in your visitors' browsers.",
+              "check": "If the content is plain text, render it as `{value}` and delete this prop. If it genuinely must be HTML, sanitise it with a library such as DOMPurify first.",
               "location": {
                 "path": "app/src/Profile.tsx",
                 "line": 4,
-                "column": 15,
                 "excerpt": "return <div dangerouslySetInnerHTML={{ __html: bio }} />;"
-              },
-              "confirmedBy": "rule"
+              }
             }
           ],
-          "status": "action-needed"
+          "status": "needs-your-review"
         }
       ]
     },
     {
       "id": "insecure-design",
-      "owasp": "A04:2021",
-      "rank": 4,
+      "owasp": "A06:2025",
+      "rank": 6,
       "title": "Gaps in how the feature was designed",
       "summary": "Some problems are not mistakes in the code -- the code does exactly what it was asked to. These are gaps in what was asked for, so no automated tool can find them. They need your knowledge of how the product is supposed to work.",
       "items": [
@@ -207,6 +352,7 @@
           "question": "For each thing your app does, ask: what would someone gain by doing this a thousand times, out of order, or with values you did not expect?",
           "detector": null,
           "risks": [],
+          "unproven": [],
           "status": "needs-your-review"
         },
         {
@@ -224,6 +370,7 @@
               "confirmedBy": "rule"
             }
           ],
+          "unproven": [],
           "status": "action-needed"
         },
         {
@@ -232,102 +379,14 @@
           "question": "Anything checked only in the browser can be bypassed entirely -- the browser is the visitor's, not yours. Prices, limits, and permissions must be re-checked on the server.",
           "detector": null,
           "risks": [],
-          "status": "needs-your-review"
-        }
-      ]
-    },
-    {
-      "id": "misconfiguration",
-      "owasp": "A05:2021",
-      "rank": 5,
-      "title": "Settings that leave the door open",
-      "summary": "The code can be correct while the settings around it are not -- an overly permissive sharing rule, a debug mode left on, a default password never changed.",
-      "items": [
-        {
-          "id": "config/cors",
-          "title": "Only your own sites can call your API",
-          "detector": "rules:cors",
-          "risks": [],
-          "status": "pass"
-        },
-        {
-          "id": "config/security-headers",
-          "title": "Standard protective headers are switched on",
-          "question": "Confirm your server sets the standard protective headers. They cost nothing and close a whole class of browser-side attacks.",
-          "detector": "server:protective-headers",
-          "risks": [
-            {
-              "id": "check/missing-security-headers@server/src/api.ts:4",
-              "grade": "medium",
-              "what": "No protective response headers are configured in server/src/api.ts.",
-              "impact": "Browsers offer several protections that only switch on when your server asks for them -- refusing to let your site be framed by someone else's, and refusing to run scripts from places you did not approve. Without them, a small problem elsewhere in the site becomes a much larger one.",
-              "fix": "Add Hono's `secureHeaders()` middleware near the top of your server file. It is one line and needs no configuration to be useful.",
-              "location": {
-                "path": "server/src/api.ts",
-                "line": 4,
-                "excerpt": "const app = new Hono();"
-              },
-              "confirmedBy": "rule"
-            }
-          ],
-          "status": "action-needed"
-        },
-        {
-          "id": "config/exposed-services",
-          "title": "The database is not reachable from the internet",
-          "question": "Confirm your database does not publish a port to the outside world. It should be reachable only by your own application.",
-          "detector": "compose:no-public-database",
-          "notApplicable": "This project has no docker-compose file, so there is nothing to read.",
-          "risks": [],
-          "status": "needs-your-review"
-        },
-        {
-          "id": "config/error-detail",
-          "title": "Error messages shown to visitors do not reveal internals",
-          "question": "A stack trace or raw database error tells an attacker how your system is built. Confirm visitors see a short message and the detail goes to your logs instead.",
-          "detector": "server:no-internal-errors-returned",
-          "risks": [],
-          "status": "pass"
-        }
-      ]
-    },
-    {
-      "id": "vulnerable-components",
-      "owasp": "A06:2021",
-      "rank": 6,
-      "title": "Outdated or known-vulnerable building blocks",
-      "summary": "Your application is built on packages written by other people. When a security flaw is found in one of them, every application using it inherits the flaw until it is updated.",
-      "items": [
-        {
-          "id": "components/known-vulnerabilities",
-          "title": "No dependency has a known published vulnerability",
-          "question": "This needs a live vulnerability database, which is not wired up yet. Until it is, run your package manager's audit command and review what it reports.",
-          "detector": null,
-          "risks": [],
-          "status": "needs-your-review"
-        },
-        {
-          "id": "components/abandoned",
-          "title": "No dependency is unmaintained or pulled from an unofficial source",
-          "question": "A package that has not been updated in years will not be fixed when a flaw is found in it. Check the ones your app depends on most heavily.",
-          "detector": null,
-          "risks": [],
-          "status": "needs-your-review"
-        },
-        {
-          "id": "components/pinned",
-          "title": "Versions are pinned so builds are reproducible",
-          "question": "Confirm your dependency versions are exact rather than ranges, so the code you reviewed is the code that ships.",
-          "detector": "manifest:exact-versions",
-          "notApplicable": "No package.json was found in this project.",
-          "risks": [],
+          "unproven": [],
           "status": "needs-your-review"
         }
       ]
     },
     {
       "id": "authentication-failures",
-      "owasp": "A07:2021",
+      "owasp": "A07:2025",
       "rank": 7,
       "title": "Proving who someone is",
       "summary": "Covers logging in, staying logged in, and logging out. Weaknesses here let someone become another user, which makes every other permission check meaningless.",
@@ -337,6 +396,7 @@
           "title": "Login tokens cannot be read by scripts on the page",
           "detector": "rules:token-storage",
           "risks": [],
+          "unproven": [],
           "status": "pass"
         },
         {
@@ -346,6 +406,7 @@
           "detector": "auth:tokens-expire",
           "notApplicable": "No login tokens are issued by this application.",
           "risks": [],
+          "unproven": [],
           "status": "needs-your-review"
         },
         {
@@ -354,6 +415,7 @@
           "question": "Without a limit, someone can try millions of passwords against one account. Confirm repeated failures are slowed, locked, or challenged.",
           "detector": null,
           "risks": [],
+          "unproven": [],
           "status": "needs-your-review"
         },
         {
@@ -362,50 +424,53 @@
           "question": "Reset links must expire, be single-use, and be sent only to the address already on the account. This is the most commonly abused way into an account.",
           "detector": null,
           "risks": [],
+          "unproven": [],
           "status": "needs-your-review"
         }
       ]
     },
     {
       "id": "integrity-failures",
-      "owasp": "A08:2021",
+      "owasp": "A08:2025",
       "rank": 8,
-      "title": "Trusting code and data that could have been tampered with",
-      "summary": "Covers where your code comes from and whether anything could alter it on the way -- an unpinned dependency, an unsigned update, data accepted from elsewhere without checking.",
+      "title": "Trusting data that could have been tampered with",
+      "summary": "Covers data and code your application accepts as genuine without checking -- a script loaded from someone else's site, a cookie the visitor could edit, data arriving from another system.",
       "items": [
-        {
-          "id": "integrity/lockfile",
-          "title": "A lockfile records exactly which package versions are installed",
-          "question": "Confirm a lockfile is committed. Without one, two installs of the same code can pull different package versions.",
-          "detector": "manifest:lockfile-committed",
-          "notApplicable": "No package.json was found in this project.",
-          "risks": [],
-          "status": "needs-your-review"
-        },
-        {
-          "id": "integrity/ci-permissions",
-          "title": "Automated build steps cannot be modified by contributors",
-          "question": "Your build pipeline usually holds deployment credentials. Confirm who is able to change what it runs.",
-          "detector": null,
-          "risks": [],
-          "status": "needs-your-review"
-        },
         {
           "id": "integrity/untrusted-deserialization",
           "title": "Data from outside is validated before being used",
           "question": "Data arriving from another system is no more trustworthy than data typed by a visitor. Confirm it is checked against an expected shape before use.",
           "detector": null,
           "risks": [],
+          "unproven": [],
+          "status": "needs-your-review"
+        },
+        {
+          "id": "integrity/third-party-scripts",
+          "title": "Scripts loaded from other websites cannot be swapped without you noticing",
+          "question": "If a page loads a script straight from another site (a CDN), whoever controls that site can change what runs on your pages. Confirm each such script is pinned to an exact version and carries an integrity check, or is served from your own server.",
+          "detector": null,
+          "risks": [],
+          "unproven": [],
+          "status": "needs-your-review"
+        },
+        {
+          "id": "integrity/client-data",
+          "title": "Anything the browser hands back is signed or re-checked",
+          "question": "Cookies, hidden form fields, and saved settings travel through the visitor's browser, where they can be edited. Confirm anything you rely on -- a role, a price, an account id -- is either signed so edits are detected, or looked up again on the server.",
+          "detector": null,
+          "risks": [],
+          "unproven": [],
           "status": "needs-your-review"
         }
       ]
     },
     {
       "id": "logging-monitoring",
-      "owasp": "A09:2021",
+      "owasp": "A09:2025",
       "rank": 9,
       "title": "Noticing when something goes wrong",
-      "summary": "If an attack succeeds and nobody notices, it continues. The average intrusion goes undetected for months. This module is about being able to tell that something happened, and when.",
+      "summary": "If an attack succeeds and nobody notices, it continues. The average intrusion goes undetected for months. This module is about being able to tell that something happened, and when -- and making sure someone is told.",
       "items": [
         {
           "id": "logging/auth-events",
@@ -413,6 +478,7 @@
           "question": "Confirm you record who signed in, what failed, and what was refused. Without it there is no way to reconstruct an incident afterwards.",
           "detector": null,
           "risks": [],
+          "unproven": [],
           "status": "needs-your-review"
         },
         {
@@ -421,6 +487,7 @@
           "question": "Logs are copied, shipped to other services, and read by more people than your database. Confirm nothing sensitive is written into them.",
           "detector": "logging:no-secrets-logged",
           "risks": [],
+          "unproven": [],
           "status": "pass"
         },
         {
@@ -429,56 +496,55 @@
           "question": "A log nobody reads is not monitoring. Decide who gets notified, and for what.",
           "detector": null,
           "risks": [],
+          "unproven": [],
           "status": "needs-your-review"
         }
       ]
     },
     {
-      "id": "ssrf",
-      "owasp": "A10:2021",
+      "id": "exceptional-conditions",
+      "owasp": "A10:2025",
       "rank": 10,
-      "title": "Your server being tricked into fetching things",
-      "summary": "If your application fetches a web address that a visitor supplies, they can point it at systems only your server can reach -- internal dashboards, cloud configuration services -- and read the reply.",
+      "title": "When something unexpected happens",
+      "summary": "Errors are where applications behave least predictably. A check that crashes might let everyone through, an error message might reveal how the system is built, and one malformed request might bring the whole thing down.",
       "items": [
         {
-          "id": "ssrf/url-allowlist",
-          "title": "Visitor-supplied addresses are checked against an allowlist",
-          "detector": "taint:outbound-request",
-          "risks": [
-            {
-              "id": "taint/outbound-request@server/src/api.ts:20",
-              "grade": "medium",
-              "what": "On GET /api/preview, a value from the part of the address after the question mark is used directly in a request your server makes to another address at server/src/api.ts line 20, with nothing in between checking that the value is what you expect.",
-              "impact": "Someone could make your server fetch addresses of their choosing, including private systems on your own network that the outside world cannot normally reach.",
-              "fix": "Check the address against a list of destinations you allow before fetching it, and refuse anything pointing at a private network address -- including the cloud metadata address, which hands out credentials.",
-              "location": {
-                "path": "server/src/api.ts",
-                "line": 20,
-                "excerpt": "fetch(target)"
-              },
-              "evidence": "req.query(\"url\") → target → upstream → fetch(target)",
-              "confirmedBy": "oracle"
-            }
-          ],
-          "status": "action-needed"
+          "id": "config/error-detail",
+          "title": "Error messages shown to visitors do not reveal internals",
+          "question": "A stack trace or raw database error tells an attacker how your system is built. Confirm visitors see a short message and the detail goes to your logs instead.",
+          "detector": "server:no-internal-errors-returned",
+          "risks": [],
+          "unproven": [],
+          "status": "pass"
         },
         {
-          "id": "ssrf/internal-ranges",
-          "title": "Requests to private network addresses are blocked",
-          "question": "Confirm your server refuses to fetch addresses on your own private network, including the cloud metadata address that hands out credentials.",
+          "id": "errors/fail-closed",
+          "title": "When a check breaks, the answer is no",
+          "question": "If a permission check, a payment call, or a sign-in lookup throws an error, the safe outcome is to refuse. Confirm none of your error handlers quietly carry on as if the check had passed.",
           "detector": null,
           "risks": [],
+          "unproven": [],
+          "status": "needs-your-review"
+        },
+        {
+          "id": "errors/unhandled",
+          "title": "One unexpected request cannot crash or stall the application",
+          "question": "Confirm unexpected errors are caught and answered with a short message, and that oversized or malformed requests are refused early rather than left to exhaust memory or hang.",
+          "detector": null,
+          "risks": [],
+          "unproven": [],
           "status": "needs-your-review"
         }
       ]
     }
   ],
   "summary": {
-    "high": 5,
+    "high": 4,
     "medium": 5,
     "low": 0,
-    "awaitingReview": 18,
-    "clear": 0
+    "awaitingReview": 23,
+    "clear": 0,
+    "unproven": 1
   },
   "unverified": [],
   "stats": {
@@ -486,8 +552,9 @@
     "sources": 4,
     "sinks": 4,
     "exploitablePaths": 3,
+    "pairedConfirmed": 0,
     "proposalsMade": 0,
     "proposalsConfirmed": 0,
-    "durationMs": 15.9846
+    "durationMs": 19.044600000000003
   }
 }

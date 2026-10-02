@@ -29,7 +29,7 @@ export interface ProposerContext {
   doors: Door[];
   /** Dangerous operations found in the same handlers. */
   sinks: Sink[];
-  /** Source excerpts, keyed by file path. Already redacted. */
+  /** Source excerpts, keyed by file path. Code files only, passed through `redact()` by `excerptsFor`. */
   excerpts: Array<{ path: string; code: string }>;
 }
 
@@ -62,7 +62,10 @@ export const PROPOSAL_SCHEMA = {
           },
           expectedSink: {
             type: "string",
-            enum: ["sql", "shell", "filesystem", "html", "redirect", "outbound-request", "dynamic-code"],
+            enum: [
+              "sql", "shell", "filesystem", "html", "redirect", "outbound-request", "dynamic-code",
+              "ownership",
+            ],
           },
           rationale: { type: "string", description: "One sentence: why this reaches the sink." },
         },
@@ -94,6 +97,13 @@ const SYSTEM_PROMPT =
   `URL, the query string, the request body, headers, cookies, or uploaded files -- ` +
   `can reach one of those sensitive operations without being validated or escaped ` +
   `on the way.\n\n` +
+  `Separately, identify routes where a value from the request (an id in the URL, ` +
+  `the query string, or the body) chooses a record that belongs to one particular ` +
+  `person -- an invoice, a message, an order, a profile -- and the code may not ` +
+  `check that the record belongs to whoever is signed in. Report these with ` +
+  `expectedSink "ownership" and the input that chooses the record. Use your ` +
+  `judgement about what the application is for: records meant for everyone, ` +
+  `such as a public product catalogue, do not belong here.\n\n` +
   `For each one, report the route, which input carries the untrusted value, which ` +
   `operation it reaches, and a one-sentence explanation of why the path is not ` +
   `safe. Describe the *kind* of input that would be mishandled -- "a value ` +
@@ -126,7 +136,7 @@ export function createClaudeProposer(
   client: AnthropicLike,
   options: ClaudeProposerOptions = {},
 ): AttackProposer {
-  const model = options.model ?? "claude-opus-5";
+  const model = options.model ?? "claude-opus-5-5";
   const effort = options.effort ?? "high";
   const maxProposals = options.maxProposals ?? 12;
 

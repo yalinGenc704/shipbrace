@@ -105,13 +105,16 @@ principle governs `renderAuto()` and `renderSupervise()` in the engine.
 
 ## The checklist is honest about its own coverage
 
-The ten modules are the OWASP Top 10 in OWASP's order, so the priority reflects
-measured prevalence and "did we cover everything" has an external answer.
+The ten modules are the OWASP Top 10:2025 in OWASP's order, so the priority
+reflects measured prevalence and "did we cover everything" has an external answer.
+The checklist moved from the 2021 edition on 2026-10-01. Item ids did not change
+when items changed module (server-side request forgery joined access control;
+supply-chain items left integrity), so a user's review ticks carry over.
 
 An item may report `pass` only if a detector actually ran. An item with no detector,
 or whose detector could not run here (no compose file to read, no passwords to
 check), is handed back to the user with the reason. A false "pass" is worse than no
-report: it tells the user to stop looking where they still need to. Today 18 of 31
+report: it tells the user to stop looking where they still need to. Today 18 of 35
 items have a detector.
 
 ## Confidence gates automation

@@ -61,6 +61,8 @@ export {
   type ItemStatus,
   type ReviewModule,
   type Risk,
+  type Unproven,
+  type OwnershipGap,
   type SecurityReview,
 } from "./review/modules.ts";
 
@@ -72,3 +74,12 @@ export {
 } from "./review/checks.ts";
 
 export { runSecurityReview, type ReviewOptions, type ReviewResult } from "./review/pipeline.ts";
+export {
+  checkKnownVulnerabilities,
+  createOsvSource,
+  installedDependencies,
+  OSV_NOTICE,
+  type Advisory,
+  type Dependency,
+  type VulnerabilitySource,
+} from "./review/vulnerabilities.ts";

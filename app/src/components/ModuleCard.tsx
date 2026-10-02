@@ -1,5 +1,5 @@
-import type { ActionItem, ReviewModule } from "@aegis/guardrails";
-import { ChevronRight } from "lucide-react";
+import type { ActionItem, ReviewModule, Unproven } from "@aegis/guardrails";
+import { ChevronRight, Eye, FileCode2 } from "lucide-react";
 import { useState } from "react";
 import type { Mode } from "../lib/review.ts";
 import type { ReviewedState } from "../lib/reviewed.ts";
@@ -28,7 +28,8 @@ export function ModuleCard({
     (item) => item.status === "needs-your-review" && !reviewed.isReviewed(item.id),
   ).length;
 
-  const [open, setOpen] = useState(risks.length > 0);
+  const leads = module.items.flatMap((item) => item.unproven ?? []);
+  const [open, setOpen] = useState(risks.length > 0 || leads.length > 0);
   const panelId = `module-${module.id}`;
 
   return (
@@ -124,6 +125,11 @@ function Item({
         </>
       )}
 
+      {item.notice && <p className="mt-2 text-xs leading-relaxed text-ink-soft">{item.notice}</p>}
+
+      {/* Above the checkbox, because ticking it means "I looked at these". */}
+      {(item.unproven ?? []).length > 0 && <Leads leads={item.unproven} mode={mode} />}
+
       {item.status === "needs-your-review" && (
         <div className="mt-3">
           <Checkbox
@@ -152,6 +158,59 @@ function Item({
           ))}
         </ul>
       )}
+
+    </div>
+  );
+}
+
+/**
+ * Lines that are written in a risky way, where nothing proved a visitor's
+ * input reaches them.
+ *
+ * Deliberately not a risk card: no grade, no "needs fixing", a dashed outline,
+ * and a sentence saying in plain words that this is unproven. Everything styled
+ * as a risk has been traced; keeping that true is what lets a user trust the
+ * red badges without second-guessing each one.
+ */
+function Leads({ leads, mode }: { leads: Unproven[]; mode: Mode }) {
+  return (
+    <div className="mt-4 rounded-xl border border-dashed border-line p-4">
+      <p className="flex items-center gap-2 text-sm font-semibold text-ink">
+        <Eye className="size-4 text-ink-soft" aria-hidden />
+        Worth a look, not proven
+      </p>
+      <p className="mt-1 text-sm leading-relaxed text-ink-soft">
+        These lines are written in a way that can be risky, but the automated check could not
+        show that anything a visitor sends reaches them. They are not counted as risks. If you
+        are unsure, the fix is usually small and safe to make anyway.
+      </p>
+
+      <ul className="mt-3 space-y-3">
+        {leads.map((lead) => (
+          <li key={lead.id} className="text-sm">
+            <p className="text-ink">{lead.what}</p>
+            <p className="mt-1 leading-relaxed text-ink-soft">
+              <span className="font-medium text-ink">If a visitor's input does reach it: </span>
+              {lead.why}
+            </p>
+            <p className="mt-1 leading-relaxed text-ink-soft">
+              <span className="font-medium text-ink">What to check: </span>
+              {lead.check}
+            </p>
+            {mode === "detailed" && lead.location?.excerpt && (
+              <div className="mt-2">
+                <p className="inline-flex items-center gap-1.5 font-mono text-xs text-ink-soft">
+                  <FileCode2 className="size-3.5" aria-hidden />
+                  {lead.location.path}:{lead.location.line}
+                </p>
+                <pre className="mt-1 overflow-x-auto rounded-lg bg-surface p-3 font-mono text-xs text-ink">
+                  <code>{lead.location.excerpt}</code>
+                </pre>
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

@@ -23,13 +23,21 @@ export interface IngestLimits {
   maxFiles: number;
   maxTotalBytes: number;
   maxFileBytes: number;
+  /**
+   * Lockfiles are routinely larger than source files, and the dependency
+   * checks are blind without them. Still capped: they are data, not trusted.
+   */
+  maxLockfileBytes?: number;
 }
 
 export const DEFAULT_LIMITS: IngestLimits = {
   maxFiles: 5_000,
   maxTotalBytes: 32 * 1024 * 1024,
   maxFileBytes: 512 * 1024,
+  maxLockfileBytes: 8 * 1024 * 1024,
 };
+
+const LOCKFILE = /^(?:package-lock\.json|bun\.lock|pnpm-lock\.yaml|yarn\.lock)$/;
 
 /** Directories never worth reading, and large enough to dominate a walk. */
 const SKIP_DIR =
@@ -152,7 +160,10 @@ export async function ingest(
       }
 
       const size = (await stat(absolute)).size;
-      if (size > limits.maxFileBytes) {
+      const cap = LOCKFILE.test(entry.name)
+        ? Math.max(limits.maxFileBytes, limits.maxLockfileBytes ?? 0)
+        : limits.maxFileBytes;
+      if (size > cap) {
         skipped.tooLarge++;
         continue;
       }

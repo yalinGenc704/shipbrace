@@ -62,7 +62,7 @@ test("a not-applicable check leaves the item with the user, not passed", async (
   assert.equal(item?.detector, "compose:no-public-database");
 });
 
-// --- A05 --------------------------------------------------------------------
+// --- A02 / A10 --------------------------------------------------------------------
 
 test("a database publishing a host port is a high risk", () => {
   const outcome = outcomes([compose(true), SERVER]).get("config/exposed-services");
@@ -105,7 +105,7 @@ test("returning an error's internal detail to the visitor is flagged", () => {
   assert.equal(statusOf([SERVER], "config/error-detail"), "pass");
 });
 
-// --- A06 / A08 --------------------------------------------------------------
+// --- A03 --------------------------------------------------------------
 
 test("version ranges are flagged and exact pins pass", () => {
   const loose: File = {
@@ -131,7 +131,7 @@ test("a missing lockfile is flagged only when there is a manifest", () => {
   assert.equal(statusOf([SERVER], "integrity/lockfile"), "not-applicable");
 });
 
-// --- A02 / A07 --------------------------------------------------------------
+// --- A04 / A07 --------------------------------------------------------------
 
 test("password storage: slow hash passes, fast hash is high risk, absent is not-applicable", () => {
   const slow: File = {

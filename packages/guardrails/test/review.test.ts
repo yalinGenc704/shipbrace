@@ -189,7 +189,7 @@ test("exactly ten modules, in OWASP priority order", () => {
   assert.deepEqual(
     moduleSkeleton.map((m) => m.owasp),
     ["A01", "A02", "A03", "A04", "A05", "A06", "A07", "A08", "A09", "A10"].map(
-      (code) => `${code}:2021`,
+      (code) => `${code}:2025`,
     ),
   );
 });
@@ -315,4 +315,57 @@ test("one problem on one line is reported once, preferring the traced path", asy
   assert.equal(item?.risks.length, 1);
   assert.equal(item?.risks[0]?.confirmedBy, "oracle");
   assert.ok(item?.risks[0]?.evidence, "the surviving risk should carry the traced path");
+});
+
+test("a line only the pattern check flags is a lead, never a risk", async () => {
+  // A fixed table name: built by pasting, but nothing a visitor sends reaches it.
+  const review = await runSecurityReview(
+    snap(
+      "server/src/a.ts",
+      [
+        'app.get("/api/stats", async (c) => {',
+        '  const table = "daily_stats";',
+        "  return c.json(await db.query(`SELECT * FROM ${table}`));",
+        "});",
+      ].join("\n"),
+    ),
+  );
+  const item = review.modules
+    .find((m) => m.id === "injection")
+    ?.items.find((i) => i.id === "injection/database");
+
+  assert.equal(item?.risks.length, 0, "an unproven line must not be called a risk");
+  assert.equal(item?.unproven.length, 1);
+  // Not a pass either: someone still has to look.
+  assert.equal(item?.status, "needs-your-review");
+  assert.equal(review.summary.unproven, 1);
+});
+
+test("lead explanations avoid security jargon", async () => {
+  const review = await runSecurityReview(
+    snap("server/src/a.ts", "export const q = (t) => db.query(`SELECT * FROM x WHERE a = ${t}`);"),
+  );
+  const leads = review.modules.flatMap((m) => m.items.flatMap((i) => i.unproven));
+  assert.ok(leads.length > 0);
+
+  const prose = leads.map((l) => `${l.what} ${l.why} ${l.check}`).join(" ").toLowerCase();
+  for (const jargon of ["taint", "sink", "sanitiz", "cwe", "payload"]) {
+    assert.ok(!prose.includes(jargon), `leaked jargon: ${jargon}`);
+  }
+});
+
+test("code sent to the model never includes .env files or unredacted keys", async () => {
+  const { excerptsFor } = await import("../src/review/pipeline.ts");
+  const excerpts = excerptsFor(
+    snapshotFromFiles([
+      { path: ".env", content: "DATABASE_URL=postgres://admin:hunter2@db/prod\nSTRIPE_KEY=sk-live1234567890abcdef" },
+      { path: "server/src/index.ts", content: 'const apiKey = "sk-live1234567890abcdef";\napp.get("/x", (c) => c.text("ok"));' },
+      { path: "package-lock.json", content: "{}" },
+    ]),
+    60_000,
+  );
+  assert.deepEqual(excerpts.map((e) => e.path), ["server/src/index.ts"]);
+  const sent = excerpts.map((e) => e.code).join("\n");
+  assert.ok(!sent.includes("sk-live1234567890abcdef"), "a key reached the model");
+  assert.ok(!sent.includes("hunter2"));
 });

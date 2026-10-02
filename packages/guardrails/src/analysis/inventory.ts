@@ -141,6 +141,19 @@ export interface CallSite {
   path: string;
 }
 
+/**
+ * A place the code asks who is signed in: `c.get("userId")`, `getSession(c)`.
+ *
+ * Needed to decide whether a record lookup is tied to its owner. A route that
+ * never asks who is signed in cannot be checking that the record is theirs.
+ */
+export interface IdentityRead {
+  id: string;
+  expression: string;
+  location: CodeLocation;
+  doorId?: string;
+}
+
 export interface Inventory {
   doors: Door[];
   sources: TaintSource[];
@@ -150,6 +163,7 @@ export interface Inventory {
   /** Optional so existing callers that build an Inventory literal keep working. */
   functions?: FunctionDef[];
   calls?: CallSite[];
+  identities?: IdentityRead[];
 }
 
 /** Identifiers that are language or library names, never user data. */

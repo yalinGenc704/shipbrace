@@ -43,6 +43,22 @@ export interface Claim {
   origin?: string;
 }
 
+/**
+ * "On this route, the value in this input picks a record, and nothing checks
+ * the record belongs to whoever is signed in."
+ *
+ * The kind of claim a model is needed for. Pairing every input with every
+ * operation cannot generate it usefully, because whether a record is private
+ * -- an invoice, a message -- or meant for everyone -- a product page -- is a
+ * judgement about what the application is for. The model makes that judgement;
+ * the rules still decide whether the code checks ownership.
+ */
+export interface OwnershipClaim {
+  door: string;
+  parameter: string;
+  origin?: string;
+}
+
 export type ClaimVerdict =
   /** The path exists and nothing checks the value on the way. A real finding. */
   | "valid"
@@ -56,7 +72,7 @@ export type ClaimVerdict =
   | "undecidable";
 
 export interface VerifiedClaim {
-  claim: Claim;
+  claim: Claim | OwnershipClaim;
   verdict: ClaimVerdict;
   /** Why the verdict came out that way, in one line, for the audit trail. */
   reason: string;
@@ -106,29 +122,21 @@ const enclosingFunction = (inventory: Inventory, path: string, position: number)
   enclosingFunctionDef(inventory, path, position)?.id;
 
 /**
- * Propagate taint from one binding, following assignments and calls.
+ * Where a value goes, starting from one binding.
  *
- * Two things make this stronger than the all-paths pass:
+ * Names are tracked per scope -- one set for each function the value reaches --
+ * because a name means nothing outside its function: two helpers that both
+ * call their parameter `owner` hold two different values, and treating them as
+ * one attributed a validated route's value to an unrelated helper's query.
  *
- *  - It crosses function boundaries. When a tainted value is passed to a
- *    function defined in the same file, the matching parameter becomes tainted
- *    and the search continues inside that function's body.
- *  - It is not restricted to one route handler, because the claim says where to
- *    start and where to finish.
+ * The search follows the value into every function it is passed to, however
+ * many calls deep and across files, until nothing new is learned. Each step is
+ * cheap because it starts from one claimed input rather than from every input
+ * at once, which is what lets the verifier go where the all-paths pass cannot.
  */
-interface Flow {
+interface ScopeState {
   /** Names still carrying the visitor's value unchecked. */
   tainted: Set<string>;
-  /**
-   * Parameters carrying it, keyed by name and scoped to the functions they
-   * belong to.
-   *
-   * A bare set cannot express this: two helpers both calling their parameter
-   * `owner` are two different variables, and treating them as one attributed a
-   * validated route's value to an unrelated helper's query.
-   */
-  taintedParams: Map<string, Set<string>>;
-  washedParams: Map<string, Set<string>>;
   /**
    * Names derived from it that passed through validation.
    *
@@ -140,100 +148,210 @@ interface Flow {
   washed: Set<string>;
 }
 
-function taintedNames(
-  start: string,
-  after: number,
-  path: string,
-  inventory: Inventory,
-): Flow {
-  const tainted = new Set([start]);
-  const washed = new Set<string>();
-  const taintedParams = new Map<string, Set<string>>();
-  const washedParams = new Map<string, Set<string>>();
+interface Flow {
+  /** Per scope: a function's id, or `<file>:top` for code outside any function. */
+  byScope: Map<string, ScopeState>;
+  /** Every name the value reached, for the audit trail and the blocker check. */
+  tainted: Set<string>;
+  washed: Set<string>;
+  /**
+   * Set when the value went somewhere this search could not follow. A claim
+   * that fails after this is undecidable, never "no path": the gap is ours.
+   */
+  unfollowed?: string;
+}
 
-  const noteParam = (into: Map<string, Set<string>>, param: string, fn: string): boolean => {
-    const owners = into.get(param) ?? new Set<string>();
-    const had = owners.has(fn);
-    owners.add(fn);
-    into.set(param, owners);
-    return !had;
-  };
-  const assignments = inventory.assignments.filter(
-    (a) => fileOf(a.id) === path && positionOf(a.id) > after,
-  );
+const topScope = (path: string) => `${path}:top`;
+
+/** Safety valve on pathological code. Each step is one function revisited. */
+const MAX_STEPS = 500;
+
+/**
+ * Functions named like this are not ours to follow: language built-ins whose
+ * behaviour is known. Passing a value to one is not a gap in the search.
+ */
+const BUILT_IN = new Set([
+  "String", "Number", "Boolean", "parseInt", "parseFloat", "encodeURIComponent",
+  "encodeURI", "decodeURIComponent", "decodeURI", "isNaN", "isFinite", "Array",
+  "Object", "Symbol", "BigInt", "Date", "RegExp", "Error", "Promise", "structuredClone",
+]);
+
+function followValue(start: string, after: number, path: string, inventory: Inventory): Flow {
   const functions = inventory.functions ?? [];
+  const byScope = new Map<string, ScopeState>();
+  const state = (key: string): ScopeState => {
+    let s = byScope.get(key);
+    if (!s) byScope.set(key, (s = { tainted: new Set(), washed: new Set() }));
+    return s;
+  };
 
-  /**
-   * Only calls that could run after the value was read.
-   *
-   * Unfiltered, a call in an earlier route picked up a variable of the same
-   * name from a later one and carried it into a helper, attributing a finding
-   * to a route that never passed that value. Filtering by position is the same
-   * rule the assignments already follow.
-   *
-   * Limitation: a chain that continues inside a helper in another file is not
-   * followed past the first hop, so such a path comes back unproven rather than
-   * confirmed. Missing a real path is a gap; inventing one is a defect.
-   */
-  const calls = (inventory.calls ?? []).filter(
-    (c) => c.path === path && positionOf(c.id) > after,
-  );
+  interface Scope { key: string; fn?: FunctionDef; path: string; after: number }
+  const origin = enclosingFunctionDef(inventory, path, after);
+  const first: Scope = { key: origin?.id ?? topScope(path), ...(origin ? { fn: origin } : {}), path, after };
+  state(first.key).tainted.add(start);
 
-  /**
-   * Names a validation step produces. Taint stops at these.
-   *
-   * `const owner = Number(raw)` means `owner` is no longer the visitor's value;
-   * it is whatever survived the check. Letting taint flow through it reported a
-   * route that validates its input as vulnerable -- the worst kind of mistake,
-   * because it is a warning about code that is already correct.
-   */
-  const cleaned = new Set(
-    inventory.sanitizers
-      .filter((s) => fileOf(s.id) === path && positionOf(s.id) > after)
-      .map((s) => s.guards[0])
-      .filter((name): name is string => Boolean(name)),
-  );
+  const queue: Scope[] = [first];
+  const queued = new Set([first.key]);
+  let unfollowed: string | undefined;
+  let steps = 0;
 
-  for (let pass = 0; pass <= assignments.length + calls.length; pass++) {
-    const before = tainted.size + washed.size;
-    let grew = false;
+  while (queue.length > 0) {
+    if (++steps > MAX_STEPS) {
+      unfollowed ??= "The value travels through more code than this check follows.";
+      break;
+    }
+    const scope = queue.shift()!;
+    queued.delete(scope.key);
+    const here = state(scope.key);
+    const [lo, hi] = scope.fn?.bodyRange ?? [0, Number.POSITIVE_INFINITY];
 
-    for (const assignment of assignments) {
-      const fromTainted = assignment.from.some((name) => tainted.has(name));
-      const fromWashed = assignment.from.some((name) => washed.has(name));
-      if (!fromTainted && !fromWashed) continue;
+    /**
+     * Only what sits inside this scope and could run after the value arrived.
+     *
+     * Unscoped, a call in a later route picked up a variable of the same name
+     * and carried it into a helper, attributing a finding to a route that
+     * never passed that value.
+     */
+    const inScope = (id: string, file: string) => {
+      const at = positionOf(id);
+      return file === scope.path && at >= lo && at < hi && at > scope.after;
+    };
 
-      // Passing through a check moves the value from one set to the other; it
-      // stays traceable, but it is no longer the visitor's raw input.
-      if (cleaned.has(assignment.target) || fromWashed) washed.add(assignment.target);
-      else tainted.add(assignment.target);
+    const assignments = inventory.assignments.filter((a) => inScope(a.id, fileOf(a.id)));
+    const calls = (inventory.calls ?? []).filter((c) => inScope(c.id, c.path));
+
+    /**
+     * Names a validation step produces. Taint stops at these.
+     *
+     * `const owner = Number(raw)` means `owner` is no longer the visitor's
+     * value; it is whatever survived the check. Letting taint flow through it
+     * reported a route that validates its input as vulnerable -- the worst kind
+     * of mistake, because it is a warning about code that is already correct.
+     */
+    const cleaned = new Set(
+      inventory.sanitizers
+        .filter((s) => inScope(s.id, fileOf(s.id)))
+        .map((s) => s.guards[0])
+        .filter((name): name is string => Boolean(name)),
+    );
+
+    for (let changed = true; changed;) {
+      changed = false;
+      for (const assignment of assignments) {
+        const fromTainted = assignment.from.some((name) => here.tainted.has(name));
+        const fromWashed = assignment.from.some((name) => here.washed.has(name));
+        if (!fromTainted && !fromWashed) continue;
+
+        // Passing through a check moves the value from one set to the other;
+        // it stays traceable, but it is no longer the visitor's raw input.
+        const into = cleaned.has(assignment.target) || !fromTainted ? here.washed : here.tainted;
+        if (!into.has(assignment.target)) {
+          into.add(assignment.target);
+          changed = true;
+        }
+      }
     }
 
     /**
-     * `findReportsFor(owner)` taints that function's *first* parameter only.
-     *
-     * Matching by name alone leaked taint into every function that happened to
-     * call a parameter the same thing, which is how a validated route was
-     * attributed to an unrelated helper's query.
+     * `findReportsFor(owner)` hands the value to that function's *first*
+     * parameter only, and the search continues inside it.
      */
     for (const call of calls) {
-      const fn = functions.find((f) => f.name && f.name === call.callee);
-      if (!fn) continue;
+      const carried = call.args.map((names) =>
+        names.some((n) => here.tainted.has(n)) ? "tainted"
+        : names.some((n) => here.washed.has(n)) ? "washed"
+        : undefined
+      );
+      if (!carried.some(Boolean)) continue;
 
-      call.args.forEach((argNames, index) => {
-        const param = fn.params[index];
-        if (!param) return;
-        if (argNames.some((name) => tainted.has(name))) {
-          if (noteParam(taintedParams, param, fn.name)) grew = true;
-        } else if (argNames.some((name) => washed.has(name))) {
-          if (noteParam(washedParams, param, fn.name)) grew = true;
+      // Method calls (`c.json(rows)`, `db.query(...)`) are library code. The
+      // dangerous ones are recognised as operations in their own right.
+      if (call.callee.includes(".")) continue;
+
+      const named = functions.filter((f) => f.name === call.callee);
+      const sameFile = named.filter((f) => f.path === scope.path);
+      const target = sameFile.length === 1
+        ? sameFile[0]
+        : sameFile.length === 0 && named.length === 1
+        ? named[0]
+        : undefined;
+
+      if (!target) {
+        if (named.length > 1) {
+          unfollowed ??= `The value is passed to ${call.callee}, which is defined in more than one place.`;
+        } else if (!BUILT_IN.has(call.callee) && carried.includes("tainted")) {
+          unfollowed ??= `The value is passed to ${call.callee}, whose code is not in what was reviewed.`;
+        }
+        continue;
+      }
+
+      const there = state(target.id);
+      let learned = false;
+      carried.forEach((kind, index) => {
+        if (!kind) return;
+        const param = target.params[index];
+        if (!param) {
+          // A destructured or missing parameter: the value goes in, but under
+          // no name this search can follow.
+          if (kind === "tainted") {
+            unfollowed ??= `The value is passed to ${target.name}, which unpacks it in a way this check does not follow.`;
+          }
+          return;
+        }
+        const into = kind === "tainted" ? there.tainted : there.washed;
+        if (kind === "washed" && there.tainted.has(param)) return;
+        if (!into.has(param)) {
+          into.add(param);
+          learned = true;
         }
       });
-    }
 
-    if (tainted.size + washed.size === before && !grew) break;
+      if (learned && !queued.has(target.id)) {
+        queue.push({ key: target.id, fn: target, path: target.path, after: -1 });
+        queued.add(target.id);
+      }
+    }
   }
-  return { tainted, washed, taintedParams, washedParams };
+
+  const tainted = new Set<string>();
+  const washed = new Set<string>();
+  for (const s of byScope.values()) {
+    for (const n of s.tainted) tainted.add(n);
+    for (const n of s.washed) washed.add(n);
+  }
+  return { byScope, tainted, washed, ...(unfollowed ? { unfollowed } : {}) };
+}
+
+/**
+ * Does the value, as `which` (unchecked or checked), reach any of these names
+ * at this position?
+ *
+ * Looks from the innermost function outward, because code inside a function
+ * can read its enclosing function's variables. A parameter stops the search:
+ * it shadows anything of the same name further out, so it carries the value
+ * only if the value was passed into it. Without that rule a value in one route
+ * matched an identically named parameter in every helper.
+ */
+function reachesOperands(
+  flow: Flow,
+  which: keyof ScopeState,
+  operands: string[],
+  file: string,
+  position: number,
+  inventory: Inventory,
+): boolean {
+  const chain = (inventory.functions ?? [])
+    .filter((fn) => fn.path === file && within(fn.bodyRange, position))
+    .sort((a, b) => b.bodyRange[0] - a.bodyRange[0]);
+
+  return operands.some((operand) => {
+    for (const fn of chain) {
+      const names = flow.byScope.get(fn.id)?.[which];
+      if (fn.params.includes(operand)) return names?.has(operand) ?? false;
+      if (names?.has(operand)) return true;
+    }
+    return flow.byScope.get(topScope(file))?.[which].has(operand) ?? false;
+  });
 }
 
 /**
@@ -323,6 +441,7 @@ export function verifyClaim(claim: Claim, inventory: Inventory): VerifiedClaim {
   }
 
   let bestBlocked: VerifiedClaim | undefined;
+  let unfollowed: string | undefined;
 
   for (const source of candidateSources) {
     const binding = source.binding;
@@ -331,15 +450,11 @@ export function verifyClaim(claim: Claim, inventory: Inventory): VerifiedClaim {
 
     // An inline source with no name cannot be followed by name; it is only
     // reachable if the sink literally contains that expression.
-    const flow = binding
-      ? taintedNames(binding, sourceAt, path, inventory)
-      : {
-        tainted: new Set<string>(),
-        washed: new Set<string>(),
-        taintedParams: new Map<string, Set<string>>(),
-        washedParams: new Map<string, Set<string>>(),
-      };
+    const flow: Flow = binding
+      ? followValue(binding, sourceAt, path, inventory)
+      : { byScope: new Map(), tainted: new Set(), washed: new Set() };
     const tainted = flow.tainted;
+    if (flow.unfollowed) unfollowed ??= flow.unfollowed;
 
     const sourceScope = enclosingFunction(inventory, path, sourceAt);
 
@@ -354,29 +469,15 @@ export function verifyClaim(claim: Claim, inventory: Inventory): VerifiedClaim {
       const sameScope = sourceScope === enclosingFunction(inventory, fileOf(sink.id), positionOf(sink.id));
       if (sameScope && positionOf(sink.id) <= sourceAt && fileOf(sink.id) === path) continue;
 
-      const sinkFn = enclosingFunctionDef(inventory, fileOf(sink.id), positionOf(sink.id));
-      /**
-       * A parameter shadows anything of the same name outside the function.
-       *
-       * So an operand that is a parameter of the function containing the sink
-       * can only be reached through the call that bound it -- never by a
-       * variable of the same name in the caller. Without this, a value in one
-       * route matched an identically-named parameter in every helper, which
-       * attributed a finding to the wrong query.
-       */
-      const carries = (set: Set<string>, scoped: Map<string, Set<string>>): boolean =>
-        sink.operands.some((operand) =>
-          sinkFn?.params.includes(operand)
-            ? (scoped.get(operand)?.has(sinkFn.name) ?? false)
-            : set.has(operand)
-        );
+      const carries = (which: keyof ScopeState): boolean =>
+        reachesOperands(flow, which, sink.operands, fileOf(sink.id), positionOf(sink.id), inventory);
 
       const reaches = binding
-        ? carries(flow.tainted, flow.taintedParams)
+        ? carries("tainted")
         : mentions(sink.expression, source.expression);
 
       // Reached, but only by a value that passed a check on the way.
-      if (!reaches && binding && carries(flow.washed, flow.washedParams)) {
+      if (!reaches && binding && carries("washed")) {
         bestBlocked ??= {
           claim,
           source,
@@ -429,12 +530,136 @@ export function verifyClaim(claim: Claim, inventory: Inventory): VerifiedClaim {
 
   if (bestBlocked) return bestBlocked;
 
+  /**
+   * The value went somewhere this check could not follow. That is a gap in
+   * the check, not evidence of safety, so it must not read as "no path".
+   */
+  if (unfollowed) {
+    return {
+      claim,
+      ...(door ? { door } : {}),
+      verdict: "undecidable",
+      reason: `${unfollowed} It may or may not reach that operation.`,
+    };
+  }
+
   return {
     claim,
     ...(door ? { door } : {}),
     verdict: "no-path",
     reason: "That input does not reach that operation anywhere this check can follow.",
   };
+}
+
+/**
+ * Decide an ownership claim.
+ *
+ * `valid` needs all of: the route exists and requires signing in (one that
+ * does not is reported separately); the named input reaches a database query,
+ * parameterised or not -- a safe query can still fetch someone else's row; and
+ * neither the route nor any function the value passes through asks who is
+ * signed in. Asking at all counts as checking. That errs towards silence when
+ * the answer is read but never used, which is the side "precision over
+ * coverage" picks.
+ */
+export function verifyOwnership(claim: OwnershipClaim, inventory: Inventory): VerifiedClaim {
+  const door = inventory.doors.find((d) => d.path === claim.door || d.id.endsWith(`:${claim.door}`));
+  if (!door) {
+    return { claim, verdict: "not-found", reason: `No route ${claim.door} exists in this code.` };
+  }
+  if (door.guards.length === 0) {
+    return {
+      claim,
+      door,
+      verdict: "no-path",
+      reason: `${door.path} does not require signing in at all; that is reported separately.`,
+    };
+  }
+
+  const sources = inventory.sources.filter(
+    (s) =>
+      s.doorId === door.id &&
+      (mentions(s.expression, claim.parameter) || mentions(claim.parameter, s.binding ?? "")),
+  );
+  if (sources.length === 0) {
+    return { claim, door, verdict: "not-found", reason: `No input matching "${claim.parameter}" is read in ${door.path}.` };
+  }
+
+  const lookups = inventory.sinks.filter((s) => s.kind === "sql");
+  if (lookups.length === 0) {
+    return { claim, door, verdict: "not-found", reason: "No database query found." };
+  }
+
+  const functions = inventory.functions ?? [];
+  let unfollowed: string | undefined;
+  let blocked: VerifiedClaim | undefined;
+
+  for (const source of sources) {
+    const sourceAt = positionOf(source.id);
+    const path = fileOf(source.id);
+    const flow: Flow = source.binding
+      ? followValue(source.binding, sourceAt, path, inventory)
+      : { byScope: new Map(), tainted: new Set(), washed: new Set() };
+    if (flow.unfollowed) unfollowed ??= flow.unfollowed;
+
+    // Turning an id into a number does not make it yours, so a checked value
+    // still counts here.
+    const lookup = lookups.find((sink) => {
+      const at = positionOf(sink.id);
+      const file = fileOf(sink.id);
+      if (file === path && at <= sourceAt && enclosingFunction(inventory, file, at) === enclosingFunction(inventory, path, sourceAt)) {
+        return false;
+      }
+      return source.binding
+        ? reachesOperands(flow, "tainted", sink.operands, file, at, inventory) ||
+          reachesOperands(flow, "washed", sink.operands, file, at, inventory)
+        : sink.doorId === door.id && mentions(sink.expression, source.expression);
+    });
+    if (!lookup) continue;
+
+    // Everywhere the value went: the route itself and each function it reached.
+    const visited = [
+      { path: door.location.path, range: door.bodyRange },
+      ...[...flow.byScope.keys()].flatMap((key) => {
+        const fn = functions.find((f) => f.id === key);
+        return fn ? [{ path: fn.path, range: fn.bodyRange }] : [];
+      }),
+    ];
+    const asks = (inventory.identities ?? []).find((who) =>
+      visited.some((v) => v.path === who.location.path && within(v.range, positionOf(who.id)))
+    );
+
+    const common = {
+      claim,
+      source,
+      sink: lookup,
+      door,
+      via: [...flow.tainted, ...flow.washed],
+      location: lookup.location,
+    };
+
+    if (asks) {
+      blocked ??= {
+        ...common,
+        verdict: "blocked",
+        reason: `The route checks who is signed in (${asks.expression}) before using the record.`,
+      };
+      continue;
+    }
+    return {
+      ...common,
+      verdict: "valid",
+      reason:
+        `${source.expression} picks the record looked up at ${lookup.location.path}:${lookup.location.line}, ` +
+        `and nothing on the way asks who is signed in.`,
+    };
+  }
+
+  if (blocked) return blocked;
+  if (unfollowed) {
+    return { claim, door, verdict: "undecidable", reason: `${unfollowed} It may or may not pick a record.` };
+  }
+  return { claim, door, verdict: "no-path", reason: "That input does not reach a database query." };
 }
 
 export function verifyAll(claims: Claim[], inventory: Inventory): VerifiedClaim[] {

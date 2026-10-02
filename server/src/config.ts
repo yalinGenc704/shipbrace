@@ -18,6 +18,11 @@ const schema = z.object({
     .refine((value) => !value.includes("*"), {
       message: "ALLOWED_ORIGINS must list real origins; * would let any site call this API",
     }),
+  /**
+   * Whether package names and versions may be sent to OSV.dev to look up
+   * known flaws. On by default; "off" keeps every review fully offline.
+   */
+  PACKAGE_LOOKUP: z.enum(["on", "off"]).default("on"),
 });
 
 const parsed = schema.safeParse(process.env);
@@ -34,4 +39,5 @@ export const config = {
   port: parsed.data.PORT,
   reviewRoot: resolve(parsed.data.REVIEW_ROOT),
   allowedOrigins: parsed.data.ALLOWED_ORIGINS.split(",").map((origin) => origin.trim()),
+  packageLookup: parsed.data.PACKAGE_LOOKUP === "on",
 };
