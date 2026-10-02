@@ -64,7 +64,7 @@ Bun and Docker are **not installed** on this machine, so the Bun-based root
 scripts fail (`npm test` → "'bun' is not recognized"). Use Node directly:
 
 ```bash
-# all tests (expect 127 pass, 1 skipped -- symlinks need elevation on Windows)
+# all tests (expect 135 pass, 1 skipped -- symlinks need elevation on Windows)
 node --experimental-strip-types --test packages/guardrails/test/*.test.ts packages/scaffold/test/*.test.ts server/test/*.test.ts
 
 # review API on :3000. Set REVIEW_ROOT explicitly: npm runs workspace scripts
@@ -106,12 +106,21 @@ print its value. Prepaid credits with auto-reload off, so it cannot overspend.
 
 ## Current state and known gaps
 
-- **Benchmark (43 apps, 24 real problems, 20 safe decoys), 2026-10-01:** rules
-  alone prove 21; a perfect suggester proves 23 (the extra two are ownership
+- **Benchmark (46 apps, 26 real problems, 21 safe decoys), 2026-10-01:** rules
+  alone prove 23; a perfect suggester proves 25 (the extra two are ownership
   gaps, which only a suggester can raise); the real model matched the perfect
-  suggester on the 31-app version; **zero** false alarms. Only miss: component
-  props (a stored comment rendered as raw HTML) are not inputs, because that
-  needs following data through the database; it appears under "worth a look".
+  suggester on the 31-app version; **zero** false alarms. Only miss: a stored
+  comment rendered as raw HTML (needs following data through the database).
+- **Outside validation (2026-10-01), practice apps cloned read-only into
+  `C:/Users/yalin/aegis-test-repos` (DVNA, OWASP NodeGoat, OWASP Juice
+  Shop):** testing on Express code found false alarms the benchmark never
+  covered -- per-route middleware and `app.post(path, security.isAuthorized())`
+  were not seen as sign-in checks (DVNA 27 -> 1 open-route warnings, Juice Shop
+  86 -> 18). DVNA: 5 of its 19 documented holes found automatically (SQL and
+  command injection, insecure deserialisation, open redirect, missing headers).
+  Not detected yet: holes inside page templates (EJS), XXE, NoSQL injection,
+  CSRF, a session secret left at a default, and sign-in checks written inside
+  a handler (Juice Shop `dataErasure`, 2 remaining false alarms).
 - **Inputs recognised** (`inventory-ast.ts`): route params, query, body,
   headers, cookies, outbound responses, `req.file(s)` uploads, GitHub repository
   content (`getContent`/`getReadme`/`getBlob`/archives), and only the
