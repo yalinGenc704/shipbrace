@@ -106,15 +106,18 @@ print its value. Prepaid credits with auto-reload off, so it cannot overspend.
 
 ## Current state and known gaps
 
-- **Benchmark (35 apps, 20 real problems, 16 safe decoys), 2026-10-01:** rules
-  alone prove 17; a perfect suggester and the real model (claude-opus-5-5)
-  prove 19 (the extra two are ownership gaps, which only a suggester can
-  raise); **zero** false alarms. Only miss: component props (e.g. a stored
-  comment rendered as raw HTML) are not recognised as inputs; it appears under
-  "worth a look". Fixed 2026-10-01: Hono `c.html()` with an untagged template
-  is an html operation (the escaping `html` tagged template is safe); an `.includes()` in an `if` whose
-  branches never return/throw is not a check; a zod schema made only of
-  unconstrained text (`z.string()`, defined in the same file) is not validation.
+- **Benchmark (43 apps, 24 real problems, 20 safe decoys), 2026-10-01:** rules
+  alone prove 21; a perfect suggester proves 23 (the extra two are ownership
+  gaps, which only a suggester can raise); the real model matched the perfect
+  suggester on the 31-app version; **zero** false alarms. Only miss: component
+  props (a stored comment rendered as raw HTML) are not inputs, because that
+  needs following data through the database; it appears under "worth a look".
+- **Inputs recognised** (`inventory-ast.ts`): route params, query, body,
+  headers, cookies, outbound responses, `req.file(s)` uploads, GitHub repository
+  content (`getContent`/`getReadme`/`getBlob`/archives), and only the
+  environment values an outsider controls (`OUTSIDER_ENV`: PR titles, branch
+  names). Ordinary settings such as `DATABASE_URL` are trusted on purpose.
+  File operations are judged by their first argument (the path) only.
 - **The model's job (user decision, 2026-10-01):** pairing covers every
   input → operation claim, so the model's distinct contribution is ownership
   claims: judging which records are private. `verifyOwnership` decides them by
@@ -133,9 +136,6 @@ print its value. Prepaid credits with auto-reload off, so it cannot overspend.
   `ActionItem.unproven` ("Worth a look, not proven" on the dashboard), are
   never graded or counted as risks, and set the item to `needs-your-review`.
   The user chose this on 2026-10-01. Other rules (e.g. hardcoded keys) stay risks.
-- Uploaded files, repository content, and environment values are declared as
-  input kinds but **not detected**. This matters for a product that ingests
-  other people's repositories.
 - The Claude proposer once **refused** (cyber usage policy) on a deliberately
   vulnerable test app. On 2026-10-01, with the defensive prompt and the
   ownership task, claude-opus-5-5 ran on all 31 benchmark apps with **no
@@ -152,10 +152,11 @@ print its value. Prepaid credits with auto-reload off, so it cannot overspend.
 
 ## Next steps
 
-1. Detect uploaded files, repository content, and environment values as sources.
+1. Treat stored content (database rows rendered later) as an input; today it
+   shows only under "worth a look".
 2. Before any second user: the disclosures and per-user switches in
    `docs/legal/third-party-services.md` section 4.
-3. Treat component props carrying stored content as inputs (the last benchmark miss).
+3. GitHub integration: review each push automatically (needs a GitHub App).
 4. Remove or clearly deprecate the legacy exports above.
 
 See `docs/architecture.md` for the reasoning behind these decisions.

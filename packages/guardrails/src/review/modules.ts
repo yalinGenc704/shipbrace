@@ -212,7 +212,8 @@ const SOURCE_COPY: Record<string, string> = {
   "external-response": "the reply from another website",
   "uploaded-file": "a file the visitor uploaded",
   "repo-content": "content from a linked repository",
-  environment: "a configuration value",
+  // Only settings an outsider fills in are treated as inputs at all.
+  environment: "a build setting filled in from a pull request or issue, which anyone can open",
 };
 
 interface ModuleShape {

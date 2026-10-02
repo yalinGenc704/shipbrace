@@ -1008,6 +1008,209 @@ export const CASES: BenchCase[] = [
     ],
   },
 
+  // --- uploaded files ----------------------------------------------------------
+  {
+    id: "upload-filename",
+    tests: "An uploaded file is saved under the name the uploader gave it.",
+    files: [
+      file("server/src/index.ts", [
+        ...HEAD,
+        'app.post("/api/upload", async (c) => {',
+        "  const body = await c.req.parseBody();",
+        '  const upload = body["file"];',
+        "  await Bun.write(`./uploads/${upload.name}`, upload); // [A]",
+        "  return c.json({ ok: true });",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/api/upload",
+        parameter: "body",
+        sink: "filesystem",
+        real: true,
+        why: "A file named ../../server/src/index.ts overwrites your own code.",
+      },
+    ],
+  },
+  {
+    id: "upload-filename-basename",
+    tests: "The same upload, with the folder part stripped from the name first.",
+    files: [
+      file("server/src/index.ts", [
+        'import { basename, join } from "node:path";',
+        ...HEAD,
+        'app.post("/api/upload", async (c) => {',
+        "  const body = await c.req.parseBody();",
+        '  const upload = body["file"];',
+        "  const safeName = basename(upload.name);",
+        '  await Bun.write(join("./uploads", safeName), upload); // [A]',
+        "  return c.json({ ok: true });",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/api/upload",
+        parameter: "body",
+        sink: "filesystem",
+        real: false,
+        why: "Only the bare file name survives, so it stays in the uploads folder.",
+      },
+    ],
+  },
+  {
+    id: "upload-own-name",
+    tests: "The upload is saved under a name the server makes up; only its contents come from the visitor.",
+    files: [
+      file("server/src/index.ts", [
+        ...HEAD,
+        'app.post("/api/upload", async (c) => {',
+        "  const body = await c.req.parseBody();",
+        '  const upload = body["file"];',
+        "  await Bun.write(`./uploads/${crypto.randomUUID()}.bin`, upload); // [A]",
+        "  return c.json({ ok: true });",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/api/upload",
+        parameter: "body",
+        sink: "filesystem",
+        real: false,
+        why: "What is written is the visitor's, but where it is written is not.",
+      },
+    ],
+  },
+  {
+    id: "upload-express-multer",
+    tests: "An Express app saves an upload under its original name.",
+    files: [
+      file("server/src/index.ts", [
+        'import fs from "node:fs";',
+        'import express from "express";',
+        'import multer from "multer";',
+        "const app = express();",
+        "const upload = multer({ storage: multer.memoryStorage() });",
+        "",
+        'app.post("/upload", upload.single("doc"), (req, res) => {',
+        "  const name = req.file.originalname;",
+        "  fs.writeFileSync(`uploads/${name}`, req.file.buffer); // [A]",
+        "  res.json({ ok: true });",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/upload",
+        parameter: "name",
+        sink: "filesystem",
+        real: true,
+        why: "The uploader picks the file name, folders and all.",
+      },
+    ],
+  },
+
+  // --- content from someone else's repository --------------------------------------
+  {
+    id: "repo-readme-shown",
+    tests: "A linked GitHub repository's README is shown on a page as-is.",
+    files: [
+      file("server/src/index.ts", [
+        ...HEAD,
+        'app.post("/api/import", async (c) => {',
+        "  const { owner, repo } = await c.req.json();",
+        "  const { data } = await octokit.rest.repos.getReadme({ owner, repo });",
+        '  const text = Buffer.from(data.content, "base64").toString();',
+        "  return c.html(`<article>${text}</article>`); // [A]",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/api/import",
+        parameter: "data",
+        sink: "html",
+        real: true,
+        why: "Whoever owns that repository can put a script in its README.",
+      },
+    ],
+  },
+  {
+    id: "repo-readme-escaped",
+    tests: "The same README, shown through Hono's escaping html helper.",
+    files: [
+      file("server/src/index.ts", [
+        'import { html } from "hono/html";',
+        ...HEAD,
+        'app.post("/api/import", async (c) => {',
+        "  const { owner, repo } = await c.req.json();",
+        "  const { data } = await octokit.rest.repos.getReadme({ owner, repo });",
+        '  const text = Buffer.from(data.content, "base64").toString();',
+        "  return c.html(html`<article>${text}</article>`); // [A]",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/api/import",
+        parameter: "data",
+        sink: "html",
+        real: false,
+        why: "Scripts in the README are shown as text, not run.",
+      },
+    ],
+  },
+
+  // --- settings values -----------------------------------------------------------
+  {
+    id: "ci-pr-title",
+    tests: "A build script puts a pull request's title into a system command.",
+    files: [
+      file("scripts/release-notes.ts", [
+        'import { execSync } from "node:child_process";',
+        "const title = process.env.PR_TITLE;",
+        'execSync(`git tag -a v1.0.0 -m "${title}"`); // [A]',
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        parameter: "title",
+        sink: "shell",
+        real: true,
+        why: "Anyone who opens a pull request chooses its title, and a title can contain commands.",
+      },
+    ],
+  },
+  {
+    id: "ci-database-url",
+    tests: "A backup script puts the database address from settings into a command.",
+    files: [
+      file("scripts/backup.ts", [
+        'import { execSync } from "node:child_process";',
+        "const url = process.env.DATABASE_URL;",
+        "execSync(`pg_dump ${url} > backup.sql`); // [A]",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        parameter: "url",
+        sink: "shell",
+        real: false,
+        why: "Only whoever runs the server sets the database address.",
+      },
+    ],
+  },
+
   // --- running code ----------------------------------------------------------
   {
     id: "eval-calculator",
