@@ -8,6 +8,16 @@ The user (product owner) is not a developer. Explain decisions in plain
 language, lead with a recommendation, and surface product choices to them;
 absorb engineering choices yourself.
 
+## Working with the product owner (Murat)
+
+- Start every reply with "Murat".
+- Plain language, define terms on first use, lead with one recommendation
+  rather than a menu. Engineering choices are yours; product choices are his.
+- Build the design he specifies. If an implementation choice would change how
+  it works, say so *before* building, not after measuring.
+- He asked for honest numbers: report misses and false alarms as plainly as
+  wins, and verify claims (versions, results) rather than recalling them.
+
 ## The one rule that defines the security review
 
 **An LLM may suggest a way in. Only rules may decide it is real.**
@@ -60,8 +70,9 @@ review     → ten OWASP Top 10:2025 modules for the user
 
 ## Running things
 
-Bun and Docker are **not installed** on this machine, so the Bun-based root
-scripts fail (`npm test` → "'bun' is not recognized"). Use Node directly:
+On the original Windows machine Bun and Docker were **not installed**, so the
+Bun-based root scripts failed (`npm test` → "'bun' is not recognized"). Node
+works everywhere:
 
 ```bash
 # all tests (expect 146 pass, 1 skipped -- symlinks need elevation on Windows)
@@ -82,8 +93,15 @@ node --experimental-strip-types scripts/bench.ts
 node --experimental-strip-types --env-file=.env scripts/simulate.ts <folder>
 ```
 
-`.env` holds `ANTHROPIC_API_KEY`. It is git-ignored and must stay that way. Never
-print its value. Prepaid credits with auto-reload off, so it cannot overspend.
+`.env` holds `ANTHROPIC_API_KEY` and the GitHub App settings (`GITHUB_APP_ID`,
+`GITHUB_PRIVATE_KEY_PATH`, `GITHUB_WEBHOOK_SECRET`); the App's key file is
+`github-app.pem`. All are git-ignored and must stay that way: on a new machine
+they are recreated, never copied through chat or GitHub. Never print their
+values. Prepaid credits with auto-reload off, so it cannot overspend.
+
+The practice apps used for outside validation are not in this repository;
+re-clone them read-only (never install or run them): appsecco/dvna,
+OWASP/NodeGoat, juice-shop/juice-shop.
 
 ## Conventions that are load-bearing
 
