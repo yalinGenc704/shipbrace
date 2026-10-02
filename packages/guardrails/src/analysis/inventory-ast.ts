@@ -119,6 +119,9 @@ const SQL_STATEMENT =
 const SAFE_TAG = /(?:^|\.)(?:sql|db|query)$/i;
 
 export function buildInventoryFromAst(snapshot: RepoSnapshot): Inventory {
+  const views = new Map(
+    snapshot.files.filter((f) => TEMPLATE.test(f.path)).map((f) => [f.path, f.content]),
+  );
   const inventory: Inventory = {
     doors: [],
     sources: [],
@@ -135,10 +138,13 @@ export function buildInventoryFromAst(snapshot: RepoSnapshot): Inventory {
 
     const doors = findDoors(parsed);
     inventory.doors.push(...doors);
-    collect(parsed, doors, inventory);
+    collect(parsed, doors, inventory, views);
   }
   return inventory;
 }
+
+/** Page templates, which are text rather than code but decide what is escaped. */
+const TEMPLATE = /\.(?:ejs|hbs|handlebars|pug|njk|swig|html)$/i;
 
 function doorFor(doors: Door[], node: Node): Door | undefined {
   let innermost: Door | undefined;
@@ -229,7 +235,12 @@ function findDoors(parsed: ParsedFile): Door[] {
   });
 }
 
-function collect(parsed: ParsedFile, doors: Door[], into: Inventory): void {
+function collect(
+  parsed: ParsedFile,
+  doors: Door[],
+  into: Inventory,
+  views: Map<string, string> = new Map(),
+): void {
   walk(parsed.program, (node, parents) => {
     const door = doorFor(doors, node);
     const doorId = door ? { doorId: door.id } : {};
@@ -285,6 +296,36 @@ function collect(parsed: ParsedFile, doors: Door[], into: Inventory): void {
       }
     }
 
+    /**
+     * `output = { searchTerm: req.body.name }` -- a plain reassignment, no
+     * `const`. Common in older code, and invisible until now, so a value that
+     * travelled through one was lost.
+     */
+    if (node.type === "AssignmentExpression" && node.operator === "=") {
+      const left = node.left as Node | undefined;
+      const right = node.right as Node | undefined;
+      if (left?.type === "Identifier" && right) {
+        const target = String(left.name ?? "");
+        into.assignments.push({
+          id: `${parsed.path}:asg:${node.start}`,
+          target,
+          from: identifiersIn(right),
+          location: locationOf(parsed, node),
+          ...doorId,
+        });
+        const kind = sanitizerKindOf(right, parsed);
+        if (kind) {
+          into.sanitizers.push({
+            id: `${parsed.path}:san:${node.start}`,
+            kind,
+            guards: [target, ...identifiersIn(right)],
+            location: locationOf(parsed, node),
+            ...doorId,
+          });
+        }
+      }
+    }
+
     // --- call sites ------------------------------------------------------
     if (node.type === "CallExpression") {
       const callee = dottedName(node.callee);
@@ -333,7 +374,7 @@ function collect(parsed: ParsedFile, doors: Door[], into: Inventory): void {
     }
 
     // --- sinks -----------------------------------------------------------
-    const sink = sinkFor(parsed, node, parents);
+    const sink = sinkFor(parsed, node, parents, views);
     if (sink) into.sinks.push({ ...sink, ...doorId });
   });
 }
@@ -396,6 +437,10 @@ function bindingFor(parents: Node[]): string | undefined {
         return names[0];
       }
       return undefined;
+    }
+    if (parent.type === "AssignmentExpression") {
+      const left = parent.left as Node | undefined;
+      return left?.type === "Identifier" ? String(left.name ?? "") : undefined;
     }
     // Stop at a function boundary: an outer declarator is a different statement.
     if (/Function|ArrowFunctionExpression/.test(parent.type)) return undefined;
@@ -520,7 +565,99 @@ function isCommandBuilt(args: Node[]): boolean {
   return false;
 }
 
-function sinkFor(parsed: ParsedFile, node: Node, parents: Node[]): Sink | undefined {
+/**
+ * The names a template prints without escaping.
+ *
+ * Every engine has a safe way to print (which turns `<script>` into harmless
+ * text) and a raw way that does not. Only the raw way is dangerous, so only
+ * names printed raw are collected. Names are the top-level ones the route
+ * passes in: `<%- output.searchTerm %>` is the `output` the route provided.
+ */
+function rawNames(path: string, content: string): Set<string> {
+  const names = new Set<string>();
+  const add = (re: RegExp) => {
+    for (const m of content.matchAll(re)) if (m[1]) names.add(m[1]);
+  };
+  const id = "([A-Za-z_$][\\w$]*)";
+
+  if (/\.ejs$/i.test(path)) add(new RegExp(`<%-\\s*${id}`, "g"));
+  if (/\.(?:hbs|handlebars)$/i.test(path)) add(new RegExp(`\\{\\{\\{\\s*${id}`, "g"));
+  if (/\.pug$/i.test(path)) {
+    add(new RegExp(`!\\{\\s*${id}`, "g"));
+    add(new RegExp(`^\\s*[\\w.#-]*!=\\s*${id}`, "gm"));
+  }
+  if (/\.(?:njk|swig|html)$/i.test(path)) {
+    // Nunjucks, Swig, and Jinja-style engines escape by default...
+    add(new RegExp(`\\{\\{\\s*${id}[^}]*\\|\\s*safe\\b`, "g"));
+    // ...unless escaping is switched off for the file.
+    if (/\{%\s*autoescape\s+(?:false|off)\b/.test(content)) add(new RegExp(`\\{\\{\\s*${id}`, "g"));
+  }
+  return names;
+}
+
+/** The single template a view name refers to, or none when it is missing or ambiguous. */
+function templateFor(view: string, views: Map<string, string>): [string, string] | undefined {
+  const wanted = view.replace(/^\/+/, "");
+  const hasExtension = /\.[a-z]+$/i.test(wanted);
+  const matches = [...views].filter(([path]) => {
+    const bare = hasExtension ? path : path.replace(/\.[a-z]+$/i, "");
+    return bare === wanted || bare.endsWith(`/${wanted}`);
+  });
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+/**
+ * `res.render("app/products", { output })` is dangerous only if the template
+ * prints something the route passed in *raw*. The operation is the render
+ * call; its operands are just the values handed to raw-printed names, so a
+ * visitor's value passed to a name the template escapes is not reported.
+ */
+function renderSink(
+  parsed: ParsedFile,
+  node: Node,
+  name: string,
+  args: Node[],
+  views: Map<string, string>,
+): Sink | undefined {
+  if (!/^(?:res|reply|response|ctx)\.render$/.test(name) || !isStringLiteral(args[0])) return undefined;
+  const template = templateFor(String(args[0].value), views);
+  if (!template) return undefined;
+
+  const raw = rawNames(template[0], template[1]);
+  if (raw.size === 0) return undefined;
+
+  const locals = args[1];
+  let values: Node[] = [];
+  if (locals?.type === "ObjectExpression") {
+    for (const property of (locals.properties ?? []) as Node[]) {
+      const key = property.key as Node | undefined;
+      const keyName = key?.type === "Identifier" ? String(key.name) : isStringLiteral(key) ? String(key.value) : "";
+      if (raw.has(keyName) && property.value) values.push(property.value as Node);
+    }
+  } else if (locals) {
+    // `res.render("page", data)`: which names it holds is not visible here.
+    values = [locals];
+  }
+  if (values.length === 0) return undefined;
+
+  return {
+    id: `${parsed.path}:sink:${node.start}`,
+    kind: "html",
+    // Only the values that are printed raw, so an inline input matches only
+    // when it is one of them.
+    expression: values.map((v) => textOf(parsed, v)).join(" , ").replace(/\s+/g, " ").slice(0, 200),
+    operands: values.flatMap((v) => identifiersIn(v)),
+    location: locationOf(parsed, node),
+    inherentlySafe: false,
+  };
+}
+
+function sinkFor(
+  parsed: ParsedFile,
+  node: Node,
+  parents: Node[],
+  views: Map<string, string> = new Map(),
+): Sink | undefined {
   const make = (kind: SinkKind, operands: string[], inherentlySafe = false): Sink => ({
     id: `${parsed.path}:sink:${node.start}`,
     kind,
@@ -592,6 +729,21 @@ function sinkFor(parsed: ParsedFile, node: Node, parents: Node[]): Sink | undefi
     return isCommandBuilt(args) ? make("shell", operands) : undefined;
   }
   if (DYNAMIC_CODE.test(name)) return make("dynamic-code", operands);
+
+  const rendered = renderSink(parsed, node, name, args, views);
+  if (rendered) return rendered;
+
+  /**
+   * `res.send(`<h1>${q}</h1>`)` -- markup assembled in a plain template and
+   * sent as the page. Recognised only when the fixed text contains a tag, so
+   * a JSON or text reply is not mistaken for a page.
+   */
+  if (/^(?:res|reply|response)\.(?:send|write|end)$/.test(name) && args[0]?.type === "TemplateLiteral") {
+    const body = args[0];
+    if (((body.expressions ?? []) as Node[]).length > 0 && /<[a-z!]/i.test(quasiText(body))) {
+      return make("html", identifiersIn(body));
+    }
+  }
 
   /**
    * `c.html(...)` sends its argument to the browser as markup. A plain

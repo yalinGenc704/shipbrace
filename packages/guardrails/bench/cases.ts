@@ -1081,6 +1081,101 @@ export const CASES: BenchCase[] = [
     ],
   },
 
+  {
+    id: "template-ejs-raw",
+    tests: "A search term is passed to an EJS page that prints it raw.",
+    files: [
+      file("server/routes/search.js", [
+        'const router = require("express").Router();',
+        'router.get("/search", requireLogin, (req, res) => {',
+        '  res.render(\"search\", { term: req.query.q }); // [A]',
+        "});",
+      ]),
+      file("views/search.ejs", ["<h1>Results for <%- term %></h1>"]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/search",
+        parameter: "q",
+        sink: "html",
+        real: true,
+        why: "A search term containing script tags runs in the visitor's browser.",
+      },
+    ],
+  },
+  {
+    id: "template-ejs-escaped",
+    tests: "The same page, printing the term the safe way.",
+    files: [
+      file("server/routes/search.js", [
+        'const router = require("express").Router();',
+        'router.get("/search", requireLogin, (req, res) => {',
+        '  res.render(\"search\", { term: req.query.q }); // [A]',
+        "});",
+      ]),
+      file("views/search.ejs", ["<h1>Results for <%= term %></h1>"]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/search",
+        parameter: "q",
+        sink: "html",
+        real: false,
+        why: "EJS turns script tags into harmless text when printing with <%=.",
+      },
+    ],
+  },
+  {
+    id: "template-raw-other-value",
+    tests: "The page prints one value raw, but the visitor's term goes to a value it escapes.",
+    files: [
+      file("server/routes/search.js", [
+        'const router = require("express").Router();',
+        'router.get("/search", requireLogin, (req, res) => {',
+        '  res.render(\"search\", { banner: BANNER_HTML, term: req.query.q }); // [A]',
+        "});",
+      ]),
+      file("views/search.ejs", ["<%- banner %><h1>Results for <%= term %></h1>"]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/search",
+        parameter: "q",
+        sink: "html",
+        real: false,
+        why: "Only the developer's own banner is printed raw.",
+      },
+    ],
+  },
+  {
+    id: "template-handlebars-raw-reassigned",
+    tests: "A Handlebars page prints a value raw that was built from the search term in a plain reassignment.",
+    files: [
+      file("server/routes/search.js", [
+        'const router = require("express").Router();',
+        'router.get("/results", requireLogin, (req, res) => {',
+        "  let summary;",
+        "  summary = `You searched for ${req.query.q}`;",
+        '  res.render(\"results\", { summary }); // [A]',
+        "});",
+      ]),
+      file("views/results.hbs", ["<div>{{{ summary }}}</div>"]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/results",
+        parameter: "q",
+        sink: "html",
+        real: true,
+        why: "The search term ends up inside the raw summary.",
+      },
+    ],
+  },
+
   // --- uploaded files ----------------------------------------------------------
   {
     id: "upload-filename",

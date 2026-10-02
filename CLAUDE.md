@@ -106,11 +106,15 @@ print its value. Prepaid credits with auto-reload off, so it cannot overspend.
 
 ## Current state and known gaps
 
-- **Benchmark (46 apps, 26 real problems, 21 safe decoys), 2026-10-01:** rules
-  alone prove 23; a perfect suggester proves 25 (the extra two are ownership
+- **Benchmark (50 apps, 28 real problems, 23 safe decoys), 2026-10-01:** rules
+  alone prove 25; a perfect suggester proves 27 (the extra two are ownership
   gaps, which only a suggester can raise); the real model matched the perfect
   suggester on the 31-app version; **zero** false alarms. Only miss: a stored
   comment rendered as raw HTML (needs following data through the database).
+- **Page templates** (EJS, Handlebars, Pug, Nunjucks/Swig): `res.render(view,
+  locals)` is an html operation only for the values the template prints raw
+  (`<%-`, `{{{`, `!{`, `| safe`, autoescape off). Plain reassignments
+  (`x = ...`) are followed. `res.send` of a template containing a tag is html.
 - **Outside validation (2026-10-01), practice apps cloned read-only into
   `C:/Users/yalin/aegis-test-repos` (DVNA, OWASP NodeGoat, OWASP Juice
   Shop):** testing on Express code found false alarms the benchmark never
@@ -118,7 +122,7 @@ print its value. Prepaid credits with auto-reload off, so it cannot overspend.
   were not seen as sign-in checks (DVNA 27 -> 1 open-route warnings, Juice Shop
   86 -> 18). DVNA: 5 of its 19 documented holes found automatically (SQL and
   command injection, insecure deserialisation, open redirect, missing headers).
-  Not detected yet: holes inside page templates (EJS), XXE, NoSQL injection,
+  Templates added afterwards (DVNA reflected XSS now caught). Not detected yet: XXE, NoSQL injection,
   CSRF, a session secret left at a default, and sign-in checks written inside
   a handler (Juice Shop `dataErasure`, 2 remaining false alarms).
 - **Inputs recognised** (`inventory-ast.ts`): route params, query, body,
