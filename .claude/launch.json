@@ -19,7 +19,7 @@
       "runtimeArgs": [
         "--experimental-strip-types",
         "--env-file=.env",
-        "--env-file=C:/Users/yalin/aegis-test-repos/dvna.env",
+        "--env-file=/Users/yalingenc/aegis-test-repos/dvna.env",
         "server/src/index.ts"
       ],
       "port": 3000

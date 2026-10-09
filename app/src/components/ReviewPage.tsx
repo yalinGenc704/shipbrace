@@ -1,6 +1,7 @@
+import type { ReviewResult } from "@aegis/guardrails";
 import { useQuery } from "@tanstack/react-query";
 import { FlaskConical, Loader2 } from "lucide-react";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { Mode } from "../lib/review.ts";
 import { loadReview } from "../lib/review.ts";
 import { useReviewed } from "../lib/reviewed.ts";
@@ -8,22 +9,12 @@ import { ModuleCard } from "./ModuleCard.tsx";
 import { Summary } from "./Summary.tsx";
 
 export function ReviewPage() {
-  const [mode, setMode] = useState<Mode>("essentials");
-  const reviewed = useReviewed();
-
   const { data: review, isPending, error } = useQuery({
     queryKey: ["review"],
     queryFn: loadReview,
   });
 
-  if (isPending) {
-    return (
-      <p className="flex items-center gap-2 p-8 text-sm text-ink-soft">
-        <Loader2 className="size-4 animate-spin" aria-hidden />
-        Reviewing your application…
-      </p>
-    );
-  }
+  if (isPending) return <Loading>Reviewing your application…</Loading>;
 
   if (error || !review) {
     return (
@@ -33,12 +24,33 @@ export function ReviewPage() {
     );
   }
 
+  return <ReviewView review={review} />;
+}
+
+export function Loading({ children }: { children: ReactNode }) {
+  return (
+    <p className="flex items-center gap-2 p-8 text-sm text-ink-soft">
+      <Loader2 className="size-4 animate-spin" aria-hidden />
+      {children}
+    </p>
+  );
+}
+
+/**
+ * One review, wherever it came from: computed just now, or kept from a push.
+ * `context` sits above it and says which review this is.
+ */
+export function ReviewView({ review, context }: { review: ReviewResult; context?: ReactNode }) {
+  const [mode, setMode] = useState<Mode>("essentials");
+  const reviewed = useReviewed();
+
   const outstanding = review.modules
     .flatMap((m) => m.items)
     .filter((i) => i.status === "needs-your-review" && !reviewed.isReviewed(i.id)).length;
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-8 sm:py-12">
+      {context}
       <Summary
         review={review}
         mode={mode}

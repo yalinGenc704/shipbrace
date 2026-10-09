@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { runSecurityReview } from "@aegis/guardrails";
 import { appJwt, verifyWebhookSignature } from "../src/github/auth.ts";
 import { handleWebhook, type WebhookDeps } from "../src/github/webhook.ts";
+import { ReviewStoppedError } from "../src/sandbox/sandbox.ts";
 
 const SECRET = "a-long-random-webhook-secret-for-tests";
 const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -68,7 +69,7 @@ function deps(fetchImpl: typeof fetch, over: Partial<WebhookDeps> = {}): Webhook
 const push = (over: Record<string, unknown> = {}) =>
   JSON.stringify({
     after: SHA,
-    repository: { name: "shop", owner: { login: "murat" } },
+    repository: { id: 4242, name: "shop", owner: { login: "murat" } },
     installation: { id: 7 },
     ...over,
   });
@@ -177,4 +178,71 @@ test("a review that crashes is reported as not completed, never as a pass", asyn
   assert.equal(final.conclusion, "neutral");
   assert.match(final.output.title, /could not be completed/);
   assert.ok(!JSON.stringify(final).includes("boom"), "internal error text stays in the log");
+});
+
+// --- review history ----------------------------------------------------------------
+
+test("a saved review is linked from the check, and the links lead to it", async () => {
+  const github = fakeGitHub({ "server/src/api.ts": VULNERABLE });
+  const saved: any[] = [];
+  const d = deps(github.fetchImpl, {
+    history: { record: async (review) => (saved.push(review), { reviewId: "R".repeat(24), historyId: "H".repeat(24) }) },
+    publicUrl: "https://aegis.example",
+  });
+  const body = push();
+  await handleWebhook(d, { signature: sign(body), event: "push" }, body);
+  await Promise.all(d.done);
+
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].githubId, 4242, "kept by GitHub's id, which survives renames");
+  assert.equal(saved[0].commitSha, SHA);
+  assert.equal(saved[0].conclusion, "failure");
+  assert.ok(saved[0].result.summary.high > 0);
+
+  const withOutput = github.calls.filter((c) => c.method === "PATCH").find((c) => c.body.output)?.body;
+  assert.equal(withOutput.details_url, `https://aegis.example/reviews/${"R".repeat(24)}`);
+  assert.ok(withOutput.output.summary.startsWith(`**[Open the full report](https://aegis.example/reviews/${"R".repeat(24)})**`));
+  assert.ok(withOutput.output.summary.includes(`https://aegis.example/history/${"H".repeat(24)}`));
+});
+
+test("if the history cannot be saved, the check is still posted in full, without links", async () => {
+  const github = fakeGitHub({ "server/src/api.ts": VULNERABLE });
+  const logged: string[] = [];
+  const d = deps(github.fetchImpl, {
+    history: { record: () => Promise.reject(new Error("database down")) },
+    publicUrl: "https://aegis.example",
+    log: (message) => void logged.push(message),
+  });
+  const body = push();
+  await handleWebhook(d, { signature: sign(body), event: "push" }, body);
+  await Promise.all(d.done);
+
+  const patches = github.calls.filter((c) => c.method === "PATCH").map((c) => c.body);
+  const withOutput = patches.find((p) => p.output);
+  assert.equal(withOutput.details_url, undefined);
+  assert.match(withOutput.output.title, /high-risk problem/, "the risks are not withheld");
+  assert.equal(patches.at(-1).conclusion, "failure");
+  assert.ok(logged.some((m) => m.startsWith("could not save the review")));
+});
+
+test("a push without GitHub's repository id is refused", async () => {
+  const github = fakeGitHub({});
+  const d = deps(github.fetchImpl);
+  const body = push({ repository: { name: "shop", owner: { login: "murat" } } });
+  const result = await handleWebhook(d, { signature: sign(body), event: "push" }, body);
+  assert.equal(result.status, 400);
+  assert.equal(d.done.length, 0);
+});
+
+test("a review stopped by its time limit says so on the check, in plain words", async () => {
+  const github = fakeGitHub({ "server/src/api.ts": VULNERABLE });
+  const d = deps(github.fetchImpl, { review: () => Promise.reject(new ReviewStoppedError("time")) });
+  const body = push();
+  await handleWebhook(d, { signature: sign(body), event: "push" }, body);
+  await Promise.all(d.done);
+
+  const final = github.calls.filter((c) => c.method === "PATCH").at(-1)?.body;
+  assert.equal(final.conclusion, "neutral", "never a pass");
+  assert.match(final.output.summary, /longer than its time limit/);
+  assert.match(final.output.summary, /Nothing in this commit was checked/);
 });

@@ -40,6 +40,21 @@ const schema = z.object({
   GITHUB_APP_ID: z.string().regex(/^\d+$/, "GITHUB_APP_ID is the number shown on the App's page").optional(),
   GITHUB_PRIVATE_KEY_PATH: z.string().optional(),
   GITHUB_WEBHOOK_SECRET: z.string().min(20, "GITHUB_WEBHOOK_SECRET should be long and random").optional(),
+  /**
+   * Where past reviews are kept. Without it nothing is stored: GitHub checks
+   * still work, they just have no link to a report.
+   */
+  DATABASE_URL: z.string().regex(/^postgres(ql)?:\/\//, "DATABASE_URL must start with postgres://").optional(),
+  /**
+   * The address people reach this server at (the tunnel, later the domain),
+   * used for the links in GitHub checks. https, except on this machine.
+   */
+  PUBLIC_URL: z
+    .url()
+    .refine((value) => /^https:\/\//.test(value) || /^http:\/\/localhost(:\d+)?\/?$/.test(value), {
+      message: "PUBLIC_URL must be an https address (or http://localhost)",
+    })
+    .optional(),
 });
 
 const parsed = schema.safeParse(process.env);
@@ -59,7 +74,18 @@ export const config = {
   packageLookup: parsed.data.PACKAGE_LOOKUP === "on",
   aiReview: aiReviewEnabled(parsed.data),
   github: githubConfig(parsed.data),
+  databaseUrl: parsed.data.DATABASE_URL ?? null,
+  publicUrl: publicUrl(parsed.data),
 };
+
+function publicUrl(env: z.infer<typeof schema>): string | null {
+  if (!env.PUBLIC_URL) return null;
+  if (!env.DATABASE_URL) {
+    console.error("PUBLIC_URL is only used for links to stored reviews, which need DATABASE_URL.");
+    process.exit(1);
+  }
+  return env.PUBLIC_URL.replace(/\/+$/, "");
+}
 
 function aiReviewEnabled(env: z.infer<typeof schema>): boolean {
   if (env.AI_REVIEW !== "on") return false;

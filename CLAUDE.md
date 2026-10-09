@@ -51,8 +51,10 @@ review     → ten OWASP Top 10:2025 modules for the user
 | `packages/guardrails/src/review/` | `pipeline.ts` runs everything; `modules.ts` is the ten-module checklist; `checks.ts` holds project-level detectors |
 | `packages/guardrails/src/rules/` | Per-file rules. `injection.ts` reuses the AST sink detection |
 | `packages/scaffold/` | Generates new apps from composable modules; `auth` is a per-app setting |
-| `server/` | Stateless review API (`GET`/`POST /api/review`) |
-| `app/` | React dashboard rendering the checklist |
+| `server/` | Review API (`GET`/`POST /api/review`), GitHub webhook, kept reviews (`/api/reviews/:id`, `/api/history/:id`); serves `app/dist` when built |
+| `server/src/sandbox/` | **Every review runs here**, in a sealed child process: no secrets, no network, reads limited to Aegis's code, time and memory limits |
+| `server/src/history.ts` | Review history in PostgreSQL: schema migrations, save, read back by unguessable link |
+| `app/` | React dashboard: the live review at `/`, a kept review at `/reviews/:id`, a repository's history at `/history/:id` |
 | `scripts/simulate.ts` | Reviews a folder with and without a model and reports the difference |
 | `packages/guardrails/bench/` | **The benchmark.** Sample apps with a known answer key (`cases.ts`) and the grader (`grade.ts`). `test/bench.test.ts` ratchets the scores |
 | `packages/guardrails/src/review/vulnerabilities.ts` | Known flaws in installed packages via OSV.dev (A03). Off unless a `VulnerabilitySource` is passed; the server passes one |
@@ -70,18 +72,24 @@ review     → ten OWASP Top 10:2025 modules for the user
 
 ## Running things
 
-On the original Windows machine Bun and Docker were **not installed**, so the
-Bun-based root scripts failed (`npm test` → "'bun' is not recognized"). Node
-works everywhere:
+Development moved to a Mac on 2026-10-09 (Bun installed, Docker not). Aegis
+itself still runs on Node; the Bun-based root scripts are untested. Node works
+everywhere:
 
 ```bash
-# all tests (expect 146 pass, 1 skipped -- symlinks need elevation on Windows)
-node --experimental-strip-types --test packages/guardrails/test/*.test.ts packages/scaffold/test/*.test.ts server/test/*.test.ts
+# PostgreSQL 18 (Homebrew, not started at login). Databases: aegis, aegis_test.
+LC_ALL=en_US.UTF-8 /opt/homebrew/opt/postgresql@18/bin/pg_ctl -D /opt/homebrew/var/postgresql@18 -l /opt/homebrew/var/log/postgresql@18.log start
+
+# all tests (expect 170 pass). Without TEST_DATABASE_URL the 6 database tests
+# are skipped and say so; it must name a database ending in _test (it is wiped).
+TEST_DATABASE_URL=postgres:///aegis_test node --experimental-strip-types --test packages/guardrails/test/*.test.ts packages/scaffold/test/*.test.ts server/test/*.test.ts
 
 # review API on :3000. Set REVIEW_ROOT explicitly: npm runs workspace scripts
 # from inside server/, so without it only that one folder is reviewed.
 # PACKAGE_LOOKUP=off keeps it fully offline (no OSV.dev lookups).
-REVIEW_ROOT="$PWD" npm start --workspace @aegis/server
+# Build the dashboard first so the server serves it (links from GitHub checks).
+npm run build --workspace @aegis/app
+REVIEW_ROOT="$PWD" node --experimental-strip-types --env-file=.env server/src/index.ts
 
 # dashboard on :5173 (falls back to app/src/fixtures/review.json without the API)
 npm run dev --workspace @aegis/app
@@ -93,15 +101,20 @@ node --experimental-strip-types scripts/bench.ts
 node --experimental-strip-types --env-file=.env scripts/simulate.ts <folder>
 ```
 
-`.env` holds `ANTHROPIC_API_KEY` and the GitHub App settings (`GITHUB_APP_ID`,
-`GITHUB_PRIVATE_KEY_PATH`, `GITHUB_WEBHOOK_SECRET`); the App's key file is
+`.env` holds `ANTHROPIC_API_KEY`, the GitHub App settings (`GITHUB_APP_ID`,
+`GITHUB_PRIVATE_KEY_PATH`, `GITHUB_WEBHOOK_SECRET`), `DATABASE_URL`
+(`postgres:///aegis` here; no password over the local socket) and, while a
+tunnel is open, `PUBLIC_URL` (its address, for links in checks); the App's key file is
 `github-app.pem`. All are git-ignored and must stay that way: on a new machine
 they are recreated, never copied through chat or GitHub. Never print their
-values. Prepaid credits with auto-reload off, so it cannot overspend.
+values. `GITHUB_PRIVATE_KEY_PATH` must be absolute: the server resolves it from
+wherever it starts, which is `server/` under `npm start --workspace`. Prepaid
+credits with auto-reload off, so it cannot overspend.
 
 The practice apps used for outside validation are not in this repository;
-re-clone them read-only (never install or run them): appsecco/dvna,
-OWASP/NodeGoat, juice-shop/juice-shop.
+re-clone them read-only (never install or run them) into `~/aegis-test-repos`:
+appsecco/dvna, OWASP/NodeGoat, juice-shop/juice-shop. The `review-api-dvna-ai`
+launch entry expects `~/aegis-test-repos/dvna.env` there.
 
 ## Conventions that are load-bearing
 
@@ -157,7 +170,7 @@ OWASP/NodeGoat, juice-shop/juice-shop.
   (`<%-`, `{{{`, `!{`, `| safe`, autoescape off). Plain reassignments
   (`x = ...`) are followed. `res.send` of a template containing a tag is html.
 - **Outside validation (2026-10-01), practice apps cloned read-only into
-  `C:/Users/yalin/aegis-test-repos` (DVNA, OWASP NodeGoat, OWASP Juice
+  `aegis-test-repos` (DVNA, OWASP NodeGoat, OWASP Juice
   Shop):** testing on Express code found false alarms the benchmark never
   covered -- per-route middleware and `app.post(path, security.isAuthorized())`
   were not seen as sign-in checks (DVNA 27 -> 1 open-route warnings, Juice Shop
@@ -209,23 +222,38 @@ OWASP/NodeGoat, juice-shop/juice-shop.
   `github-app.pem` (git-ignored), and a temporary Cloudflare quick tunnel
   (`cloudflared tunnel --url http://localhost:3000`). The tunnel address
   changes every run, so the App's webhook URL must be updated each time until
-  it is hosted. No persistence yet: past reviews are not stored.
+  it is hosted.
+- **Review history (2026-10-09).** With `DATABASE_URL`, each reviewed push is
+  kept (full result, commit, time) and the check links to it (`details_url`
+  plus two links atop the summary; needs `PUBLIC_URL`). No sign-in yet: pages
+  are reached by unguessable 144-bit links only the check shows. If saving
+  fails the check is still posted in full, without links. Nothing is deleted
+  yet; retention and deletion on uninstall are in the legal checklist. Not yet
+  tried against the live App on this Mac.
+- **Every review is sealed off (2026-10-09)** in a child process
+  (`server/src/sandbox/`, details in docs/architecture.md): empty environment,
+  Node permission model (reads only Aegis's code; no network, writes or child
+  processes), 60 s work limit excluding AI waits, 1 GB JS memory, two at once.
+  Identical results on all 56 benchmark apps; ~75 ms extra per review. It is a
+  JavaScript-level wall: the full seal is a locked-down container at hosting.
+- **The query check trusts tagged templates by name** (`SAFE_TAG`: `sql`, `db`,
+  `query`). postgres.js transactions are usually written `` tx`...` ``, which
+  gets a false "worth a look"; `history.ts` names its transaction `sql` to
+  avoid it. Users' apps would hit this (step 8).
 
-## Next steps (agreed with Murat, 2026-10-01)
+## Next steps (agreed with Murat 2026-10-01; 1 and 3 done 2026-10-09)
 
 **At the start of a session, do not begin these on your own.** Summarise where
 things stand, present this list in plain language (grouped as below, with
 time estimates and the decisions each needs), give the recommendation, and
 ask Murat which to start. Wait for his answer.
 
-**Recommended next: 1 and 3.** Neither needs a decision from Murat, and both
-are required either way. He decides hosting and a domain meanwhile.
+**Recommended next: 2**, once Murat has chosen where it runs and a domain.
+Proposed 2026-10-09, not yet agreed.
 
 ### Making it usable without the laptop
 
-1. **Store past reviews in PostgreSQL.** Each repository gets its own history
-   in the dashboard, and the GitHub check links straight to it. ~1 session,
-   no decisions needed.
+1. ~~**Store past reviews in PostgreSQL.**~~ Done 2026-10-09.
 2. **Put Aegis online, running all the time.** ~1-2 sessions. Needs two
    decisions from Murat:
    - *Where it runs.* Recommendation: a small rented server (VPS) running
@@ -234,15 +262,19 @@ are required either way. He decides hosting and a domain meanwhile.
    - *A domain name* added to Cloudflare, so the tunnel has a permanent
      address and the GitHub App's webhook URL never changes again. Typically
      around $10/year.
+   - Also needed: the container is the full seal for step 3 (no outbound
+     network for the review process, read-only filesystem, memory cap,
+     non-root user), PostgreSQL in Docker, and `PUBLIC_URL` set to the domain.
 
 ### Required before anyone else uses it
 
-3. **Run the code reader sealed off** (an isolated worker with time and memory
-   limits). Strangers' repositories could be built to attack the parser
-   reading them; see "Open item" in docs/architecture.md. ~1 session.
+3. ~~**Run the code reader sealed off.**~~ Done 2026-10-09 (the container
+   seal remains, under step 2).
 4. **Sign-up, the legal notices, and per-person on/off switches** for the AI
    and the package lookup (docs/legal/third-party-services.md section 4).
-   ~1-2 sessions.
+   ~1-2 sessions. Also: put kept reviews behind sign-in, decide how long they
+   are kept, and make the "your call" ticks per repository (today they are
+   per browser, shared across every repository).
 5. **A real product name.** "Aegis" is crowded (several security tools for
    AI-built apps use it); choose one and have it trademark-checked.
 
@@ -254,7 +286,8 @@ are required either way. He decides hosting and a domain meanwhile.
    deployment" part of the vision. Not started.
 8. **More detection:** stored attacks (bad data saved, shown later),
    browser-side code, the XML upload attack (XXE), and sign-in checks written
-   inside a handler (Juice Shop `dataErasure`). Also remove or deprecate the
-   legacy exports listed above.
+   inside a handler (Juice Shop `dataErasure`), and transactions written
+   `` tx`...` `` (see above). Also remove or deprecate the legacy exports listed
+   above.
 
 See `docs/architecture.md` for the reasoning behind these decisions.

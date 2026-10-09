@@ -1,8 +1,10 @@
 import type { RepoSnapshot, ReviewResult } from "@aegis/guardrails";
+import type { ReviewHistory } from "../history.ts";
 import { verifyWebhookSignature } from "./auth.ts";
 import { installationClient, type AppCredentials, type GitHubClient } from "./client.ts";
 import { checkOutput } from "./report.ts";
 import { fetchRepository } from "./repository.ts";
+import { ReviewStoppedError } from "../sandbox/sandbox.ts";
 
 /**
  * GitHub tells this server when someone pushes; the server reviews that commit
@@ -24,12 +26,16 @@ export interface WebhookDeps {
   schedule: (task: () => Promise<void>) => void;
   fetchImpl?: typeof fetch;
   log?: (message: string, error?: unknown) => void;
+  /** Where finished reviews are kept. Without it, the check is the only record. */
+  history?: Pick<ReviewHistory, "record">;
+  /** The dashboard's public address, for links from the check. Needs `history`. */
+  publicUrl?: string;
 }
 
 interface PushEvent {
   after?: string;
   deleted?: boolean;
-  repository?: { name?: string; owner?: { login?: string; name?: string } };
+  repository?: { id?: number; name?: string; owner?: { login?: string; name?: string } };
   installation?: { id?: number };
 }
 
@@ -39,7 +45,7 @@ const ANNOTATIONS_PER_REQUEST = 50;
 
 export async function handleWebhook(
   deps: WebhookDeps,
-  headers: { signature?: string; event?: string },
+  headers: { signature?: string | undefined; event?: string | undefined },
   rawBody: string,
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   // Refused before the body is parsed: an unsigned message is not from GitHub.
@@ -61,22 +67,22 @@ export async function handleWebhook(
   const owner = event.repository?.owner?.login ?? event.repository?.owner?.name;
   const repo = event.repository?.name;
   const installation = event.installation?.id;
+  const githubId = event.repository?.id;
 
   // A deleted branch has no commit to review.
   if (event.deleted || !sha || NO_COMMIT.test(sha)) return { status: 204, body: {} };
-  if (!owner || !repo || !installation || !/^[0-9a-f]{40}$/.test(sha)) {
+  if (!owner || !repo || !installation || !Number.isSafeInteger(githubId) || !/^[0-9a-f]{40}$/.test(sha)) {
     return { status: 400, body: { error: "Invalid request." } };
   }
 
-  deps.schedule(() => reviewCommit(deps, installation, owner, repo, sha));
+  deps.schedule(() => reviewCommit(deps, installation, { githubId: githubId!, owner, repo }, sha));
   return { status: 202, body: { accepted: true } };
 }
 
 async function reviewCommit(
   deps: WebhookDeps,
   installationId: number,
-  owner: string,
-  repo: string,
+  { githubId, owner, repo }: { githubId: number; owner: string; repo: string },
   sha: string,
 ): Promise<void> {
   const log = deps.log ?? ((message, error) => console.error(message, error));
@@ -102,6 +108,19 @@ async function reviewCommit(
     const fetched = await fetchRepository(client, owner, repo, sha);
     const result = await deps.review(fetched.snapshot);
     const output = checkOutput(result, fetched.skipped);
+    const link = await keep(deps, {
+      githubId,
+      owner,
+      repo,
+      commitSha: sha,
+      conclusion: output.conclusion,
+      title: output.title,
+      result,
+      skipped: fetched.skipped,
+    });
+    const summary = link
+      ? `**[Open the full report](${link.review})** · [All reviews of this repository](${link.history})\n\n${output.summary}`
+      : output.summary;
 
     // GitHub takes at most 50 notes per request; later batches add to the first.
     const batches = [];
@@ -110,7 +129,8 @@ async function reviewCommit(
     }
     for (const batch of batches.length > 0 ? batches : [[]]) {
       await client.patch(`${where}/check-runs/${checkId}`, {
-        output: { title: output.title, summary: output.summary, annotations: batch },
+        ...(link ? { details_url: link.review } : {}),
+        output: { title: output.title, summary, annotations: batch },
       });
     }
     await client.patch(`${where}/check-runs/${checkId}`, {
@@ -127,9 +147,32 @@ async function reviewCommit(
         conclusion: "neutral",
         output: {
           title: "The review could not be completed",
-          summary: "Nothing was checked for this commit. Push again to retry; if it keeps happening, the server log has the details.",
+          // A stopped review says why in fixed words; anything else stays in the log.
+          summary: error instanceof ReviewStoppedError
+            ? `${error.userMessage} Push again to retry; if it keeps happening, the server log has the details.`
+            : "Nothing was checked for this commit. Push again to retry; if it keeps happening, the server log has the details.",
         },
       })
       .catch((reportError: unknown) => log("could not report the failure:", reportError));
+  }
+}
+
+/**
+ * Saves the finished review and returns the links to it. A failure here is
+ * logged and the check is posted without links: the review itself is still
+ * right, and withholding it because the history is down would hide a risk.
+ */
+async function keep(
+  deps: WebhookDeps,
+  review: Parameters<ReviewHistory["record"]>[0],
+): Promise<{ review: string; history: string } | null> {
+  if (!deps.history) return null;
+  try {
+    const { reviewId, historyId } = await deps.history.record(review);
+    if (!deps.publicUrl) return null;
+    return { review: `${deps.publicUrl}/reviews/${reviewId}`, history: `${deps.publicUrl}/history/${historyId}` };
+  } catch (error) {
+    (deps.log ?? console.error)(`could not save the review of ${review.owner}/${review.repo}@${review.commitSha.slice(0, 7)}:`, error);
+    return null;
   }
 }

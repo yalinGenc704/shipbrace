@@ -1,32 +1,47 @@
 import { serve } from "@hono/node-server";
+import { serveStatic } from "@hono/node-server/serve-static";
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import Anthropic from "@anthropic-ai/sdk";
-import {
-  createClaudeProposer,
-  createOsvSource,
-  runSecurityReview,
-  type RepoSnapshot,
-  type ReviewResult,
-} from "@aegis/guardrails";
-import { Hono } from "hono";
+import { createClaudeProposer, createOsvSource, type RepoSnapshot, type ReviewResult } from "@aegis/guardrails";
+import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
 import { z } from "zod";
 import { config } from "./config.ts";
 import { handleWebhook } from "./github/webhook.ts";
+import { connect, migrate, postgresHistory, type ReviewHistory } from "./history.ts";
+import { historyRoutes } from "./history-routes.ts";
 import { ingest, PathOutsideRootError } from "./ingest.ts";
+import { createSandbox, ReviewStoppedError } from "./sandbox/sandbox.ts";
 
 /**
  * The review API.
  *
- * Deliberately stateless: a review is computed from the code on disk and
- * returned, never stored. That keeps this first version free of a database, and
- * it means there is no stale result that can be mistaken for a current one.
+ * A review of a local folder is computed from the code on disk and returned,
+ * never stored, so there is no stale result to mistake for a current one.
+ * Reviews of GitHub pushes are also kept, when a database is configured, each
+ * labelled with the commit it describes (see history.ts).
  *
  * The same rules this product applies to generated apps apply here. If they are
  * not good enough for our own server they are not good enough to recommend.
  */
+const history: ReviewHistory | null = config.databaseUrl ? postgresHistory(connect(config.databaseUrl)) : null;
+if (config.databaseUrl) {
+  const sql = connect(config.databaseUrl);
+  try {
+    await migrate(sql);
+  } catch (error) {
+    // The message only: a connection error can quote the address, password included.
+    console.error("Could not prepare the review history database:", error instanceof Error ? error.message.replace(/postgres(ql)?:\/\/\S+/g, "<DATABASE_URL>") : "unknown error");
+    process.exit(1);
+  } finally {
+    await sql.end({ timeout: 5 });
+  }
+}
+
 const app = new Hono();
 
 app.use("*", secureHeaders());
@@ -42,6 +57,8 @@ app.use(
 
 // Nothing about the host: once a tunnel is open, anyone can call this.
 app.get("/api/health", (c) => c.json({ ok: true }));
+
+app.route("/api", historyRoutes(history));
 
 const reviewRequest = z.object({
   /** Relative to the configured root. Confined to it by `ingest`. */
@@ -75,6 +92,8 @@ async function review(target: string) {
  */
 const recent = new Map<string, Promise<ReviewResult>>();
 const proposer = config.aiReview ? createClaudeProposer(new Anthropic() as never) : undefined;
+/** Every review reads code in a sealed-off process (sandbox/sandbox.ts). */
+const sealedReview = createSandbox();
 
 function reviewOnce(snapshot: RepoSnapshot): Promise<ReviewResult> {
   const hash = createHash("sha256");
@@ -85,7 +104,7 @@ function reviewOnce(snapshot: RepoSnapshot): Promise<ReviewResult> {
 
   let pending = recent.get(key);
   if (!pending) {
-    pending = runSecurityReview(snapshot, {
+    pending = sealedReview(snapshot, {
       ...(config.packageLookup ? { vulnerabilities: createOsvSource() } : {}),
       ...(proposer ? { proposer } : {}),
     });
@@ -129,6 +148,8 @@ app.post("/api/github/webhook", bodyLimit({ maxSize: 5 * 1024 * 1024 }), async (
       secret: config.github.webhookSecret,
       credentials: { appId: config.github.appId, privateKey: config.github.privateKey },
       review: reviewOnce,
+      ...(history ? { history } : {}),
+      ...(config.publicUrl ? { publicUrl: config.publicUrl } : {}),
       // Answer GitHub now, review afterwards.
       schedule: (task) => void task(),
     },
@@ -145,19 +166,39 @@ app.post("/api/github/webhook", bodyLimit({ maxSize: 5 * 1024 * 1024 }), async (
  * checklist flags exactly this leak under A10. The detail goes to the log,
  * where only the operator sees it.
  */
-function failure(c: Parameters<Parameters<Hono["get"]>[1]>[0], error: unknown) {
+function failure(c: Context, error: unknown) {
   if (error instanceof PathOutsideRootError) {
     return c.json({ error: "That folder is outside the area this server may read." }, 403);
+  }
+  if (error instanceof ReviewStoppedError) {
+    console.error("review stopped:", error.reason);
+    return c.json({ error: error.userMessage }, 500);
   }
 
   console.error("review failed:", error);
   return c.json({ error: "The review could not be completed." }, 500);
 }
 
+/**
+ * The built dashboard (`npm run build --workspace @aegis/app`), so the links in
+ * GitHub checks open on the same address as the API. Each page the dashboard
+ * has gets its one HTML file, which then picks what to show; anything else is
+ * a 404 rather than a page.
+ */
+const dashboard = fileURLToPath(new URL("../../app/dist", import.meta.url));
+if (existsSync(dashboard)) {
+  app.use("/assets/*", serveStatic({ root: dashboard }));
+  for (const page of ["/", "/reviews/:id", "/history/:id"]) {
+    app.get(page, serveStatic({ root: dashboard, path: "index.html" }));
+  }
+}
+
 serve({ fetch: app.fetch, port: config.port }, (info) => {
   console.log(`review API listening on http://localhost:${info.port}`);
   console.log(`reviewing folders under ${config.reviewRoot}`);
   console.log(config.github ? "GitHub App connected" : "GitHub App not configured");
+  console.log(history ? "Review history ON (PostgreSQL)" : "Review history off (no DATABASE_URL)");
+  console.log(existsSync(dashboard) ? "Dashboard served from app/dist" : "Dashboard not built; run it with Vite instead");
   console.log(config.aiReview ? "AI suggestions ON (costs API credit per new review)" : "AI suggestions off");
 });
 

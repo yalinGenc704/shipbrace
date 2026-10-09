@@ -17,8 +17,9 @@ user + their LLM  ->  repo  ->  git push  ->  GitHub App webhook
 ```
 
 GitHub and Cloudflare are the two prerequisite accounts because they are the two
-systems the platform acts on. **Built today:** a stateless review API that reads a
-local folder. **Not built:** GitHub App, webhooks, deploy, persistence.
+systems the platform acts on. **Built today:** a review API that reads a local
+folder; a GitHub App that reviews each push and posts a check; review history in
+PostgreSQL. **Not built:** deploy, hosting, sign-in.
 
 ## The security review
 
@@ -135,12 +136,53 @@ Everything scanned is someone else's code and must be treated as hostile.
 - **Redact at the boundary.** Excerpts are redacted before a finding exists, so the
   system reporting a leaked key never copies it into logs or the UI.
 
-**Open item.** An earlier version of this document required any rule needing a real
-parse to run in a sandbox with no network and a time limit. Parsing now happens
-in-process and unsandboxed. Parsing does not execute code, which removes the main
-risk, but oxc-parser is native code fed hostile input, and a parser bug is a real
-possibility. Before reviewing repositories from untrusted users, parsing should move
-into an isolated worker with a time and memory limit.
+### The sealed review process (2026-10-09)
+
+oxc-parser is native code fed hostile input, and a parser bug is a real
+possibility. So the server never parses in its own process: each review runs in
+a child process (`server/src/sandbox/`) with
+
+- an empty environment: no API key, GitHub key or database address to steal;
+- Node's permission model: reads only from `node_modules/`, `packages/` and the
+  worker's own folder (not the project root, where `.env` and `github-app.pem`
+  live), and no network, file writes, child processes or worker threads;
+- a work-time limit (60 s; time spent waiting for the AI or the package lookup
+  is not counted) and a JavaScript memory limit (1 GB), enforced by killing it;
+- at most two at once.
+
+A child process rather than a worker thread because a worker shares the
+server's memory: a native crash in a worker takes the server with it.
+
+The AI step and the package lookup stay in the server and answer the child over
+the process channel, each at most once per review; a child that asks for more
+is stopped. Tests run deliberately misbehaving children (hang, memory blow-up,
+crash, snooping for files, network and secrets) to prove each wall holds, and
+all 56 benchmark apps give identical results sealed and unsealed.
+
+**What it does not do.** The permission model is enforced in Node's JavaScript
+layer; addons must be allowed for the parser to load, and native code that has
+been taken over could step around it. The memory limit covers JavaScript memory,
+not the parser's own. The complete seal is the operating system's, and comes
+with hosting: run the server in a container with no outbound network for the
+review process, a read-only filesystem, a memory cap, and a non-root user.
+
+## Review history (2026-10-09)
+
+Each review of a push is kept in PostgreSQL (`server/src/history.ts`), written
+once and never updated, labelled with its commit and time, so an old result is
+never read as the state of today's code. Repositories are keyed by GitHub's id,
+which survives renames. The full `ReviewResult` is stored, so the dashboard
+renders a kept review exactly as it was produced.
+
+There is no sign-in yet, so a review and a repository's history are reached by
+unguessable links (144 random bits) that only the GitHub check shows -- the
+people with access to the repository. Responses are `no-store` and `noindex`.
+That is a stopgap: kept reviews belong behind sign-in (step 4), with a
+retention period and deletion on uninstall (docs/legal, section 4).
+
+If saving fails, the check is still posted in full, without links: a database
+outage must never withhold a risk. The server also serves the built dashboard
+(`app/dist`), so the links open on the same address as the API.
 
 ## Secrets custody (planned)
 

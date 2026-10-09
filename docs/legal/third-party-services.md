@@ -48,6 +48,16 @@ recognises before sending, but cannot promise to catch all of them).
 - Private package names, to anyone.
 - Secrets the platform recognises: they are redacted before any finding exists.
 
+### What is kept (added 2026-10-09)
+
+Not sent anywhere, but stored, so the privacy policy must cover it. With a
+database configured, every review of a GitHub push is kept: the repository's
+name and owner, the commit, and the full review, which includes short
+excerpts of the code around each finding (redacted as above). Nothing is
+deleted yet. Until sign-in exists, a kept review is reached by an unguessable
+link that only the GitHub check shows; anyone that link is passed to can
+read it.
+
 ## 4. Before launch: checklist
 
 1. Show both disclosures (sections 1 and 2) during sign-up, before the first
@@ -56,6 +66,9 @@ recognises before sending, but cannot promise to catch all of them).
 3. Publish a privacy policy that includes section 5.
 4. Sign the AI provider's data processing agreement.
 5. Have a lawyer review this page and the policy.
+6. Decide how long kept reviews are stored, delete them after that, and
+   delete a repository's reviews when the App is uninstalled from it. Put
+   kept reviews behind sign-in.
 
 ## 5. Draft privacy policy text
 
