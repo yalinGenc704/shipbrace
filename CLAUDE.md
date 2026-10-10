@@ -299,7 +299,9 @@ Proposed 2026-10-09, not yet agreed.
      around $10/year.
    - Packaging done and tested on the Mac (2026-10-09; see `deploy/README.md`).
      Left: Murat rents the server and buys the domain, then go live together
-     (deploy/README.md steps 1-9), and decide on off-server backups.
+     (deploy/README.md steps 1-9), and decide on off-server backups. The
+     domain is `shipbrace.com` (bought 2026-10-09); provider recommended:
+     Hetzner CX23 in Germany, with backups on.
 
 ### Required before anyone else uses it
 
@@ -310,8 +312,12 @@ Proposed 2026-10-09, not yet agreed.
    ~1-2 sessions. Also: put kept reviews behind sign-in, decide how long they
    are kept, and make the "your call" ticks per repository (today they are
    per browser, shared across every repository).
-5. **A real product name.** "Aegis" is crowded (several security tools for
-   AI-built apps use it); choose one and have it trademark-checked.
+5. **A real product name.** Chosen 2026-10-09: **ShipBrace** (a brace holds
+   a structure steady while it is built). Murat bought `shipbrace.com` on
+   Cloudflare the same day. Left: a trademark check, then the code, dashboard, GitHub App and repository are renamed
+   from Aegis. Rejected: Foreman (a 2026 AI dev tool has it), MergeStrike
+   (jargon, sounds like attacking), AppSec.io (generic, cannot be protected),
+   PushSentinel (Microsoft Sentinel / SentinelOne trademark risk).
 
 ### The rest of the original vision
 
