@@ -1,0 +1,145 @@
+# Aegis on a server. Run from this folder: `docker compose up -d --build`.
+# Settings come from deploy/.env (copy .env.production.example; never commit
+# it) and the GitHub App key from deploy/secrets/github-app.pem.
+#
+# What can reach what:
+#
+#   internet ── Cloudflare ══ cloudflared ──▶ aegis ──▶ postgres     (backend: no internet)
+#                                               │
+#                                               └─ socket ─▶ reviewer   (no network at all)
+#
+# Nothing listens on the server's own address: the only way in is the tunnel,
+# which cloudflared opens outwards. Every container runs without root, cannot
+# gain privileges, and has a memory cap; the two that run Aegis have read-only
+# disks.
+
+name: aegis
+
+x-locked-down: &locked-down
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  tmpfs: ["/tmp:size=64m"]
+
+services:
+  aegis:
+    <<: *locked-down
+    build: ..
+    image: aegis:local
+    env_file: .env
+    environment:
+      PORT: "3000"
+      LOCAL_REVIEW: "off"
+      REVIEWER_SOCKET: /run/aegis/reviewer.sock
+      DATABASE_URL: postgres://aegis:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}@postgres:5432/aegis
+      GITHUB_PRIVATE_KEY_PATH: /run/secrets/github-app.pem
+    secrets: [github-app.pem]
+    volumes:
+      - reviewer-socket:/run/aegis
+    networks: [backend, outside]
+    depends_on:
+      postgres: { condition: service_healthy }
+      reviewer: { condition: service_started }
+    mem_limit: 768m
+    pids_limit: 128
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/health').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Reads users' code. No network of any kind: if the parser were ever taken
+  # over, there is nowhere to send anything and nothing to reach.
+  reviewer:
+    <<: *locked-down
+    image: aegis:local
+    command: ["node", "--experimental-strip-types", "server/src/sandbox/reviewer.ts"]
+    environment:
+      REVIEWER_SOCKET: /run/aegis/reviewer.sock
+    volumes:
+      - reviewer-socket:/run/aegis
+    network_mode: none
+    # Two reviews at 1 GB of JavaScript memory each, plus the parser's own.
+    mem_limit: 2560m
+    pids_limit: 64
+
+  postgres:
+    <<: *locked-down
+    image: postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
+    # Postgres needs to set up its own folders and switch to its own user.
+    read_only: false
+    cap_add: [CHOWN, SETUID, SETGID, FOWNER, DAC_OVERRIDE]
+    environment:
+      POSTGRES_DB: aegis
+      POSTGRES_USER: aegis
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}
+    volumes:
+      - pgdata:/var/lib/postgresql
+    networks: [backend]
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "aegis", "-d", "aegis"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # A copy of the database every night, the last 14 kept. These stay on this
+  # server; copying them elsewhere is part of hosting (see deploy/README.md).
+  backup:
+    <<: *locked-down
+    image: postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
+    # Root inside the container, but with every capability dropped: it can
+    # write to its own backup folder and nothing else of consequence.
+    environment:
+      PGHOST: postgres
+      PGUSER: aegis
+      PGDATABASE: aegis
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}
+    entrypoint:
+      - sh
+      - -c
+      - |
+        while true; do
+          pg_dump --format=custom --file="/backups/aegis-$$(date -u +%Y-%m-%d).dump.tmp" \
+            && mv "/backups/aegis-$$(date -u +%Y-%m-%d).dump.tmp" "/backups/aegis-$$(date -u +%Y-%m-%d).dump" \
+            && echo "backup written" || echo "backup FAILED"
+          find /backups -name 'aegis-*.dump' -mtime +14 -delete
+          sleep 86400
+        done
+    volumes:
+      - backups:/backups
+    networks: [backend]
+    # After the server, which creates the tables before it reports healthy;
+    # otherwise the first backup is of an empty database.
+    depends_on:
+      aegis: { condition: service_healthy }
+    mem_limit: 256m
+
+  cloudflared:
+    <<: *locked-down
+    image: cloudflare/cloudflared:2026.10.0@sha256:9b49eed8f62806d5d45ddf59ecefb5710429598ea6d3fcccd2af938f621b2b07
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    networks: [outside]
+    depends_on:
+      aegis: { condition: service_healthy }
+    mem_limit: 256m
+    profiles: [tunnel]
+
+secrets:
+  github-app.pem:
+    file: ./secrets/github-app.pem
+
+volumes:
+  pgdata:
+  backups:
+  reviewer-socket:
+
+networks:
+  # Database traffic only; containers here cannot reach the internet.
+  backend:
+    internal: true
+  # Outbound: GitHub, the AI provider, OSV.dev, and Cloudflare.
+  outside:

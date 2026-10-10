@@ -1,0 +1,13 @@
+# Trial run on a laptop only: turns the folder review on against a sample app
+# and opens the server on this machine's own address, so a review can be sent
+# through every container. Never use on a server.
+#   docker compose -f compose.yaml -f compose.local-test.yaml up -d --build
+services:
+  aegis:
+    environment:
+      LOCAL_REVIEW: "on"
+      REVIEW_ROOT: /samples
+    volumes:
+      - ../server/test/deploy-samples:/samples:ro
+    ports:
+      - "127.0.0.1:3200:3000"

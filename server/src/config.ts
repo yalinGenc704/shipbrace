@@ -55,6 +55,11 @@ const schema = z.object({
    * reviews of the server's own files, so hosting turns it off.
    */
   LOCAL_REVIEW: z.enum(["on", "off"]).default("on"),
+  /**
+   * Where the review container listens (hosting). Without it, reviews run in
+   * a sealed process on this machine instead (sandbox/sandbox.ts).
+   */
+  REVIEWER_SOCKET: z.string().startsWith("/", "REVIEWER_SOCKET must be an absolute path").optional(),
   PUBLIC_URL: z
     .url()
     .refine((value) => /^https:\/\//.test(value) || /^http:\/\/localhost(:\d+)?\/?$/.test(value), {
@@ -81,6 +86,7 @@ export const config = {
   aiReview: aiReviewEnabled(parsed.data),
   github: githubConfig(parsed.data),
   localReview: parsed.data.LOCAL_REVIEW === "on",
+  reviewerSocket: parsed.data.REVIEWER_SOCKET ?? null,
   databaseUrl: parsed.data.DATABASE_URL ?? null,
   publicUrl: publicUrl(parsed.data),
 };

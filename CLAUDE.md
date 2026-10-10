@@ -53,6 +53,7 @@ review     → ten OWASP Top 10:2025 modules for the user
 | `packages/scaffold/` | Generates new apps from composable modules; `auth` is a per-app setting |
 | `server/` | Review API (`GET`/`POST /api/review`), GitHub webhook, kept reviews (`/api/reviews/:id`, `/api/history/:id`); serves `app/dist` when built |
 | `server/src/sandbox/` | **Every review runs here**, in a sealed child process: no secrets, no network, reads limited to Aegis's code, time and memory limits |
+| `Dockerfile`, `deploy/` | **Hosting.** One image, two roles (server, reviewer); `deploy/compose.yaml` runs aegis, reviewer, postgres, backup, cloudflared; `deploy/README.md` is the server setup guide |
 | `server/src/history.ts` | Review history in PostgreSQL: schema migrations, save, read back by unguessable link |
 | `app/` | React dashboard: the live review at `/`, a kept review at `/reviews/:id`, a repository's history at `/history/:id` |
 | `scripts/simulate.ts` | Reviews a folder with and without a model and reports the difference |
@@ -81,7 +82,7 @@ everywhere:
 # PostgreSQL 18 (Homebrew, not started at login). Databases: aegis, aegis_test.
 LC_ALL=en_US.UTF-8 /opt/homebrew/opt/postgresql@18/bin/pg_ctl -D /opt/homebrew/var/postgresql@18 -l /opt/homebrew/var/log/postgresql@18.log start
 
-# all tests (expect 174 pass). Without TEST_DATABASE_URL the 6 database tests
+# all tests (expect 181 pass). Without TEST_DATABASE_URL the 6 database tests
 # are skipped and say so; it must name a database ending in _test (it is wiped).
 TEST_DATABASE_URL=postgres:///aegis_test node --experimental-strip-types --test packages/guardrails/test/*.test.ts packages/scaffold/test/*.test.ts server/test/*.test.ts
 
@@ -97,6 +98,10 @@ npm run dev --workspace @aegis/app
 
 # benchmark scores (add --model, with --env-file=.env, to include Claude; costs credit)
 node --experimental-strip-types scripts/bench.ts
+
+# the hosted setup on this Mac (Colima runs Docker; `colima start` first).
+# Throwaway values only in deploy/.env and deploy/secrets/; delete afterwards.
+cd deploy && docker compose -f compose.yaml -f compose.local-test.yaml up -d --build
 
 # compare review with and without a model (costs API credit)
 node --experimental-strip-types --env-file=.env scripts/simulate.ts <folder>
@@ -257,6 +262,15 @@ launch entry expects `~/aegis-test-repos/dvna.env` there.
   about 1 in 100,000 is wrongly skipped. Test fixtures that must look real
   assemble their keys at runtime. One false lead remains: a README sample in
   `scaffold/src/modules/base.ts` shows a SQL example (step 8).
+- **Hosting is packaged and tested locally (2026-10-09)**, not yet on a
+  server. The reviewer runs in its own container with `network_mode: none`,
+  talking to the server over a Unix socket (`sandbox/channel.ts`,
+  `remote.ts`, `reviewer.ts`): V8 format towards the reviewer, size-capped
+  JSON back, each outside step at most once, stop reasons from a fixed list.
+  Verified with Colima: a review through every container; reviewer reaches
+  neither internet nor database; database has no internet; read-only disks,
+  uid 1000; no published ports; reviewer outage reported plainly; a backup
+  restored. Backups stay on the server: off-server copies are undecided.
 - **The query check trusts tagged templates by name** (`SAFE_TAG`: `sql`, `db`,
   `query`). postgres.js transactions are usually written `` tx`...` ``, which
   gets a false "worth a look"; `history.ts` names its transaction `sql` to
@@ -283,9 +297,9 @@ Proposed 2026-10-09, not yet agreed.
    - *A domain name* added to Cloudflare, so the tunnel has a permanent
      address and the GitHub App's webhook URL never changes again. Typically
      around $10/year.
-   - Also needed: the container is the full seal for step 3 (no outbound
-     network for the review process, read-only filesystem, memory cap,
-     non-root user), PostgreSQL in Docker, and `PUBLIC_URL` set to the domain.
+   - Packaging done and tested on the Mac (2026-10-09; see `deploy/README.md`).
+     Left: Murat rents the server and buys the domain, then go live together
+     (deploy/README.md steps 1-9), and decide on off-server backups.
 
 ### Required before anyone else uses it
 

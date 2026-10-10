@@ -159,12 +159,20 @@ is stopped. Tests run deliberately misbehaving children (hang, memory blow-up,
 crash, snooping for files, network and secrets) to prove each wall holds, and
 all 56 benchmark apps give identical results sealed and unsealed.
 
-**What it does not do.** The permission model is enforced in Node's JavaScript
-layer; addons must be allowed for the parser to load, and native code that has
-been taken over could step around it. The memory limit covers JavaScript memory,
-not the parser's own. The complete seal is the operating system's, and comes
-with hosting: run the server in a container with no outbound network for the
-review process, a read-only filesystem, a memory cap, and a non-root user.
+**What it does not do on its own.** The permission model is enforced in Node's
+JavaScript layer; addons must be allowed for the parser to load, and native code
+that has been taken over could step around it. The memory limit covers
+JavaScript memory, not the parser's own.
+
+**Hosted, the operating system closes that gap** (`deploy/compose.yaml`). The
+reviewer is its own container with no network interface at all, a read-only
+disk, no capabilities, a non-root user and a memory cap; it holds no secrets and
+cannot reach the database. It talks to the server only over a Unix socket on a
+shared volume. That channel is asymmetric on purpose: the server sends V8's
+format (snapshots hold Maps and Sets), the reviewer answers in size-capped JSON,
+and the server treats every answer as untrusted -- each outside step at most
+once, stop reasons from a fixed list, a result that must have the right shape,
+and a time limit whatever the reviewer claims.
 
 ## Review history (2026-10-09)
 

@@ -1,0 +1,12 @@
+# Never sent to the image build: secrets, local installs, git history.
+.env
+.env.*
+*.pem
+deploy/.env
+deploy/secrets
+node_modules
+**/node_modules
+app/dist
+.git
+*.log
+.DS_Store

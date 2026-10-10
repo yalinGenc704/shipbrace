@@ -15,6 +15,7 @@ import { handleWebhook } from "./github/webhook.ts";
 import { connect, migrate, postgresHistory, type ReviewHistory } from "./history.ts";
 import { historyRoutes } from "./history-routes.ts";
 import { ingest, PathOutsideRootError } from "./ingest.ts";
+import { createRemoteReviewer } from "./sandbox/remote.ts";
 import { createSandbox, ReviewStoppedError } from "./sandbox/sandbox.ts";
 
 /**
@@ -113,8 +114,11 @@ async function review(target: string) {
  */
 const recent = new Map<string, Promise<ReviewResult>>();
 const proposer = config.aiReview ? createClaudeProposer(new Anthropic() as never) : undefined;
-/** Every review reads code in a sealed-off process (sandbox/sandbox.ts). */
-const sealedReview = createSandbox();
+/**
+ * Every review reads code sealed off: in the review container when hosted
+ * (sandbox/reviewer.ts), otherwise in a sealed process here (sandbox/sandbox.ts).
+ */
+const sealedReview = config.reviewerSocket ? createRemoteReviewer(config.reviewerSocket) : createSandbox();
 
 function reviewOnce(snapshot: RepoSnapshot): Promise<ReviewResult> {
   const hash = createHash("sha256");
@@ -221,6 +225,7 @@ serve({ fetch: app.fetch, port: config.port }, (info) => {
   console.log(`review API listening on http://localhost:${info.port}`);
   console.log(config.localReview ? `reviewing folders under ${config.reviewRoot}` : "Folder reviews off (LOCAL_REVIEW=off)");
   console.log(config.github ? "GitHub App connected" : "GitHub App not configured");
+  console.log(config.reviewerSocket ? `Reviews run in the review container (${config.reviewerSocket})` : "Reviews run in a sealed process on this machine");
   console.log(history ? "Review history ON (PostgreSQL)" : "Review history off (no DATABASE_URL)");
   console.log(existsSync(dashboard) ? "Dashboard served from app/dist" : "Dashboard not built; run it with Vite instead");
   console.log(config.aiReview ? "AI suggestions ON (costs API credit per new review)" : "AI suggestions off");
