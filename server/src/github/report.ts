@@ -1,4 +1,4 @@
-import type { ReviewResult } from "@aegis/guardrails";
+import type { ReviewResult } from "@shipbrace/guardrails";
 
 /**
  * A review, as a GitHub check on the commit: a mark next to the change, a

@@ -1,5 +1,5 @@
 import { LINK_ID, newLinkId } from "./links.ts";
-import type { ReviewResult } from "@aegis/guardrails";
+import type { ReviewResult } from "@shipbrace/guardrails";
 import postgres from "postgres";
 import type { Conclusion } from "./github/report.ts";
 
@@ -118,7 +118,7 @@ type Sql = postgres.Sql;
  */
 export async function migrate(sql: Sql): Promise<void> {
   await sql.begin(async (sql) => {
-    await sql`SELECT pg_advisory_xact_lock(hashtext('aegis.migrate'))`;
+    await sql`SELECT pg_advisory_xact_lock(hashtext('shipbrace.migrate'))`;
     await sql`CREATE TABLE IF NOT EXISTS schema_migrations (
       version    integer PRIMARY KEY,
       applied_at timestamptz NOT NULL DEFAULT now()

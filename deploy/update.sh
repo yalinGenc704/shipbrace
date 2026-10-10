@@ -1,6 +1,6 @@
 #!/bin/sh
 # Brings the server up to the latest version on GitHub. Run on the server, from
-# anywhere:  sh ~/aegis/deploy/update.sh
+# anywhere:  sh ~/shipbrace/deploy/update.sh
 #
 # Only fast-forward updates are taken, so a surprise rewrite of history on
 # GitHub stops the update instead of being applied. The database and backups

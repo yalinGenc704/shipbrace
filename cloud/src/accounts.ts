@@ -1,4 +1,4 @@
-import { appJwt } from "@aegis/server/github/auth.ts";
+import { appJwt } from "@shipbrace/server/github/auth.ts";
 import { Hono, type Context } from "hono";
 import { randomToken } from "./crypto.ts";
 import type { Env } from "./env.ts";

@@ -8,7 +8,7 @@ import { redact } from "../src/util.ts";
 const file = (path: string, content: string) => ({ path, content });
 
 // Shaped like real keys, but assembled here so this file never holds one whole:
-// Aegis reviews its own code, and a test fixture should not read as a leak.
+// ShipBrace reviews its own code, and a test fixture should not read as a leak.
 const OPENAI_KEY = ["sk", "Q7vR2mX9pL4tW8nK3sB6"].join("-");
 const GITHUB_TOKEN = ["ghp", "Zr4Kq9Lm2Xv8Tn5Wb7Pc3Hd6Jf1Sg0Ya4Ue9"].join("_");
 

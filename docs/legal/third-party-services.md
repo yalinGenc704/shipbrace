@@ -1,6 +1,6 @@
 # Data that leaves the platform
 
-What Aegis sends to outside services, what users must be told, and what the
+What ShipBrace sends to outside services, what users must be told, and what the
 product already does about it. Written 2026-10-01.
 
 **This is not legal advice.** It records the reasoning behind the product's

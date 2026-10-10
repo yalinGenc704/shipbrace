@@ -1,7 +1,7 @@
 import { fork } from "node:child_process";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { RepoSnapshot, ReviewOptions, ReviewResult } from "@aegis/guardrails";
+import type { RepoSnapshot, ReviewOptions, ReviewResult } from "@shipbrace/guardrails";
 import { ReviewStoppedError } from "./stopped.ts";
 import type { FromWorker, ToWorker } from "./worker.ts";
 
@@ -18,7 +18,7 @@ export { ReviewStoppedError };
  *
  *   - no secrets: the environment is empty, so there is no API key, GitHub key
  *     or database address to steal;
- *   - Node's permission model: files may be read only from Aegis's own code
+ *   - Node's permission model: files may be read only from ShipBrace's own code
  *     (not .env, not the App's key), and no network, no writing, no starting
  *     other programs, no worker threads;
  *   - a time limit on the work itself (time spent waiting for the AI is not

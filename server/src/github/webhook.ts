@@ -1,4 +1,4 @@
-import type { RepoSnapshot, ReviewResult } from "@aegis/guardrails";
+import type { RepoSnapshot, ReviewResult } from "@shipbrace/guardrails";
 import type { ReviewHistory } from "../history.ts";
 import { verifyWebhookSignature } from "./auth.ts";
 import { installationClient, type AppCredentials, type GitHubClient } from "./client.ts";
@@ -69,7 +69,7 @@ interface PushEvent {
   installation?: { id?: number };
 }
 
-const CHECK_NAME = "Aegis security review";
+const CHECK_NAME = "ShipBrace security review";
 const NO_COMMIT = /^0+$/;
 const ANNOTATIONS_PER_REQUEST = 50;
 

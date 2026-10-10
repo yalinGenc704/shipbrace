@@ -1,4 +1,4 @@
-import type { Risk } from "@aegis/guardrails";
+import type { Risk } from "@shipbrace/guardrails";
 import { FileCode2, MoveRight } from "lucide-react";
 import type { Mode } from "../lib/review.ts";
 import { Field, GradeBadge } from "./ui.tsx";

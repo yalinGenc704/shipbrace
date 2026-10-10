@@ -1,4 +1,4 @@
-import type { ReviewResult } from "@aegis/guardrails";
+import type { ReviewResult } from "@shipbrace/guardrails";
 import { ArcElement, Chart, Legend, Tooltip } from "chart.js";
 import { Download } from "lucide-react";
 import { Doughnut } from "react-chartjs-2";

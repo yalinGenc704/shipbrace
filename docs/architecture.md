@@ -3,7 +3,7 @@
 Why the system is shaped the way it is. For what exists and how to run it, see
 `CLAUDE.md`. Items marked **planned** are design intent, not built.
 
-## The seam: the repository, not the LLM (planned)
+## The seam: the repository, not the LLM
 
 The product must work with whichever LLM the user has chosen. Integrating
 per-vendor does not scale and breaks whenever a vendor ships a new client. So the
@@ -17,9 +17,9 @@ user + their LLM  ->  repo  ->  git push  ->  GitHub App webhook
 ```
 
 GitHub and Cloudflare are the two prerequisite accounts because they are the two
-systems the platform acts on. **Built today:** a review API that reads a local
-folder; a GitHub App that reviews each push and posts a check; review history in
-PostgreSQL. **Not built:** deploy, hosting, sign-in.
+systems the platform acts on. **Built:** the review, the GitHub App that reviews
+each push and posts a check, sign-in with GitHub, review history, and hosting on
+Cloudflare. **Not built:** the gate and deploy steps.
 
 ## The security review
 
@@ -94,8 +94,14 @@ Recorded because the conclusion is easy to get wrong.
   whether this is systematic.
 
 The verifier accepts claims from anything, so the valuable half does not depend on
-the model. Generating claims without one (a pattern catalogue, or pairing every
-source with every sink) is the obvious next experiment.
+the model.
+
+**What happened next (2026-10-01).** Pairing every input with every kind of
+operation, decided by the same verifier, was built and now runs without a model.
+That left the model one distinct job: judging which records are private
+("ownership"), which rules cannot know. With the defensive prompt and that task,
+the model ran on all 31 apps of the benchmark at the time with no refusals and
+matched a perfect suggester exactly, with no false alarms.
 
 ## One finding set, two views
 
@@ -115,8 +121,8 @@ supply-chain items left integrity), so a user's review ticks carry over.
 An item may report `pass` only if a detector actually ran. An item with no detector,
 or whose detector could not run here (no compose file to read, no passwords to
 check), is handed back to the user with the reason. A false "pass" is worse than no
-report: it tells the user to stop looking where they still need to. Today 18 of 35
-items have a detector.
+report: it tells the user to stop looking where they still need to. Today 22 of 38
+items have a detector (counted 2026-10-09).
 
 ## Confidence gates automation
 
@@ -174,31 +180,69 @@ and the server treats every answer as untrusted -- each outside step at most
 once, stop reasons from a fixed list, a result that must have the right shape,
 and a time limit whatever the reviewer claims.
 
-## Review history (2026-10-09)
+## Review history
 
-Each review of a push is kept in PostgreSQL (`server/src/history.ts`), written
-once and never updated, labelled with its commit and time, so an old result is
-never read as the state of today's code. Repositories are keyed by GitHub's id,
-which survives renames. The full `ReviewResult` is stored, so the dashboard
-renders a kept review exactly as it was produced.
+Each review is kept, written once and never updated, labelled with its commit
+and time, so an old result is never read as the state of today's code.
+Repositories are keyed by GitHub's id, which survives renames. The full
+`ReviewResult` is stored, so a kept review renders exactly as it was produced.
+Hosted, it lives in Cloudflare D1 (`cloud/src/history-d1.ts`); on a single
+machine, in PostgreSQL (`server/src/history.ts`); both behave the same.
 
-There is no sign-in yet, so a review and a repository's history are reached by
-unguessable links (144 random bits) that only the GitHub check shows -- the
-people with access to the repository. Responses are `no-store` and `noindex`.
-That is a stopgap: kept reviews belong behind sign-in (step 4), with a
-retention period and deletion on uninstall (docs/legal, section 4).
+A review is reached by an unguessable address, but the address alone is not
+enough: the reader must be signed in, and GitHub must say they can see the
+repository, asked again at most five minutes later. Someone removed from a
+repository loses its reviews too. Reviews are deleted after 90 days, and at
+once when the App is uninstalled or the repository removed from it.
 
 If saving fails, the check is still posted in full, without links: a database
-outage must never withhold a risk. The server also serves the built dashboard
-(`app/dist`), so the links open on the same address as the API.
+outage must never withhold a risk.
 
-## Secrets custody (planned)
+## Hosting on Cloudflare
 
-Hosting means holding GitHub and Cloudflare tokens for every user.
+```
+GitHub push ──▶ Worker: verify signature, queue, answer at once
+                  │
+                  ▼
+                queue job ──▶ fetch the commit ──▶ reviewer container ──▶ check + D1
+```
 
-1. GitHub App installation tokens only: one-hour expiry, minted per operation.
-2. Cloudflare tokens scoped per user, encrypted at rest with a per-tenant key, and
-   never returned by any API route.
+The Worker answers GitHub within milliseconds and hands the push to a queue,
+because a review can outlast GitHub's ten-second wait. The queue job reviews in
+a fresh container per review, destroyed afterwards, so nothing carries over
+between repositories and nothing runs when nobody is pushing. Jobs are never
+retried: a failed review already says so on the check, and a retry would post a
+second check for the same commit.
+
+The container has `enableInternet = false`. Its single way out is the made-up
+host `shipbrace.internal`, whose requests Cloudflare hands to the Worker; that
+is how the reviewer asks for the AI's suggestions and the package lookup, each
+at most once per review and only if switched on for that installation.
+`cloud/wall-check` is a throwaway probe that re-proves the wall on Cloudflare
+itself: web, raw-IP, socket and DNS attempts all fail, the permitted host works.
+
+`deploy/` holds the same system as Docker Compose for an ordinary server, where
+the operating system gives the reviewer the same isolation (`network_mode:
+none`, read-only, no capabilities).
+
+## Who can do what
+
+Sign-in uses the GitHub App's own user authorization, so the token can only
+ever reach what both the person and the App can reach. Starting a review needs
+write access to the repository: a review is a map of an app's weak spots, and
+ShipBrace must not hand one to a stranger for someone else's site. Reading a
+kept review needs read access. Nothing is reviewed, so nothing leaves the
+platform, until the person has accepted the current notices; an installation's
+pushes are reviewed only once someone has set it up that way.
+
+## Secrets custody
+
+1. **Built:** GitHub App installation tokens only for reading code: one-hour
+   expiry, minted per review, never stored.
+2. **Built:** people's GitHub sign-in tokens are encrypted at rest (AES-GCM,
+   `SESSION_KEY`); sessions are stored only as the SHA-256 of the cookie value.
+3. **Planned, with deployment:** Cloudflare tokens scoped per user, encrypted at
+   rest with a per-tenant key, and never returned by any API route.
 
 ## Deviations from the original stack spec
 

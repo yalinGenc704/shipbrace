@@ -1,4 +1,4 @@
-import type { Grade, ItemStatus } from "@aegis/guardrails";
+import type { Grade, ItemStatus } from "@shipbrace/guardrails";
 import { AlertTriangle, Check, CircleHelp, ShieldCheck } from "lucide-react";
 import type { ReactNode } from "react";
 

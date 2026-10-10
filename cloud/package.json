@@ -1,5 +1,5 @@
 {
-  "name": "@aegis/cloud",
+  "name": "@shipbrace/cloud",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -9,8 +9,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@aegis/guardrails": "*",
-    "@aegis/server": "*",
+    "@shipbrace/guardrails": "*",
+    "@shipbrace/server": "*",
     "@anthropic-ai/sdk": "0.131.0",
     "@cloudflare/containers": "0.3.7",
     "hono": "4.13.12"

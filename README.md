@@ -1,298 +1,249 @@
-# Aegis
+# ShipBrace
 
-**A safety net for people building websites with AI.**
+[![CI](https://github.com/yalinGenc704/shipbrace/actions/workflows/ci.yml/badge.svg)](https://github.com/yalinGenc704/shipbrace/actions/workflows/ci.yml)
+
+**A safety net for apps built with AI.** Paste a GitHub repository link, and
+ShipBrace reviews the app's security: what is *proven* wrong, why it matters,
+and what to do, in plain language. After that, every push is checked
+automatically and the result appears right on the commit in GitHub.
 
 More and more people build web apps by describing what they want to an AI
-coding assistant, without reading the code themselves. Aegis is meant to sit
-next to whichever assistant they use and quietly take care of the parts that
-need an expert: **security, how the app is put together, and putting it
-online**, so the builder can stay focused on what the app should do.
+coding assistant, without reading the code. ShipBrace is meant to sit next to
+whichever assistant they use and take care of the parts that need an expert:
+**security first**, then how the app is put together, then putting it online.
 
-> **Where it stands today (October 2026):** the **security review** is built
-> and works end to end with GitHub. Generating a solid starting structure for
-> new apps exists as a building block but is not yet offered to users.
-> **Putting users' apps online is not started.** See [What is built](#what-is-built-and-what-is-not).
-
----
-
-## What it does today, in one minute
-
-1. You connect your GitHub repository (where your code lives) to the Aegis
-   GitHub App.
-2. Every time you, or your AI assistant, save changes there (a "push"), GitHub
-   tells Aegis.
-3. Aegis reads the code and checks it against a security checklist.
-4. Usually within a minute, a mark appears next to the change on GitHub:
-   - ❌ **at least one serious problem was proven**
-   - ⚠️ **problems were proven, none serious**
-   - ✅ **no problems were proven**
-5. Clicking it opens a plain-language report: what is wrong, why it matters,
-   what to do, and exactly which line. Past reviews of the repository are
-   kept, so you can see how things changed over time.
-
-Even a ✅ always lists what is still **"your call"**: things no automatic check
-can decide for you. Aegis never says an app is "secure". No tool can honestly
-promise that.
+> **Status (October 2026):** the security review is built and **running live
+> on Cloudflare** at [app.shipbrace.com](https://app.shipbrace.com) (invite-only
+> while in development). Sign-in with GitHub, paste-a-link reviews, automatic
+> reviews on every push, and private review history all work end to end.
+> Deployment of users' apps is not started yet. See [Status](#status).
 
 ---
 
-## How Aegis finds problems
+## How it works
 
-### The one rule everything follows
+```
+ Developer / AI assistant ──push──▶ GitHub ──signed webhook──▶ Cloudflare Worker
+                                                                   │  verify signature,
+       app.shipbrace.com                                           │  queue the push
+       sign in · paste a link ─────────────────────────────────▶  queue
+       read reports                                                │
+            ▲                                                      ▼
+            │                                    fetch the commit from GitHub
+            │                                                      │
+            │                              ┌───────────────────────┴───────────┐
+            │                              │ Reviewer container                │
+            │                              │ internet switched off · no secrets│
+            │                              │ one sealed process per review     │
+            │                              └───────────────────────┬───────────┘
+            │                                                      │
+            └──────── D1 (review history, 90 days) ◀── result ─────┴──▶ GitHub check on the commit
+```
+
+1. **A push or a pasted link** starts a review. A pasted link only works for a
+   repository the signed-in person can change, so ShipBrace cannot be used to
+   map the weak spots of someone else's site.
+2. **The code is fetched from GitHub** file by file and read, never run.
+3. **The reviewer runs in a container with no internet access**, holding no
+   secrets, inside which each review is a separate process with time and
+   memory limits. Its only way out is one host the Worker answers itself.
+4. **The result is posted as a GitHub check**, ❌ / ⚠️ / ✅ on the commit with
+   notes on the exact lines, and kept for 90 days. Reports open only for
+   people GitHub lets see the repository.
+
+---
+
+## The rule the review is built on
 
 > **An AI may suggest where a problem might be. Only rules may decide that it is real.**
 
-AI models are good at imagining where to look, and bad at being certain. They
-can sound just as confident when they are wrong. Someone who cannot read code
-cannot tell the difference, so Aegis never shows them an AI's guess as a fact.
+AI models are good at imagining where to look and bad at being certain: they
+sound just as confident when they are wrong, and someone who cannot read code
+cannot tell the difference. Rules are the opposite: given the same code they
+always give the same answer, and can show how they got it. A rule can miss
+things, but it does not make things up.
 
-**Rules** are the opposite: fixed, written-down checks that follow the code
-step by step. Given the same code, a rule always gives the same answer, and it
-can show exactly how it reached it. A rule can miss things, but it does not make
-things up.
-
-So Aegis works like a newsroom: the AI is a tipster, and the rules are the
-fact-checkers. A tip is only printed once it has been checked and confirmed.
-The review also works **with no AI at all**: no account, no key, no cost.
-
-### The steps
+So the AI is a tipster and the rules are the fact-checkers. The review runs
+fully **with no AI at all**; the optional AI step can only add findings the
+rules then confirm.
 
 ```
-1. Take stock      Find every web address the app answers (its "routes"),
-                   every place a visitor can put something in, and every
-                   dangerous thing the code does.                       rules
-2. Connect         Follow each visitor input through the code to see
-                   whether it reaches a dangerous action unprotected.   rules
-3. Pair up         Try every input against every kind of dangerous
-                   action, in case step 2 missed a connection.          rules
-4. Ask (optional)  Ask an AI which records in the app are private,
-                   such as invoices or messages.                        AI
-5. Verify          Check each suggestion from steps 3 and 4 by
-                   following the code itself. Only a confirmed one
-                   becomes a finding.                                   rules
-6. Report          Sort everything into the ten areas of the checklist.
+1. Take stock      routes, every input a visitor controls, every dangerous operation     rules
+2. Connect         follow each input through the code to a dangerous operation          rules
+3. Pair up         try every input against every kind of operation                      rules
+4. Ask (optional)  an AI suggests which records are private (invoices, messages)        AI
+5. Verify          follow each suggestion through the code; only "proven" survives      rules
+6. Report          sort into the OWASP Top 10 (2025) checklist
 ```
 
-Steps 1-3 always run before the AI is asked anything. So the rules' own
-findings exist on their own, and a repository written to trick the AI cannot
-use it to hide a real problem.
+Steps 1–3 run before the AI is asked anything, so a repository written to
+manipulate the model cannot use it to hide a real finding.
 
-### An example
-
-Suppose an app has the address `/reports/:id`, and the code does this:
+**An example.** Given
 
 ```js
-const id = c.req.param("id");                                  // a visitor types this
-db.query(`SELECT * FROM reports WHERE id = ${id}`);            // pasted straight into a database command
+const id = c.req.param("id");                         // a visitor controls this
+db.query(`SELECT * FROM reports WHERE id = ${id}`);   // pasted into a database command
 ```
 
-Aegis sees that `id` comes from the visitor, follows it to the next line, and
-sees it pasted directly into a database command. A visitor could type database
-instructions instead of a number. Nothing in between checks it. That is
-**proven**, so it is reported as a high risk on that exact line.
+ShipBrace traces `id` from the request into the query with nothing checking it
+on the way, and reports a **proven** high risk on that line. With the safe form
+`` sql`... ${id}` `` it follows the same path, sees the protection, and reports
+nothing.
 
-If the code had instead used the database's safe form (`` sql`... ${id}` ``,
-which keeps the value as data rather than instructions), Aegis would follow the
-same path, see the protection, and report nothing.
+### Every result means exactly one thing
 
-### Four possible results
-
-| Result | What it means |
+| Result | Meaning |
 | --- | --- |
-| **Needs fixing** (a risk) | A rule proved it, by tracing the path or by finding the problem itself (for example, a password written into the code). |
-| **Worth a look, not proven** | A line is written in a risky way, but Aegis could not show that a visitor's input reaches it. Never counted as a risk. |
-| **Your call** | Nothing automatic can decide this one, or the check could not run here. Aegis says so and hands it to you with a plain question. |
-| **Checked** | A check actually ran and found nothing. Aegis says exactly what it checked. Nothing is marked "checked" just because no check exists for it. |
+| **Needs fixing** | A rule proved it: by tracing the path, or because it is the problem itself (a key written into the code). |
+| **Worth a look, not proven** | Written in a risky way, but no visitor input was traced to it. Never counted as a risk. |
+| **Your call** | No automatic check can decide it, or the check could not run here. Handed to the user with a plain question. |
+| **Checked** | A check actually ran and found nothing, and the report says what it checked. Nothing passes just because no check exists. |
 
 ---
 
 ## The rules
 
-"The rules" are all the fixed checks Aegis runs. None of them use AI. They
-come in three kinds.
+All fixed checks, none using AI:
 
-### 1. Following visitor input (the core)
+- **Following visitor input (the core).** Code is parsed into a syntax tree
+  (oxc-parser), so code inside a string is never mistaken for real code.
+  Values are followed from where a visitor controls them (address, body,
+  headers, cookies, uploads, responses from other servers, outsider-controlled
+  settings) into eight kinds of dangerous operation: SQL, MongoDB-style
+  queries, system commands, file access, raw HTML, redirects, outbound
+  requests, and code built at runtime. Validation, parameterised queries and
+  escaping count as protection. Values are followed through helper functions
+  across files. When unsure, the answer is "could not decide", never "safe".
+- **Line-by-line checks.** Keys and tokens written into code (obvious
+  placeholders excepted), committed `.env` files, secrets bundled into
+  browser code, APIs open to every website, login tokens readable by page
+  scripts or signed with a hard-coded key.
+- **Whole-project checks.** Sign-in on every private route and role checks on
+  admin pages, CSRF protection, slow password hashing and password hashes
+  never sent back, expiring sessions, protective headers, error pages that
+  don't leak internals, no public database port, rate limiting, no secrets in
+  logs, pinned versions and a lockfile, and known flaws in dependencies
+  (OSV.dev; only package names and versions are sent, and it can be switched
+  off).
 
-Aegis reads the code the way a compiler does (as a structured tree, not as
-plain text), so it can tell real code from code that only appears inside a
-piece of text. It then follows values from where a **visitor controls them**
-to where they **do something dangerous**.
-
-**Where visitors control values:** the web address and its parts, form and API
-data, headers, cookies, uploaded files, replies from other websites, content
-read from GitHub repositories, and settings an outsider can influence (such as
-a pull request's title). Ordinary settings, like the database address, are
-trusted on purpose.
-
-**Dangerous actions it watches:**
-
-| Action | What can go wrong |
-| --- | --- |
-| Database commands (SQL) | A visitor rewrites the command and reads or deletes data |
-| MongoDB-style queries | A visitor turns a lookup into "match everything" |
-| System commands | A visitor runs their own commands on your server |
-| File access | A visitor reads files outside the intended folder |
-| Page content (HTML) | A visitor injects scripts that run in other people's browsers |
-| Redirects | Your site sends people on to a fake site |
-| Requests to other servers | Your server is tricked into fetching internal addresses |
-| Running code built at runtime | A visitor's text gets run as code |
-
-**What counts as protection on the way:** checking the input against a schema,
-the database's safe "parameterised" form, proper escaping, and similar. It
-follows values through helper functions, including into other files.
-
-When it is unsure (unfamiliar code, a function defined twice, and so on), it
-says "could not decide". **It never guesses "safe".**
-
-### 2. Line-by-line checks
-
-These look for problems that are the problem by themselves:
-
-- passwords, API keys and tokens written directly into the code
-- an environment file with real secrets committed to the repository
-- secret settings that end up in code sent to the browser
-- an API that accepts calls from any website
-- login tokens stored where any script on the page can read them
-- login tokens signed with a key written in the code
-- risky ways of building database queries, commands, code or HTML (shown as
-  "worth a look" unless a visitor's input is traced to them)
-
-### 3. Whole-project checks
-
-These look at how the app is set up as a whole:
-
-- every private page has a sign-in check, and admin pages check the role
-- signed-in users are protected from other websites acting on their behalf (CSRF)
-- passwords are stored with a slow, modern hash, and are never sent back to the browser
-- login sessions expire
-- standard protective browser headers are switched on
-- error pages do not reveal the app's internals
-- the database is not exposed to the internet
-- sensitive actions are rate-limited (limited in how often they can be repeated)
-- logs do not contain passwords or keys
-- package versions are pinned and recorded in a lockfile
-- installed packages have no publicly known security flaws (looked up on
-  OSV.dev, a free public database run by Google; only package names and
-  versions are sent)
-
-### The checklist
-
-Findings are grouped by the **OWASP Top 10 (2025 edition)**, the industry's
-standard list of the ten most common kinds of web-app security problems, in
-order of how often they occur:
-
-1. Who is allowed to do what
-2. Settings that leave the door open
-3. Building blocks you did not write
-4. Protecting passwords, keys and personal data
-5. Visitor input being treated as instructions
-6. Gaps in how the feature was designed
-7. Proving who someone is
-8. Trusting data that could have been tampered with
-9. Noticing when something goes wrong
-10. When something unexpected happens
-
-There are **38 items**. **22 are checked automatically; 16 are handed to you**
-with a plain question, because no rule can answer them. Examples: what personal
-data you store, how someone might deliberately misuse a feature, and whether
-anyone would actually notice an alert.
-
-### What the optional AI step does
-
-Rules cannot know which records in an app are private: whether an invoice
-belongs to one customer, or a message to one person. An AI can make a good
-guess. Aegis asks it, then the rules check the guess. If a private record can be
-looked up by its number by someone signed in, and nothing on the way checks
-*who* is signed in, that is a proven problem. Otherwise the guess is dropped.
-
-The AI step is **off unless switched on**. When it is on, short excerpts of
-code files are sent to the AI provider (Anthropic), with recognised secrets
-removed first.
+The checklist follows the **OWASP Top 10 (2025)**: 38 items, **22 checked
+automatically** and 16 handed to the user with a question no rule can answer,
+such as what personal data the app stores.
 
 ---
 
-## How well it works (honest numbers)
+## Results, honestly
 
-**The test set:** 56 small sample apps with a known answer key: 31 real
-problems and 26 deliberately safe "decoys" built to look dangerous.
+**Benchmark:** 56 sample apps with a known answer key: 31 real problems and
+26 deliberately safe decoys built to look dangerous.
 
 | | Real problems proven | False alarms |
 | --- | --- | --- |
 | Rules alone | 27 of 31 | 0 |
 | With a perfect AI suggester | 30 of 31 | 0 |
 
-With a real AI (Claude) on the earlier, 31-app version of this test set, Aegis
-matched the perfect suggester exactly, with no false alarms and no refusals.
-It has not been re-run on the current 56 apps.
+With Claude as the suggester on the earlier 31-app version of the set, it
+matched the perfect suggester exactly, with no false alarms; not yet re-run on
+all 56. The one problem never found: a stored comment later rendered as raw
+HTML. The scores are ratcheted by a test, so a change that loses one fails CI.
 
-The one problem never found yet: a comment saved by one visitor and later shown
-to others as raw page code.
+**Outside validation** on deliberately vulnerable practice apps (DVNA, OWASP
+NodeGoat, OWASP Juice Shop): 5 of DVNA's 19 documented holes found
+automatically. Not yet detected: XXE, some MongoDB-style injection, default
+session secrets, and sign-in checks written inside a handler. The false alarms
+these apps exposed were fixed and added to the benchmark.
 
-**On real outside apps** (deliberately insecure practice apps used for
-training: DVNA, OWASP NodeGoat, OWASP Juice Shop): Aegis found 5 of DVNA's
-19 documented holes automatically. It does not yet detect XML upload attacks
-(XXE), some MongoDB-style attacks, a session secret left at its default, or
-sign-in checks written inside a page's own code. Testing on these apps also
-uncovered false alarms the sample apps never had. Those were fixed, and the
-sample set grew.
+**ShipBrace reviewing itself:** no proven vulnerabilities. It reports two
+routes as open, and they are: catch-alls that only ever answer "not found",
+which the checker cannot yet tell apart from a route that returns data (a
+known gap). It also lists three "worth a look" notes on queries that build
+`?` placeholders, with every value bound. Each false alarm it raised on its
+own code along the way (fake keys in tests, a log message naming a setting,
+requests to a fixed public API, webhook and sign-in routes) was fixed in the
+checker itself, so users' apps no longer get them either.
 
-The guiding principle: **missing a problem is a gap; inventing one is a
-defect.** Aegis is tuned to say less rather than to be wrong. Warnings about
-correct code teach people to ignore the tool, so each one is treated as a bug.
-
----
-
-## Keeping users' code safe
-
-Everything Aegis reviews is someone else's code, and has to be treated as
-possibly hostile.
-
-- **It is never run.** Aegis only reads it.
-- **It is read in a sealed-off process.** Each review runs separately, with
-  no passwords or keys, no network, no access to other files, and a time and
-  memory limit. A booby-trapped file can stop one review, but not reach
-  anything else.
-- **Secrets are blanked out** before a finding is created, so a leaked key is
-  never copied into reports or logs.
-- **Kept reviews are reached only by unguessable links** shown on the GitHub
-  check, until sign-in exists.
-
-What leaves the platform, and what users must be told, is written down in
-[docs/legal/third-party-services.md](docs/legal/third-party-services.md).
+The principle throughout: **missing a problem is a gap; inventing one is a
+defect.** A warning about correct code teaches people to ignore the tool.
 
 ---
 
-## What is built and what is not
+## Security of ShipBrace itself
 
-| Part of the vision | Status |
+Everything it reviews is someone else's code and is treated as hostile.
+
+- **Reviewer isolation.** Internet switched off at the container level
+  (proven on Cloudflare: web, raw-IP, socket and DNS attempts all fail), no
+  secrets in its environment, and inside it Node's permission model per
+  review (no network, no writes, reads limited to ShipBrace's own code) with
+  work-time and memory limits. Replies from the reviewer are treated as
+  untrusted: size-capped, shape-checked, each outside step at most once.
+- **Sign-in.** GitHub App user authorization with a state check;
+  `__Host-` cookies (HttpOnly, Secure, SameSite=Lax); only the SHA-256 of the
+  session value is stored, and the user's GitHub token is AES-GCM encrypted.
+  State changes require same-origin JSON.
+- **Access.** Reviews start only on repositories the person can change, and
+  open only for people GitHub lets see the repository, re-checked every few
+  minutes. Uninstalling the App deletes its reviews.
+- **What leaves the platform** is listed in
+  [docs/legal/third-party-services.md](docs/legal/third-party-services.md),
+  shown to users before their first review, and switchable per account.
+- **Cost and abuse limits.** Per-person and daily review caps, capped
+  container count; the AI step is off unless offered and switched on.
+- **The browser.** A strict same-origin Content Security Policy; no
+  third-party scripts.
+
+---
+
+## Repository layout
+
+| Path | What it is |
 | --- | --- |
-| **Security review** of an app's code | ✅ Built. Works with no AI; the AI step is optional |
-| **GitHub App:** review every push and show a mark on GitHub | ✅ Built and tested live |
-| **Report pages and review history** | ✅ Built |
-| **Starting structure for new apps** (a solid, safe skeleton: database, logins, charts, spreadsheets, build setup) | 🟡 The generator exists and its apps pass Aegis's own review (the one exception, a missing lockfile, goes away on first install), but users cannot reach it yet |
-| **Aegis running online all the time** | ⏳ Next. Today it runs on a laptop |
-| **Sign-up, accounts, privacy notices** | ⏳ Needed before anyone else uses it |
-| **Putting users' apps online** (the "handles deployment" part) | ❌ Not started |
-| **Guiding how the app is put together** while it is being built | ❌ Not started, beyond the starting structure |
+| [`packages/guardrails`](packages/guardrails) | The review engine: parser wrapper, inventory, verifier, rules, checklist, OSV lookup, AI proposer, and the benchmark (`bench/`) |
+| [`cloud`](cloud) | The hosted service on Cloudflare: Worker (webhook, queue job, API, sign-in), reviewer container, D1 history and migrations |
+| [`server`](server) | Shared GitHub and review code, the sealed-process sandbox, and a Node server for running everything on one machine |
+| [`app`](app) | The dashboard (React 19, TanStack Router and Query, Tailwind) |
+| [`packages/scaffold`](packages/scaffold) | Generator for new apps' starting structure (not yet exposed to users) |
+| [`deploy`](deploy) | Docker Compose setup for running on an ordinary server instead of Cloudflare |
+| [`docs`](docs) | [Architecture decisions](docs/architecture.md) and the [data-handling notes](docs/legal/third-party-services.md) |
 
----
+## Running it
 
-## For developers
-
-The full working notes, commands and current gaps are in
-[CLAUDE.md](CLAUDE.md). The reasoning behind the design is in
-[docs/architecture.md](docs/architecture.md).
-
-| Folder | What it is |
-| --- | --- |
-| `packages/guardrails/` | The review engine: reading code, the rules, the verifier, the checklist, and the benchmark (`bench/`) |
-| `packages/scaffold/` | The generator for new apps' starting structure |
-| `server/` | The review server: GitHub App, review history (PostgreSQL), the sealed review process |
-| `app/` | The dashboard (React) |
-| `scripts/` | Benchmark and comparison tools |
+Requires Node 26.
 
 ```bash
 npm ci
-node --experimental-strip-types --test packages/guardrails/test/*.test.ts packages/scaffold/test/*.test.ts server/test/*.test.ts
-node --experimental-strip-types scripts/bench.ts
+npm test            # 207 tests; set TEST_DATABASE_URL to a PostgreSQL *_test database to include the history tests
+npm run typecheck
+npm run bench       # benchmark scores
+npm run dev         # the dashboard on :5173 (sample data without a server)
 ```
+
+Reviewing a folder on your own machine, with the dashboard:
+
+```bash
+npm run build
+REVIEW_ROOT=/path/to/an/app node --experimental-strip-types server/src/index.ts
+```
+
+Deployment to Cloudflare is `npm run deploy` (Wrangler) after the one-time
+setup described in [CLAUDE.md](CLAUDE.md), which also holds the full working
+notes: conventions, current gaps and the roadmap.
+
+**Built with:** TypeScript 7, Node 26, oxc-parser, Hono, React, Cloudflare
+Workers, Containers, Queues and D1, PostgreSQL (single-machine mode), Docker.
+
+---
+
+## Status
+
+| | |
+| --- | --- |
+| Security review engine, OWASP checklist, benchmark | ✅ |
+| GitHub App: reviews every push, posts a check | ✅ live |
+| Sign in with GitHub, paste a link, private review history | ✅ live |
+| Sealed reviewer with no internet access | ✅ live, verified on Cloudflare |
+| Notices before first use, per-account switches, 90-day retention | ✅ live |
+| Privacy policy reviewed by a lawyer, public launch | ⏳ next |
+| Starting structure for new apps | 🟡 built, not yet offered |
+| Deploying users' apps | ❌ not started |

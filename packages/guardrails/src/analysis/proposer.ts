@@ -1,5 +1,5 @@
 import type { AttackProposal } from "./oracle.ts";
-import type { Door, Inventory, Sink } from "./inventory.ts";
+import type { Door, Sink } from "./inventory.ts";
 
 /**
  * Phase 2: attack simulation.

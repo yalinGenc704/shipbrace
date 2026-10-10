@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { createClaudeProposer, ProposerRefusedError } from "@aegis/guardrails/proposer";
-import { createOsvSource } from "@aegis/guardrails/vulnerabilities";
+import { createClaudeProposer, ProposerRefusedError } from "@shipbrace/guardrails/proposer";
+import { createOsvSource } from "@shipbrace/guardrails/vulnerabilities";
 import { Container, type OutboundHandlerContext } from "@cloudflare/containers";
 import type { Env } from "./env.ts";
 

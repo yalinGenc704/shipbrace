@@ -1,5 +1,5 @@
 {
-  "name": "@aegis/guardrails",
+  "name": "@shipbrace/guardrails",
   "version": "0.1.0",
   "type": "module",
   "private": true,
@@ -11,7 +11,7 @@
     "./vulnerabilities": "./src/review/vulnerabilities.ts"
   },
   "scripts": {
-    "test": "bun test"
+    "test": "node --experimental-strip-types --test test/*.test.ts"
   },
   "dependencies": {
     "oxc-parser": "0.152.0"

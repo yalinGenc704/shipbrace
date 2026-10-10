@@ -1,4 +1,8 @@
-// ShipBrace on Cloudflare (still "aegis" in names until the rename).
+// ShipBrace on Cloudflare.
+// The Worker, database and queue keep the names they were created with before
+// the project was renamed from "aegis": Cloudflare cannot rename a database or
+// a queue, and a renamed Worker is a new Worker whose secrets must all be set
+// again. Nobody outside sees these names; the public address is the domain.
 // Secrets are never written here: `npx wrangler secret put GITHUB_PRIVATE_KEY`
 // and the same for GITHUB_WEBHOOK_SECRET and ANTHROPIC_API_KEY.
 {

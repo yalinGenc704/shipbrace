@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
-import { snapshotFromFiles, type RepoSnapshot } from "@aegis/guardrails";
+import { snapshotFromFiles, type RepoSnapshot } from "@shipbrace/guardrails";
 import { DEFAULT_LIMITS, LOCKFILE, looksBinary, SKIP_DIR, wanted, type IngestLimits } from "./files.ts";
 
 export { DEFAULT_LIMITS, LOCKFILE, looksBinary, SKIP_DIR, wanted, type IngestLimits };

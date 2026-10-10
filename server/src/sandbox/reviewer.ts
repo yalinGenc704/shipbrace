@@ -6,7 +6,7 @@ import {
   type RepoSnapshot,
   type ReviewOptions,
   type VulnerabilitySource,
-} from "@aegis/guardrails";
+} from "@shipbrace/guardrails";
 import { MAX_TO_REVIEWER, receive, send } from "./channel.ts";
 import { createSandbox, ReviewStoppedError, type Review } from "./sandbox.ts";
 
@@ -88,7 +88,7 @@ function handle(socket: Socket, review: Review): void {
 }
 
 if (import.meta.main) {
-  const path = process.env.REVIEWER_SOCKET ?? "/run/aegis/reviewer.sock";
+  const path = process.env.REVIEWER_SOCKET ?? "/run/shipbrace/reviewer.sock";
   serveReviews(path);
   console.log(`reviewer listening on ${path}`);
 }

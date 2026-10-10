@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHmac, createVerify, generateKeyPairSync } from "node:crypto";
 import { test } from "node:test";
-import { runSecurityReview } from "@aegis/guardrails";
+import { runSecurityReview } from "@shipbrace/guardrails";
 import { appJwt, verifyWebhookSignature } from "../src/github/auth.ts";
 import { handleWebhook, reviewPush, type ReviewDeps, type WebhookDeps } from "../src/github/webhook.ts";
 import { ReviewStoppedError } from "../src/sandbox/sandbox.ts";
@@ -74,7 +74,7 @@ function deps(
 const push = (over: Record<string, unknown> = {}) =>
   JSON.stringify({
     after: SHA,
-    repository: { id: 4242, name: "shop", owner: { login: "murat" } },
+    repository: { id: 4242, name: "shop", owner: { login: "ada" } },
     installation: { id: 7 },
     ...over,
   });
@@ -192,7 +192,7 @@ test("a saved review is linked from the check, and the links lead to it", async 
   const saved: any[] = [];
   const d = deps(github.fetchImpl, {
     history: { record: async (review) => (saved.push(review), { reviewId: "R".repeat(24), historyId: "H".repeat(24) }) },
-    publicUrl: "https://aegis.example",
+    publicUrl: "https://shipbrace.example",
   });
   const body = push();
   await handleWebhook(d, { signature: sign(body), event: "push" }, body);
@@ -205,9 +205,9 @@ test("a saved review is linked from the check, and the links lead to it", async 
   assert.ok(saved[0].result.summary.high > 0);
 
   const withOutput = github.calls.filter((c) => c.method === "PATCH").find((c) => c.body.output)?.body;
-  assert.equal(withOutput.details_url, `https://aegis.example/reviews/${"R".repeat(24)}`);
-  assert.ok(withOutput.output.summary.startsWith(`**[Open the full report](https://aegis.example/reviews/${"R".repeat(24)})**`));
-  assert.ok(withOutput.output.summary.includes(`https://aegis.example/history/${"H".repeat(24)}`));
+  assert.equal(withOutput.details_url, `https://shipbrace.example/reviews/${"R".repeat(24)}`);
+  assert.ok(withOutput.output.summary.startsWith(`**[Open the full report](https://shipbrace.example/reviews/${"R".repeat(24)})**`));
+  assert.ok(withOutput.output.summary.includes(`https://shipbrace.example/history/${"H".repeat(24)}`));
 });
 
 test("if the history cannot be saved, the check is still posted in full, without links", async () => {
@@ -215,7 +215,7 @@ test("if the history cannot be saved, the check is still posted in full, without
   const logged: string[] = [];
   const d = deps(github.fetchImpl, {
     history: { record: () => Promise.reject(new Error("database down")) },
-    publicUrl: "https://aegis.example",
+    publicUrl: "https://shipbrace.example",
     log: (message) => void logged.push(message),
   });
   const body = push();
@@ -233,7 +233,7 @@ test("if the history cannot be saved, the check is still posted in full, without
 test("a push without GitHub's repository id is refused", async () => {
   const github = fakeGitHub({});
   const d = deps(github.fetchImpl);
-  const body = push({ repository: { name: "shop", owner: { login: "murat" } } });
+  const body = push({ repository: { name: "shop", owner: { login: "ada" } } });
   const result = await handleWebhook(d, { signature: sign(body), event: "push" }, body);
   assert.equal(result.status, 400);
   assert.equal(d.done.length, 0);

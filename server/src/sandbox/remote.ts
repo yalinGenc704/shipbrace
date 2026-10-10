@@ -1,5 +1,5 @@
 import { connect } from "node:net";
-import type { ReviewResult } from "@aegis/guardrails";
+import type { ReviewResult } from "@shipbrace/guardrails";
 import { MAX_FROM_REVIEWER, receive, send } from "./channel.ts";
 import { ReviewStoppedError, type Review } from "./sandbox.ts";
 

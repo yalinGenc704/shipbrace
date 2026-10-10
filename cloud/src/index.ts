@@ -1,8 +1,8 @@
-import type { RepoSnapshot, ReviewResult } from "@aegis/guardrails";
-import { OSV_NOTICE } from "@aegis/guardrails/vulnerabilities";
-import { handleWebhook, reviewPush, type PushJob, type ReviewDeps } from "@aegis/server/github/webhook.ts";
-import type { ReviewReply, ReviewRequest } from "@aegis/server/sandbox/reviewer-http.ts";
-import { ReviewStoppedError } from "@aegis/server/sandbox/stopped.ts";
+import type { RepoSnapshot, ReviewResult } from "@shipbrace/guardrails";
+import { OSV_NOTICE } from "@shipbrace/guardrails/vulnerabilities";
+import { handleWebhook, reviewPush, type PushJob, type ReviewDeps } from "@shipbrace/server/github/webhook.ts";
+import type { ReviewReply, ReviewRequest } from "@shipbrace/server/sandbox/reviewer-http.ts";
+import { ReviewStoppedError } from "@shipbrace/server/sandbox/stopped.ts";
 import { Hono } from "hono";
 import { secureHeaders } from "hono/secure-headers";
 import { accountRoutes, forgetInstallation, installationIsSetUp, installationSwitches } from "./accounts.ts";
@@ -13,7 +13,7 @@ export { ContainerProxy } from "@cloudflare/containers";
 export { Reviewer } from "./reviewer.ts";
 
 /**
- * ShipBrace (still named Aegis in the code) on Cloudflare.
+ * ShipBrace (still named ShipBrace in the code) on Cloudflare.
  *
  *   GitHub push ──▶ this Worker: check the signature, queue the push, answer
  *                    │

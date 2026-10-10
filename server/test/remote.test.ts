@@ -4,7 +4,7 @@ import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
-import { ProposerRefusedError, runSecurityReview, snapshotFromFiles, type AttackProposer } from "@aegis/guardrails";
+import { ProposerRefusedError, runSecurityReview, snapshotFromFiles, type AttackProposer } from "@shipbrace/guardrails";
 import { send } from "../src/sandbox/channel.ts";
 import { createRemoteReviewer } from "../src/sandbox/remote.ts";
 import { serveReviews } from "../src/sandbox/reviewer.ts";
@@ -14,7 +14,7 @@ import { createSandbox, DEFAULT_SANDBOX_LIMITS, ReviewStoppedError } from "../sr
  * The server and the review container, talking over a real Unix socket. On a
  * hosted server they are two containers; here both ends run in this process.
  */
-const dir = mkdtempSync(join(tmpdir(), "aegis-remote-"));
+const dir = mkdtempSync(join(tmpdir(), "shipbrace-remote-"));
 const servers: Server[] = [];
 after(() => servers.forEach((s) => s.close()));
 

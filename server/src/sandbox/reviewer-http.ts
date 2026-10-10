@@ -5,7 +5,7 @@ import {
   type AttackProposer,
   type ReviewOptions,
   type VulnerabilitySource,
-} from "@aegis/guardrails";
+} from "@shipbrace/guardrails";
 import { createSandbox, ReviewStoppedError, type Review } from "./sandbox.ts";
 
 /**

@@ -4,11 +4,11 @@ import {
   type AttackProposer,
   type RepoSnapshot,
   type VulnerabilitySource,
-} from "@aegis/guardrails";
+} from "@shipbrace/guardrails";
 
 /**
  * The sealed side of a review: runs in its own process, started by
- * `sandboxedReview`, with no secrets, no network, no files beyond Aegis's own
+ * `sandboxedReview`, with no secrets, no network, no files beyond ShipBrace's own
  * code, and a time and memory limit (see sandbox.ts).
  *
  * Everything that reads the repository runs here. The two steps that need the

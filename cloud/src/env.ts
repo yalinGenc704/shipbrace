@@ -1,4 +1,4 @@
-import type { PushJob } from "@aegis/server/github/webhook.ts";
+import type { PushJob } from "@shipbrace/server/github/webhook.ts";
 import type { Reviewer } from "./reviewer.ts";
 
 /** What the Worker is given by Cloudflare (wrangler.jsonc, plus secrets). */

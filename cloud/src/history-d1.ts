@@ -1,7 +1,7 @@
-import type { ReviewResult } from "@aegis/guardrails";
-import type { Conclusion } from "@aegis/server/github/report.ts";
-import type { ReviewEntry, ReviewHistory, Skipped } from "@aegis/server/history.ts";
-import { LINK_ID, newLinkId } from "@aegis/server/links.ts";
+import type { ReviewResult } from "@shipbrace/guardrails";
+import type { Conclusion } from "@shipbrace/server/github/report.ts";
+import type { ReviewEntry, ReviewHistory, Skipped } from "@shipbrace/server/history.ts";
+import { LINK_ID, newLinkId } from "@shipbrace/server/links.ts";
 
 /**
  * Review history on Cloudflare D1, behaving exactly like the PostgreSQL one in

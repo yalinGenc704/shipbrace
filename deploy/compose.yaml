@@ -1,19 +1,19 @@
-# Aegis on a server. Run from this folder: `docker compose up -d --build`.
+# ShipBrace on a server. Run from this folder: `docker compose up -d --build`.
 # Settings come from deploy/.env (copy .env.production.example; never commit
 # it) and the GitHub App key from deploy/secrets/github-app.pem.
 #
 # What can reach what:
 #
-#   internet ── Cloudflare ══ cloudflared ──▶ aegis ──▶ postgres     (backend: no internet)
+#   internet ── Cloudflare ══ cloudflared ──▶ shipbrace ──▶ postgres     (backend: no internet)
 #                                               │
 #                                               └─ socket ─▶ reviewer   (no network at all)
 #
 # Nothing listens on the server's own address: the only way in is the tunnel,
 # which cloudflared opens outwards. Every container runs without root, cannot
-# gain privileges, and has a memory cap; the two that run Aegis have read-only
+# gain privileges, and has a memory cap; the two that run ShipBrace have read-only
 # disks.
 
-name: aegis
+name: shipbrace
 
 x-locked-down: &locked-down
   restart: unless-stopped
@@ -23,20 +23,20 @@ x-locked-down: &locked-down
   tmpfs: ["/tmp:size=64m"]
 
 services:
-  aegis:
+  shipbrace:
     <<: *locked-down
     build: ..
-    image: aegis:local
+    image: shipbrace:local
     env_file: .env
     environment:
       PORT: "3000"
       LOCAL_REVIEW: "off"
-      REVIEWER_SOCKET: /run/aegis/reviewer.sock
-      DATABASE_URL: postgres://aegis:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}@postgres:5432/aegis
+      REVIEWER_SOCKET: /run/shipbrace/reviewer.sock
+      DATABASE_URL: postgres://shipbrace:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}@postgres:5432/shipbrace
       GITHUB_PRIVATE_KEY_PATH: /run/secrets/github-app.pem
     secrets: [github-app.pem]
     volumes:
-      - reviewer-socket:/run/aegis
+      - reviewer-socket:/run/shipbrace
     networks: [backend, outside]
     depends_on:
       postgres: { condition: service_healthy }
@@ -53,12 +53,12 @@ services:
   # over, there is nowhere to send anything and nothing to reach.
   reviewer:
     <<: *locked-down
-    image: aegis:local
+    image: shipbrace:local
     command: ["node", "--experimental-strip-types", "server/src/sandbox/reviewer.ts"]
     environment:
-      REVIEWER_SOCKET: /run/aegis/reviewer.sock
+      REVIEWER_SOCKET: /run/shipbrace/reviewer.sock
     volumes:
-      - reviewer-socket:/run/aegis
+      - reviewer-socket:/run/shipbrace
     network_mode: none
     # Two reviews at 1 GB of JavaScript memory each, plus the parser's own.
     mem_limit: 2560m
@@ -71,15 +71,15 @@ services:
     read_only: false
     cap_add: [CHOWN, SETUID, SETGID, FOWNER, DAC_OVERRIDE]
     environment:
-      POSTGRES_DB: aegis
-      POSTGRES_USER: aegis
+      POSTGRES_DB: shipbrace
+      POSTGRES_USER: shipbrace
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}
     volumes:
       - pgdata:/var/lib/postgresql
     networks: [backend]
     mem_limit: 512m
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "aegis", "-d", "aegis"]
+      test: ["CMD", "pg_isready", "-U", "shipbrace", "-d", "shipbrace"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -93,18 +93,18 @@ services:
     # write to its own backup folder and nothing else of consequence.
     environment:
       PGHOST: postgres
-      PGUSER: aegis
-      PGDATABASE: aegis
+      PGUSER: shipbrace
+      PGDATABASE: shipbrace
       PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}
     entrypoint:
       - sh
       - -c
       - |
         while true; do
-          pg_dump --format=custom --file="/backups/aegis-$$(date -u +%Y-%m-%d).dump.tmp" \
-            && mv "/backups/aegis-$$(date -u +%Y-%m-%d).dump.tmp" "/backups/aegis-$$(date -u +%Y-%m-%d).dump" \
+          pg_dump --format=custom --file="/backups/shipbrace-$$(date -u +%Y-%m-%d).dump.tmp" \
+            && mv "/backups/shipbrace-$$(date -u +%Y-%m-%d).dump.tmp" "/backups/shipbrace-$$(date -u +%Y-%m-%d).dump" \
             && echo "backup written" || echo "backup FAILED"
-          find /backups -name 'aegis-*.dump' -mtime +14 -delete
+          find /backups -name 'shipbrace-*.dump' -mtime +14 -delete
           sleep 86400
         done
     volumes:
@@ -113,7 +113,7 @@ services:
     # After the server, which creates the tables before it reports healthy;
     # otherwise the first backup is of an empty database.
     depends_on:
-      aegis: { condition: service_healthy }
+      shipbrace: { condition: service_healthy }
     mem_limit: 256m
 
   cloudflared:
@@ -124,7 +124,7 @@ services:
       TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
     networks: [outside]
     depends_on:
-      aegis: { condition: service_healthy }
+      shipbrace: { condition: service_healthy }
     mem_limit: 256m
     profiles: [tunnel]
 

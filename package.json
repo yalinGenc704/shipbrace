@@ -1,5 +1,5 @@
 {
-  "name": "aegis",
+  "name": "shipbrace",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -9,22 +9,22 @@
     "packages/*"
   ],
   "engines": {
-    "bun": ">=1.4.0"
+    "node": ">=26"
   },
   "scripts": {
-    "dev": "bun run --filter '*' dev",
-    "build": "bun run --filter '*' build",
-    "check": "bun run typecheck && bun run lint && bun run fmt:check",
-    "typecheck": "tsc --build --verbose",
-    "lint": "oxlint --type-aware .",
-    "fmt": "oxfmt .",
-    "fmt:check": "oxfmt --check .",
-    "test": "bun test"
+    "dev": "npm run dev --workspace @shipbrace/app",
+    "build": "npm run build --workspace @shipbrace/app",
+    "test": "node --experimental-strip-types --test packages/guardrails/test/*.test.ts packages/scaffold/test/*.test.ts server/test/*.test.ts cloud/test/*.test.ts",
+    "typecheck": "tsc -p server/tsconfig.json && tsc -p app/tsconfig.json && tsc -p cloud/tsconfig.json",
+    "bench": "node --experimental-strip-types scripts/bench.ts",
+    "deploy": "npm run build && npm run deploy --workspace @shipbrace/cloud",
+    "lint": "oxlint .",
+    "fmt": "oxfmt ."
   },
   "devDependencies": {
     "typescript": "7.0.2",
     "oxlint": "1.80.0",
-    "oxfmt": "0.72.0",
-    "@types/bun": "1.4.2"
-  }
+    "oxfmt": "0.72.0"
+  },
+  "description": "A safety net for apps built with AI: rule-verified security reviews of every GitHub push."
 }

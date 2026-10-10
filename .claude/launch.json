@@ -4,22 +4,20 @@
     {
       "name": "dashboard",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--workspace", "@aegis/app"],
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--workspace",
+        "@shipbrace/app"
+      ],
       "port": 5173
     },
     {
       "name": "review-api",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["--experimental-strip-types", "--env-file=.env", "server/src/index.ts"],
-      "port": 3000
-    },
-    {
-      "name": "review-api-dvna-ai",
-      "runtimeExecutable": "node",
       "runtimeArgs": [
         "--experimental-strip-types",
         "--env-file=.env",
-        "--env-file=/Users/yalingenc/aegis-test-repos/dvna.env",
         "server/src/index.ts"
       ],
       "port": 3000

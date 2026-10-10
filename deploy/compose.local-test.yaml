@@ -3,7 +3,7 @@
 # through every container. Never use on a server.
 #   docker compose -f compose.yaml -f compose.local-test.yaml up -d --build
 services:
-  aegis:
+  shipbrace:
     environment:
       LOCAL_REVIEW: "on"
       REVIEW_ROOT: /samples

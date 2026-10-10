@@ -175,3 +175,28 @@ test("a file that does not parse is skipped, not guessed at", () => {
   const i = inv("server/src/broken.ts", ["app.get('/x', (c) => { return c.json({"]);
   assert.deepEqual(i.doors, []);
 });
+
+test("a fixed public website with only the path filled in is not request forgery", () => {
+  const route = (call: string) =>
+    buildInventoryFromAst(snapshotFromFiles([{
+      path: "server/src/api.ts",
+      content: [
+        'import { Hono } from "hono";',
+        "const app = new Hono();",
+        'app.get("/repo/:name", async (c) => {',
+        '  const name = c.req.param("name");',
+        `  return c.json(await ${call});`,
+        "});",
+      ].join("\n"),
+    }])).sinks.filter((s) => s.kind === "outbound-request").length;
+
+  assert.equal(route("fetch(`https://api.github.com/repos/${encodeURIComponent(name)}`)"), 0);
+  assert.equal(route('fetch("https://api.example.com/items/" + name)'), 0);
+  // Still findings: the website itself is chosen, or it is an internal service.
+  assert.equal(route("fetch(`https://${name}/x`)"), 1, "visitor picks the host");
+  assert.equal(route("fetch(`${name}/x`)"), 1, "visitor supplies the whole start");
+  assert.equal(route("fetch(`http://localhost:8080/admin/${name}`)"), 1, "internal service");
+  assert.equal(route("fetch(`http://10.0.0.5/${name}`)"), 1, "private address");
+  assert.equal(route("fetch(`http://billing/${name}`)"), 1, "single-label internal name");
+  assert.equal(route("fetch(`http://api.internal/${name}`)"), 1, "internal domain");
+});

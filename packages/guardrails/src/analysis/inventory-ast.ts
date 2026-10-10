@@ -13,14 +13,12 @@ import {
   type ParsedFile,
 } from "./ast.ts";
 import type {
-  Assignment,
   Door,
   Inventory,
   Sanitizer,
   Sink,
   SinkKind,
   SourceKind,
-  TaintSource,
 } from "./inventory.ts";
 
 /**
@@ -887,14 +885,43 @@ function sinkFor(
   if (FILESYSTEM.test(name) || BUN_FILE.test(name)) {
     return make("filesystem", args[0] ? identifiersIn(args[0]) : []);
   }
-  if (/\.redirect$/.test(name)) return make("redirect", operands);
+  if (name.endsWith('.redirect')) return make("redirect", operands);
 
   // Only an outbound request whose destination is computed is interesting; a
-  // hardcoded URL cannot be steered.
-  if (name === "fetch" && args[0] && !isStringLiteral(args[0])) {
+  // hardcoded URL cannot be steered, and neither can one whose public website
+  // is fixed in the code with only the path filled in.
+  if (name === "fetch" && args[0] && !isStringLiteral(args[0]) && !fixedPublicOrigin(args[0])) {
     return make("outbound-request", identifiersIn(args[0]));
   }
   return undefined;
+}
+
+/**
+ * True when a URL's website is written out in full in the code -- a template
+ * or `+` that begins with "https://api.github.com/" -- and that website is a
+ * public one. A visitor's value can then only change the path on that site,
+ * which is not a request forged to a place of their choosing.
+ *
+ * A fixed *internal* address stays a finding: steering the path on
+ * `http://localhost:8080/` or `http://10.0.0.5/` still reaches private
+ * services, which is what request forgery is about.
+ */
+const FIXED_ORIGIN = /^https?:\/\/([^/?#\s]+)[/?#]/i;
+const INTERNAL_HOST =
+  /^(?:localhost|.*\.(?:local|localhost|internal|lan)|127\.|10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.|169\.254\.|0\.|\[|[^.]+$)/i;
+
+function fixedPublicOrigin(node: Node): boolean {
+  let lead: string | undefined;
+  if (node.type === "TemplateLiteral") {
+    const first = (node.quasis as Array<{ value?: { cooked?: string } }> | undefined)?.[0];
+    lead = first?.value?.cooked;
+  } else if (node.type === "BinaryExpression" && node.operator === "+") {
+    let left = node.left as Node;
+    while (left.type === "BinaryExpression" && left.operator === "+") left = left.left as Node;
+    lead = isStringLiteral(left) ? left.value : undefined;
+  }
+  const host = lead?.match(FIXED_ORIGIN)?.[1]?.replace(/:\d+$/, "");
+  return Boolean(host && !INTERNAL_HOST.test(host));
 }
 
 /**

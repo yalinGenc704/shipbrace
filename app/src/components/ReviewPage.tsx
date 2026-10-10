@@ -1,4 +1,4 @@
-import type { ReviewResult } from "@aegis/guardrails";
+import type { ReviewResult } from "@shipbrace/guardrails";
 import { useQuery } from "@tanstack/react-query";
 import { FlaskConical, Loader2 } from "lucide-react";
 import { useState, type ReactNode } from "react";

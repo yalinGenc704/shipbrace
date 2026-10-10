@@ -62,7 +62,7 @@ const schema = z.object({
   REVIEWER_SOCKET: z.string().startsWith("/", "REVIEWER_SOCKET must be an absolute path").optional(),
   PUBLIC_URL: z
     .url()
-    .refine((value) => /^https:\/\//.test(value) || /^http:\/\/localhost(:\d+)?\/?$/.test(value), {
+    .refine((value) => value.startsWith('https://') || /^http:\/\/localhost(:\d+)?\/?$/.test(value), {
       message: "PUBLIC_URL must be an https address (or http://localhost)",
     })
     .optional(),

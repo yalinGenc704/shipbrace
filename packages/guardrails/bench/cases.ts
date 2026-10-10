@@ -1139,7 +1139,7 @@ export const CASES: BenchCase[] = [
       file("server/routes/search.js", [
         'const router = require("express").Router();',
         'router.get("/search", requireLogin, (req, res) => {',
-        '  res.render(\"search\", { term: req.query.q }); // [A]',
+        '  res.render("search", { term: req.query.q }); // [A]',
         "});",
       ]),
       file("views/search.ejs", ["<h1>Results for <%- term %></h1>"]),
@@ -1162,7 +1162,7 @@ export const CASES: BenchCase[] = [
       file("server/routes/search.js", [
         'const router = require("express").Router();',
         'router.get("/search", requireLogin, (req, res) => {',
-        '  res.render(\"search\", { term: req.query.q }); // [A]',
+        '  res.render("search", { term: req.query.q }); // [A]',
         "});",
       ]),
       file("views/search.ejs", ["<h1>Results for <%= term %></h1>"]),
@@ -1185,7 +1185,7 @@ export const CASES: BenchCase[] = [
       file("server/routes/search.js", [
         'const router = require("express").Router();',
         'router.get("/search", requireLogin, (req, res) => {',
-        '  res.render(\"search\", { banner: BANNER_HTML, term: req.query.q }); // [A]',
+        '  res.render("search", { banner: BANNER_HTML, term: req.query.q }); // [A]',
         "});",
       ]),
       file("views/search.ejs", ["<%- banner %><h1>Results for <%= term %></h1>"]),
@@ -1210,7 +1210,7 @@ export const CASES: BenchCase[] = [
         'router.get("/results", requireLogin, (req, res) => {',
         "  let summary;",
         "  summary = `You searched for ${req.query.q}`;",
-        '  res.render(\"results\", { summary }); // [A]',
+        '  res.render("results", { summary }); // [A]',
         "});",
       ]),
       file("views/results.hbs", ["<div>{{{ summary }}}</div>"]),

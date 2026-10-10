@@ -1,6 +1,5 @@
 import type { CodeLocation } from "../types.ts";
 import type {
-  Assignment,
   Door,
   FunctionDef,
   Inventory,

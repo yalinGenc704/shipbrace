@@ -900,9 +900,14 @@ export function buildReview(input: ReviewInput): SecurityReview {
   return { modules, summary: summarise(modules), unverified: explainUnverified(input.unverified) };
 }
 
-/** Routes that are public on purpose; flagging them is noise, not safety. */
+/**
+ * Routes that are public on purpose; flagging them is noise, not safety.
+ * Webhooks and sign-in callbacks are called by other services or by people
+ * not yet signed in -- they are protected by signatures and state checks, not
+ * by a session, and requiring one would break them.
+ */
 function isPublicByDesign(path: string): boolean {
-  return /\/(health|healthz|ready|metrics|login|register|signup|refresh|logout|public|forgot\w*|reset\w*)(\/|$)/.test(
+  return /\/(health|healthz|ready|metrics|login|register|signup|refresh|logout|public|forgot\w*|reset\w*|webhooks?|callback|oauth)(\/|$)/.test(
     path,
   );
 }

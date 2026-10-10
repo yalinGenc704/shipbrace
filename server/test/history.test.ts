@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import { runSecurityReview, snapshotFromFiles } from "@aegis/guardrails";
+import { runSecurityReview, snapshotFromFiles } from "@shipbrace/guardrails";
 import { connect, migrate, newLinkId, postgresHistory, type NewReview } from "../src/history.ts";
 import { historyRoutes } from "../src/history-routes.ts";
 
@@ -11,7 +11,7 @@ import { historyRoutes } from "../src/history-routes.ts";
  */
 const url = process.env.TEST_DATABASE_URL;
 const skip = !url
-  ? "set TEST_DATABASE_URL (e.g. postgres:///aegis_test) to run the review history tests"
+  ? "set TEST_DATABASE_URL (e.g. postgres:///shipbrace_test) to run the review history tests"
   : !/_test(\?|$)/.test(url)
   ? "TEST_DATABASE_URL must name a database ending in _test; its tables are dropped"
   : false;
@@ -42,7 +42,7 @@ async function newReview(over: Partial<NewReview> = {}): Promise<NewReview> {
   const result = await runSecurityReview(snapshotFromFiles([{ path: "server/src/api.ts", content: VULNERABLE }]));
   return {
     githubId: 1,
-    owner: "murat",
+    owner: "ada",
     repo: "shop",
     commitSha: "a".repeat(40),
     conclusion: "failure",
@@ -68,7 +68,7 @@ test("a saved review comes back exactly as it was reviewed", { skip }, async () 
   assert.deepEqual(stored.result, JSON.parse(JSON.stringify(review.result)), "the full review, not a summary of it");
   assert.equal(stored.commitSha, review.commitSha);
   assert.equal(stored.conclusion, "failure");
-  assert.deepEqual(stored.repository, { owner: "murat", name: "shop", historyId });
+  assert.deepEqual(stored.repository, { owner: "ada", name: "shop", historyId });
   assert.equal(stored.counts.high, review.result.summary.high);
   assert.ok(!Number.isNaN(Date.parse(stored.createdAt)));
 });

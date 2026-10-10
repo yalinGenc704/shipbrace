@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { ProposerRefusedError, runSecurityReview, snapshotFromFiles, type AttackProposer } from "@aegis/guardrails";
+import { ProposerRefusedError, runSecurityReview, snapshotFromFiles, type AttackProposer } from "@shipbrace/guardrails";
 import { createSandbox, DEFAULT_SANDBOX_LIMITS, ReviewStoppedError } from "../src/sandbox/sandbox.ts";
 
 const fixture = (name: string) => fileURLToPath(new URL(`./sandbox-fixtures/${name}.ts`, import.meta.url));
@@ -121,7 +121,7 @@ test("a process that asks for more than the pipeline would is stopped", async ()
   assert.ok(calls <= 1);
 });
 
-test("inside, there are no secrets, no network, and nothing to read but Aegis's own code", async () => {
+test("inside, there are no secrets, no network, and nothing to read but ShipBrace's own code", async () => {
   process.env.AEGIS_TEST_SECRET = "must-not-cross";
   const report = (await createSandbox(DEFAULT_SANDBOX_LIMITS, fixture("snoop"), quiet)(VULNERABLE)) as unknown as Record<string, unknown>;
   delete process.env.AEGIS_TEST_SECRET;

@@ -244,11 +244,11 @@ while true; do
   # Write to a temporary name first, then rename. A backup interrupted halfway
   # through is worse than no backup, because it looks like a real one.
   if pg_dump --no-owner | gzip > "\${target}.partial"; then
-    mv "\${target}.partial" "\$target"
-    echo "backup ok: \$target"
+    mv "\${target}.partial" "$target"
+    echo "backup ok: $target"
   else
     rm -f "\${target}.partial"
-    echo "backup FAILED at \$stamp" >&2
+    echo "backup FAILED at $stamp" >&2
   fi
 
   find /backups -name '*.sql.gz' -mtime "+\${RETENTION_DAYS}" -delete

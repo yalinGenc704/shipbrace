@@ -9,7 +9,7 @@ let base = "";
 let root = "";
 
 before(async () => {
-  base = await mkdtemp(join(tmpdir(), "aegis-ingest-"));
+  base = await mkdtemp(join(tmpdir(), "shipbrace-ingest-"));
   root = join(base, "repos");
 
   await mkdir(join(root, "server", "src"), { recursive: true });

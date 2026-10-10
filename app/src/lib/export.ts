@@ -1,4 +1,4 @@
-import type { ReviewResult } from "@aegis/guardrails";
+import type { ReviewResult } from "@shipbrace/guardrails";
 import { utils, writeFile } from "xlsx";
 
 /**

@@ -1,5 +1,5 @@
-import type { RepoSnapshot } from "@aegis/guardrails";
-import { snapshotFromFiles } from "@aegis/guardrails/snapshot";
+import type { RepoSnapshot } from "@shipbrace/guardrails";
+import { snapshotFromFiles } from "@shipbrace/guardrails/snapshot";
 import { DEFAULT_LIMITS, LOCKFILE, looksBinary, SKIP_DIR, wanted, type IngestLimits } from "../files.ts";
 import type { GitHubClient } from "./client.ts";
 

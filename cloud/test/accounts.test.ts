@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import { beforeEach, test } from "node:test";
-import { runSecurityReview, snapshotFromFiles } from "@aegis/guardrails";
+import { runSecurityReview, snapshotFromFiles } from "@shipbrace/guardrails";
 import { Hono } from "hono";
 import { accountRoutes, forgetInstallation, installationIsSetUp, installationSwitches, NOTICE_VERSION } from "../src/accounts.ts";
 import { decrypt, encrypt, randomToken } from "../src/crypto.ts";
@@ -21,8 +21,8 @@ const PEM = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.expor
 
 /** Repositories the stand-in GitHub knows, and what our test person may do with each. */
 const REPOS: Record<string, { id: number; private: boolean; push: boolean; pull: boolean; installed: number | null }> = {
-  "murat/shop": { id: 101, private: true, push: true, pull: true, installed: 7 },
-  "murat/fresh": { id: 102, private: false, push: true, pull: true, installed: null },
+  "ada/shop": { id: 101, private: true, push: true, pull: true, installed: 7 },
+  "ada/fresh": { id: 102, private: false, push: true, pull: true, installed: null },
   "stranger/bank": { id: 201, private: false, push: false, pull: true, installed: 9 },
 };
 
@@ -37,10 +37,10 @@ function fakeGitHub(): typeof fetch {
     if (url.host === "github.com" && path === "/login/oauth/access_token") {
       return Response.json({ access_token: "user-token", expires_in: 28800, refresh_token: "refresh-token" });
     }
-    if (path === "/user") return Response.json({ id: 5, login: "murat" });
-    if (path === "/user/installations") return Response.json({ installations: [{ id: 7, account: { login: "murat" } }] });
+    if (path === "/user") return Response.json({ id: 5, login: "ada" });
+    if (path === "/user/installations") return Response.json({ installations: [{ id: 7, account: { login: "ada" } }] });
     if (path === "/user/installations/7/repositories") {
-      return Response.json({ repositories: [repoBody("murat/shop")] });
+      return Response.json({ repositories: [repoBody("ada/shop")] });
     }
     const byName = path.match(/^\/repos\/([^/]+)\/([^/]+)(\/.*)?$/);
     if (byName) {
@@ -93,7 +93,7 @@ beforeEach(() => {
 });
 
 const call = (path: string, init: RequestInit = {}, cookie = "") =>
-  app.request(`${ORIGIN}${path}`, { ...init, headers: { ...(cookie ? { cookie } : {}), ...(init.headers ?? {}) } }, env);
+  app.request(`${ORIGIN}${path}`, { ...init, headers: { ...(cookie ? { cookie } : {}), ...init.headers } }, env);
 
 const post = (path: string, body: unknown, cookie: string, origin = ORIGIN) =>
   call(path, { method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json", origin } }, cookie);
@@ -158,8 +158,8 @@ test("signing out ends the session on the server, not only in the browser", asyn
 
 test("another website cannot make a signed-in visitor start a review", async () => {
   const cookie = await signIn();
-  assert.equal((await post("/api/repos", { link: "murat/shop" }, cookie, "https://evil.example")).status, 403);
-  const form = await call("/api/repos", { method: "POST", body: "link=murat/shop", headers: { origin: ORIGIN, "content-type": "application/x-www-form-urlencoded" } }, cookie);
+  assert.equal((await post("/api/repos", { link: "ada/shop" }, cookie, "https://evil.example")).status, 403);
+  const form = await call("/api/repos", { method: "POST", body: "link=ada/shop", headers: { origin: ORIGIN, "content-type": "application/x-www-form-urlencoded" } }, cookie);
   assert.equal(form.status, 403, "a plain form post is refused");
   assert.equal(queued.length, 0);
 });
@@ -168,7 +168,7 @@ test("another website cannot make a signed-in visitor start a review", async () 
 
 test("nothing is reviewed before the notices are accepted", async () => {
   const cookie = await signIn(false);
-  const response = await post("/api/repos", { link: "https://github.com/murat/shop" }, cookie);
+  const response = await post("/api/repos", { link: "https://github.com/ada/shop" }, cookie);
   assert.equal(response.status, 403);
   assert.equal(((await response.json()) as { status: string }).status, "notice");
   assert.equal(queued.length, 0);
@@ -176,9 +176,9 @@ test("nothing is reviewed before the notices are accepted", async () => {
 
 test("pasting your own repository queues a review of its latest commit and sets the installation up", async () => {
   const cookie = await signIn();
-  const response = await post("/api/repos", { link: "https://github.com/murat/shop.git" }, cookie);
+  const response = await post("/api/repos", { link: "https://github.com/ada/shop.git" }, cookie);
   assert.equal(((await response.json()) as { status: string }).status, "queued");
-  assert.deepEqual(queued, [{ installationId: 7, githubId: 101, owner: "murat", repo: "shop", sha: "c".repeat(40) }]);
+  assert.deepEqual(queued, [{ installationId: 7, githubId: 101, owner: "ada", repo: "shop", sha: "c".repeat(40) }]);
   assert.equal(await installationIsSetUp(env.DB, 7), true, "its later pushes are reviewed too");
 });
 
@@ -193,22 +193,22 @@ test("someone else's repository cannot be reviewed, even a public one", async ()
 
 test("a repository the App is not on yet asks for one click on GitHub", async () => {
   const cookie = await signIn();
-  const body = (await (await post("/api/repos", { link: "murat/fresh" }, cookie)).json()) as { status: string; installUrl: string };
+  const body = (await (await post("/api/repos", { link: "ada/fresh" }, cookie)).json()) as { status: string; installUrl: string };
   assert.equal(body.status, "needs-install");
   assert.equal(body.installUrl, "https://github.com/apps/shipbrace-test/installations/new");
 });
 
 test("a link that isn't a GitHub repository is refused plainly", async () => {
   const cookie = await signIn();
-  for (const link of ["https://gitlab.com/murat/shop", "not a link", "https://github.com/murat", "https://evil.example/github.com/murat/shop"]) {
+  for (const link of ["https://gitlab.com/ada/shop", "not a link", "https://github.com/ada", "https://evil.example/github.com/ada/shop"]) {
     assert.equal((await post("/api/repos", { link }, cookie)).status, 400, link);
   }
 });
 
 test("one person can start only so many reviews an hour", async () => {
   const cookie = await signIn();
-  for (let i = 0; i < 10; i++) await post("/api/repos", { link: "murat/shop" }, cookie);
-  assert.equal((await post("/api/repos", { link: "murat/shop" }, cookie)).status, 429);
+  for (let i = 0; i < 10; i++) await post("/api/repos", { link: "ada/shop" }, cookie);
+  assert.equal((await post("/api/repos", { link: "ada/shop" }, cookie)).status, 429);
   assert.equal(queued.length, 10);
 });
 
@@ -237,22 +237,22 @@ async function keep(githubId: number, repo: string) {
 }
 
 test("a kept review opens only for someone GitHub lets see the repository", async () => {
-  const mine = await keep(101, "murat/shop");
+  const mine = await keep(101, "ada/shop");
   const cookie = await signIn();
   assert.equal((await call(`/api/reviews/${mine.reviewId}`, {}, cookie)).status, 200);
   assert.equal((await call(`/api/history/${mine.historyId}`, {}, cookie)).status, 200);
   assert.equal((await call(`/api/reviews/${mine.reviewId}`)).status, 401, "the link alone is no longer enough");
 
-  REPOS["murat/shop"]!.pull = false;
-  REPOS["murat/shop"]!.push = false;
+  REPOS["ada/shop"]!.pull = false;
+  REPOS["ada/shop"]!.push = false;
   const other = await signIn();
   assert.equal((await call(`/api/reviews/${mine.reviewId}`, {}, other)).status, 403, "removed from the repository, removed from its reviews");
-  REPOS["murat/shop"]!.pull = true;
-  REPOS["murat/shop"]!.push = true;
+  REPOS["ada/shop"]!.pull = true;
+  REPOS["ada/shop"]!.push = true;
 });
 
 test("uninstalling deletes that installation's reviews and nothing else", async () => {
-  const gone = await keep(101, "murat/shop");
+  const gone = await keep(101, "ada/shop");
   await env.DB.prepare("INSERT INTO installations (installation_id) VALUES (7)").run();
   await forgetInstallation(env.DB, 7, "all");
   assert.equal(await d1History(env.DB).review(gone.reviewId), null);
@@ -262,10 +262,10 @@ test("uninstalling deletes that installation's reviews and nothing else", async 
 // --- the small pieces ------------------------------------------------------------------------
 
 test("links are read the way people paste them", () => {
-  for (const link of ["https://github.com/murat/shop", "github.com/murat/shop", "https://www.github.com/murat/shop/", "https://github.com/murat/shop.git", "git@github.com:murat/shop.git", "https://github.com/murat/shop/tree/main/src", "murat/shop"]) {
-    assert.deepEqual(parseRepoLink(link), { owner: "murat", repo: "shop" }, link);
+  for (const link of ["https://github.com/ada/shop", "github.com/ada/shop", "https://www.github.com/ada/shop/", "https://github.com/ada/shop.git", "git@github.com:ada/shop.git", "https://github.com/ada/shop/tree/main/src", "ada/shop"]) {
+    assert.deepEqual(parseRepoLink(link), { owner: "ada", repo: "shop" }, link);
   }
-  assert.equal(parseRepoLink("https://github.com/murat/.."), null);
+  assert.equal(parseRepoLink("https://github.com/ada/.."), null);
 });
 
 test("an encrypted token cannot be altered or opened with another key", async () => {
@@ -291,7 +291,7 @@ test("while invite-only, an account not on the list gets no session at all", asy
 });
 
 test("taking someone off the invite list ends their access immediately", async () => {
-  env.ALLOWED_GITHUB_USERS = "Murat";
+  env.ALLOWED_GITHUB_USERS = "Ada";
   const cookie = await signIn();
   assert.equal((await call("/api/repos", {}, cookie)).status, 200, "the list is not case-sensitive");
   env.ALLOWED_GITHUB_USERS = "someone-else";
@@ -303,7 +303,7 @@ test("taking someone off the invite list ends their access immediately", async (
 test("the package check can be switched off for your installation, and only yours", async () => {
   const cookie = await signIn();
   assert.equal((await post("/api/installations/7/settings", { packageLookup: false }, cookie)).status, 409, "not set up yet");
-  await post("/api/repos", { link: "murat/shop" }, cookie);
+  await post("/api/repos", { link: "ada/shop" }, cookie);
   assert.deepEqual(await installationSwitches(env.DB, 7), { packageLookup: true, aiReview: false }, "the defaults the notices describe");
 
   assert.equal((await post("/api/installations/7/settings", { packageLookup: false }, cookie)).status, 200);
@@ -316,7 +316,7 @@ test("the package check can be switched off for your installation, and only your
 
 test("the AI step cannot be switched on before it is offered", async () => {
   const cookie = await signIn();
-  await post("/api/repos", { link: "murat/shop" }, cookie);
+  await post("/api/repos", { link: "ada/shop" }, cookie);
   assert.equal((await post("/api/installations/7/settings", { aiReview: true }, cookie)).status, 403);
   assert.deepEqual(await installationSwitches(env.DB, 7), { packageLookup: true, aiReview: false });
 });

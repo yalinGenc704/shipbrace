@@ -1,22 +1,13 @@
-# Aegis
+# ShipBrace
 
 A hosted platform that sits beside whatever LLM a developer uses to build a web
 app, and handles security, architecture, and deployment so they can stay in the
 design surface. An opt-in detailed mode lets them follow along in the code.
 
-The user (product owner) is not a developer. Explain decisions in plain
-language, lead with a recommendation, and surface product choices to them;
-absorb engineering choices yourself.
-
-## Working with the product owner (Murat)
-
-- Start every reply with "Murat".
-- Plain language, define terms on first use, lead with one recommendation
-  rather than a menu. Engineering choices are yours; product choices are his.
-- Build the design he specifies. If an implementation choice would change how
-  it works, say so *before* building, not after measuring.
-- He asked for honest numbers: report misses and false alarms as plainly as
-  wins, and verify claims (versions, results) rather than recalling them.
+Working notes for anyone (person or coding agent) changing this codebase:
+what exists, how to run it, the rules that must not be broken, and what is
+known to be missing. The reasoning behind the design is in
+`docs/architecture.md`; the overview for readers is `README.md`.
 
 ## The one rule that defines the security review
 
@@ -52,9 +43,9 @@ review     → ten OWASP Top 10:2025 modules for the user
 | `packages/guardrails/src/rules/` | Per-file rules. `injection.ts` reuses the AST sink detection |
 | `packages/scaffold/` | Generates new apps from composable modules; `auth` is a per-app setting |
 | `server/` | Review API (`GET`/`POST /api/review`), GitHub webhook, kept reviews (`/api/reviews/:id`, `/api/history/:id`); serves `app/dist` when built |
-| `server/src/sandbox/` | **Every review runs here**, in a sealed child process: no secrets, no network, reads limited to Aegis's code, time and memory limits |
+| `server/src/sandbox/` | **Every review runs here**, in a sealed child process: no secrets, no network, reads limited to ShipBrace's code, time and memory limits |
 | `cloud/` | **Where it runs: Cloudflare, live at https://app.shipbrace.com.** Worker (`src/index.ts`: webhook, queue job, kept-review API, dashboard assets), reviewer container class with internet off (`src/reviewer.ts`), D1 history (`src/history-d1.ts`, `migrations/`), `wrangler.jsonc`. `wall-check/` re-proves the internet wall |
-| `Dockerfile`, `deploy/` | **Hosting.** One image, two roles (server, reviewer); `deploy/compose.yaml` runs aegis, reviewer, postgres, backup, cloudflared; `deploy/README.md` is the server setup guide |
+| `Dockerfile`, `deploy/` | **Hosting.** One image, two roles (server, reviewer); `deploy/compose.yaml` runs shipbrace, reviewer, postgres, backup, cloudflared; `deploy/README.md` is the server setup guide |
 | `server/src/history.ts` | Review history in PostgreSQL: schema migrations, save, read back by unguessable link |
 | `app/` | React dashboard: the live review at `/`, a kept review at `/reviews/:id`, a repository's history at `/history/:id` |
 | `scripts/simulate.ts` | Reviews a folder with and without a model and reports the difference |
@@ -75,27 +66,29 @@ review     → ten OWASP Top 10:2025 modules for the user
 
 ## Running things
 
-Development moved to a Mac on 2026-10-09 (Bun installed, Docker not). Aegis
+Development moved to a Mac on 2026-10-09 (Bun installed, Docker not). ShipBrace
 itself still runs on Node; the Bun-based root scripts are untested. Node works
 everywhere:
 
 ```bash
-# PostgreSQL 18 (Homebrew, not started at login). Databases: aegis, aegis_test.
+# PostgreSQL 18 (Homebrew, not started at login). Databases: shipbrace, shipbrace_test.
 LC_ALL=en_US.UTF-8 /opt/homebrew/opt/postgresql@18/bin/pg_ctl -D /opt/homebrew/var/postgresql@18 -l /opt/homebrew/var/log/postgresql@18.log start
 
-# all tests (expect 181 pass). Without TEST_DATABASE_URL the 6 database tests
+# all tests (expect 207 pass). Without TEST_DATABASE_URL the 6 database tests
 # are skipped and say so; it must name a database ending in _test (it is wiped).
-TEST_DATABASE_URL=postgres:///aegis_test node --experimental-strip-types --test packages/guardrails/test/*.test.ts packages/scaffold/test/*.test.ts server/test/*.test.ts
+# CI (.github/workflows/ci.yml) runs typecheck, lint, tests and build on every push.
+TEST_DATABASE_URL=postgres:///shipbrace_test npm test
+npm run typecheck && npx oxlint .
 
 # review API on :3000. Set REVIEW_ROOT explicitly: npm runs workspace scripts
 # from inside server/, so without it only that one folder is reviewed.
 # PACKAGE_LOOKUP=off keeps it fully offline (no OSV.dev lookups).
 # Build the dashboard first so the server serves it (links from GitHub checks).
-npm run build --workspace @aegis/app
+npm run build --workspace @shipbrace/app
 REVIEW_ROOT="$PWD" node --experimental-strip-types --env-file=.env server/src/index.ts
 
 # dashboard on :5173 (falls back to app/src/fixtures/review.json without the API)
-npm run dev --workspace @aegis/app
+npm run dev --workspace @shipbrace/app
 
 # benchmark scores (add --model, with --env-file=.env, to include Claude; costs credit)
 node --experimental-strip-types scripts/bench.ts
@@ -110,7 +103,7 @@ node --experimental-strip-types --env-file=.env scripts/simulate.ts <folder>
 
 `.env` holds `ANTHROPIC_API_KEY`, the GitHub App settings (`GITHUB_APP_ID`,
 `GITHUB_PRIVATE_KEY_PATH`, `GITHUB_WEBHOOK_SECRET`), `DATABASE_URL`
-(`postgres:///aegis` here; no password over the local socket) and, while a
+(`postgres:///shipbrace` here; no password over the local socket) and, while a
 tunnel is open, `PUBLIC_URL` (its address, for links in checks); the App's key file is
 `github-app.pem`. All are git-ignored and must stay that way: on a new machine
 they are recreated, never copied through chat or GitHub. Never print their
@@ -119,9 +112,10 @@ wherever it starts, which is `server/` under `npm start --workspace`. Prepaid
 credits with auto-reload off, so it cannot overspend.
 
 The practice apps used for outside validation are not in this repository;
-re-clone them read-only (never install or run them) into `~/aegis-test-repos`:
-appsecco/dvna, OWASP/NodeGoat, juice-shop/juice-shop. The `review-api-dvna-ai`
-launch entry expects `~/aegis-test-repos/dvna.env` there.
+re-clone them read-only (never install or run them) into `~/shipbrace-test-repos`:
+appsecco/dvna, OWASP/NodeGoat, juice-shop/juice-shop. To review one through
+the server with the AI step, start it with an extra `--env-file` that sets
+`REVIEW_ROOT` to that folder and `AI_REVIEW=on`.
 
 ## Conventions that are load-bearing
 
@@ -162,10 +156,10 @@ launch entry expects `~/aegis-test-repos/dvna.env` there.
   `mysql2` (`server/src/mysql.ts`, tagged-template only, optional `MYSQL_URL`).
   The old `charts`/`spreadsheets` features and `database: "mysql"` silently
   did nothing and were removed. The pin check now covers devDependencies and
-  `latest`; Aegis's own manifests are pinned. The dashboard has "Download as
+  `latest`; ShipBrace's own manifests are pinned. The dashboard has "Download as
   Excel" (lazy-loaded, cells made plain text). Newer versions than the spec
   (TypeScript 7, Vite 8 stable, Bun 1.4) were approved by the user.
-- **Aegis itself still runs on Node, not Bun** (Bun is not installed here), and
+- **ShipBrace itself still runs on Node, not Bun** (Bun is not installed here), and
   has no PostgreSQL, Docker, or login yet: those come with hosting.
 - **Admin pages and password hashes** (project checks): a route with
   `admin` in its address needs a role-ish guard or an `if` testing the role
@@ -177,7 +171,7 @@ launch entry expects `~/aegis-test-repos/dvna.env` there.
   (`<%-`, `{{{`, `!{`, `| safe`, autoescape off). Plain reassignments
   (`x = ...`) are followed. `res.send` of a template containing a tag is html.
 - **Outside validation (2026-10-01), practice apps cloned read-only into
-  `aegis-test-repos` (DVNA, OWASP NodeGoat, OWASP Juice
+  `shipbrace-test-repos` (DVNA, OWASP NodeGoat, OWASP Juice
   Shop):** testing on Express code found false alarms the benchmark never
   covered -- per-route middleware and `app.post(path, security.isAuthorized())`
   were not seen as sign-in checks (DVNA 27 -> 1 open-route warnings, Juice Shop
@@ -243,11 +237,11 @@ launch entry expects `~/aegis-test-repos/dvna.env` there.
   Redeliver under the App's Advanced page rather than pushing again.
 - **Every review is sealed off (2026-10-09)** in a child process
   (`server/src/sandbox/`, details in docs/architecture.md): empty environment,
-  Node permission model (reads only Aegis's code; no network, writes or child
+  Node permission model (reads only ShipBrace's code; no network, writes or child
   processes), 60 s work limit excluding AI waits, 1 GB JS memory, two at once.
   Identical results on all 56 benchmark apps; ~75 ms extra per review. It is a
   JavaScript-level wall: the full seal is a locked-down container at hosting.
-- **Security pass on Aegis itself (2026-10-09).** Fixed: a reviewed folder's
+- **Security pass on ShipBrace itself (2026-10-09).** Fixed: a reviewed folder's
   own `.git/config` could make `git ls-files` run its program via
   `core.fsmonitor` (confirmed, now overridden; test fails on the old code);
   no Content Security Policy (now strict, same-origin only); no way to turn
@@ -255,7 +249,7 @@ launch entry expects `~/aegis-test-repos/dvna.env` there.
   and `/`); no size limit on `POST /api/review`; no cap on waiting reviews
   (`maxWaiting` 50, then refused as "busy"). Left for hosting: rate limiting
   in Cloudflare (behind the tunnel the server cannot see visitors' addresses).
-- **Aegis reviews itself clean (2026-10-09):** 0 risks (was 2 high, 10
+- **ShipBrace reviews itself clean (2026-10-09):** 0 risks (was 2 high, 10
   medium, all false). The logging check now reads parsed code and judges the
   values passed to `console.*`, not words in the message. The key check skips
   obvious placeholders (`looksMadeUp`: placeholder words in one case, six
@@ -263,8 +257,8 @@ launch entry expects `~/aegis-test-repos/dvna.env` there.
   about 1 in 100,000 is wrongly skipped. Test fixtures that must look real
   assemble their keys at runtime. One false lead remains: a README sample in
   `scaffold/src/modules/base.ts` shows a SQL example (step 8).
-- **Live on Cloudflare since 2026-10-10** at https://app.shipbrace.com (Murat
-  chose Cloudflare over a rented server). Workers Paid plan. A push: the
+- **Live on Cloudflare since 2026-10-10** at https://app.shipbrace.com (chosen over a
+  rented server). Workers Paid plan. A push: the
   Worker checks the signature and queues it; the queue job (no retries)
   fetches the code, reviews it in a fresh `standard-1` reviewer container
   (`enableInternet = false`; its only way out is `shipbrace.internal`,
@@ -273,9 +267,9 @@ launch entry expects `~/aegis-test-repos/dvna.env` there.
   live push: same result as the Node server (6 high, 9 medium, 2 low).
   `wall-check/` proved on Cloudflare that web, raw-IP, socket and DNS
   attempts all fail while `shipbrace.internal` works; it was then deleted.
-  The workers.dev address is off. Secrets were set by Murat with
+  The workers.dev address is off. Secrets are set with
   `wrangler secret put`; wrangler's login uses narrow scopes and the macOS
-  Keychain. Deploy from `cloud/`: `npm run build --workspace @aegis/app`,
+  Keychain. Deploy from `cloud/`: `npm run build --workspace @shipbrace/app`,
   then `npx wrangler deploy` (builds the reviewer for linux/amd64 through
   emulation; Colima must be running). For `wall-check/`, call
   `node_modules/.bin/wrangler` with `--config`: `npx` runs from `cloud/` and
@@ -291,64 +285,47 @@ launch entry expects `~/aegis-test-repos/dvna.env` there.
   neither internet nor database; database has no internet; read-only disks,
   uid 1000; no published ports; reviewer outage reported plainly; a backup
   restored. Backups stay on the server: off-server copies are undecided.
+- **Self-review (2026-10-10):** no proven vulnerabilities. Reported: two
+  catch-all routes that only answer 404 (the open-route check cannot yet tell
+  a handler with nothing behind it from one that returns data), and three
+  "worth a look" notes on D1 queries that build `?` placeholder lists. Fixed
+  in the checker that day: a fetch whose *public* origin is fixed in the code
+  is not request forgery (internal hosts still are), and `/webhook(s)`,
+  `/callback`, `/oauth` routes are public by design.
 - **The query check trusts tagged templates by name** (`SAFE_TAG`: `sql`, `db`,
   `query`). postgres.js transactions are usually written `` tx`...` ``, which
   gets a false "worth a look"; `history.ts` names its transaction `sql` to
   avoid it. Users' apps would hit this (step 8).
 
-## Next steps (agreed with Murat 2026-10-01; 1 and 3 done 2026-10-09)
+## Roadmap
 
-**At the start of a session, do not begin these on your own.** Summarise where
-things stand, present this list in plain language (grouped as below, with
-time estimates and the decisions each needs), give the recommendation, and
-ask Murat which to start. Wait for his answer.
+Done: review history (2026-10-09), the sealed reviewer (2026-10-09), hosting
+on Cloudflare (2026-10-10), sign-in with GitHub, paste-a-link, notices and
+per-installation switches (2026-10-10), and the name ShipBrace.
 
-**Recommended next (proposed 2026-10-10, not yet agreed): 4**, sign-up and
-the legal notices, now that it is online; and the rename once the trademark
-check is back.
+### Before anyone else uses it
 
-### Making it usable without the laptop
+1. **Legal:** a privacy policy built from docs/legal/third-party-services.md
+   section 5, reviewed by a lawyer; the AI provider's data processing
+   agreement; a trademark check on "ShipBrace".
+2. **Opening up:** make the GitHub App public, widen `ALLOWED_GITHUB_USERS`,
+   raise `DAILY_REVIEW_LIMIT`, add Cloudflare rate limiting on `/api/*`, and
+   decide who may use the AI step (the only part with a per-review cost).
+3. **Small gaps:** "your call" ticks are per browser, shared across every
+   repository; they should be per repository.
 
-1. ~~**Store past reviews in PostgreSQL.**~~ Done 2026-10-09.
-2. ~~**Put Aegis online, running all the time.**~~ ~1-2 sessions. Needs two
-   decisions from Murat:
-   - *Where it runs.* Recommendation: a small rented server (VPS) running
-     Docker, with Cloudflare Tunnel in front -- exactly the stack's setup.
-     Typically around $5/month.
-   - *A domain name* added to Cloudflare, so the tunnel has a permanent
-     address and the GitHub App's webhook URL never changes again. Typically
-     around $10/year.
-   - **Done 2026-10-10: live on Cloudflare** (see Current state). Left:
-     Cloudflare rate limiting on `/api/*`, and turning the AI step on when
-     Murat wants it (`AI_REVIEW` in wrangler.jsonc; the key is already set).
+### The rest of the vision
 
-### Required before anyone else uses it
-
-3. ~~**Run the code reader sealed off.**~~ Done 2026-10-09 (the container
-   seal remains, under step 2).
-4. **Sign-up, the legal notices, and per-person on/off switches** for the AI
-   and the package lookup (docs/legal/third-party-services.md section 4).
-   ~1-2 sessions. Also: put kept reviews behind sign-in, decide how long they
-   are kept, and make the "your call" ticks per repository (today they are
-   per browser, shared across every repository).
-5. **A real product name.** Chosen 2026-10-09: **ShipBrace** (a brace holds
-   a structure steady while it is built). Murat bought `shipbrace.com` on
-   Cloudflare the same day. Left: a trademark check, then the code, dashboard, GitHub App and repository are renamed
-   from Aegis. Rejected: Foreman (a 2026 AI dev tool has it), MergeStrike
-   (jargon, sounds like attacking), AppSec.io (generic, cannot be protected),
-   PushSentinel (Microsoft Sentinel / SentinelOne trademark risk).
-
-### The rest of the original vision
-
-6. **Switch Aegis itself to Bun and Docker** (the generated apps already use
-   them). Done for the starter kit on 2026-10-01: charts, Excel, and MySQL.
-7. **Deployment:** putting users' apps online with Cloudflare -- the "handles
-   deployment" part of the vision. Not started.
-8. **More detection:** stored attacks (bad data saved, shown later),
-   browser-side code, the XML upload attack (XXE), and sign-in checks written
-   inside a handler (Juice Shop `dataErasure`), and transactions written
-   `` tx`...` `` (see above), and SQL-looking text in documentation templates.
-   Also remove or deprecate the legacy exports listed
-   above.
+4. **Deployment:** putting users' apps online with Cloudflare -- the
+   "handles deployment" part. Not started. Open question: the user's own
+   Cloudflare account, or ShipBrace's.
+5. **Starting structure for new apps:** `packages/scaffold` exists and passes
+   its own review, but nothing lets a user reach it yet.
+6. **More detection:** stored attacks (bad data saved, shown later),
+   browser-side code, the XML upload attack (XXE), sign-in checks written
+   inside a handler (Juice Shop `dataErasure`), transactions written
+   `` tx`...` `` (see above), and SQL-looking text in documentation
+   templates; routes whose handler returns only constants (nothing to
+   protect). Also remove the legacy exports listed above.
 
 See `docs/architecture.md` for the reasoning behind these decisions.

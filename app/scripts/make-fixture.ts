@@ -1,7 +1,7 @@
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { runSecurityReview, snapshotFromFiles } from "@aegis/guardrails";
+import { runSecurityReview, snapshotFromFiles } from "@shipbrace/guardrails";
 
 /**
  * Generates the sample review the dashboard renders until the server exists.
@@ -13,7 +13,7 @@ import { runSecurityReview, snapshotFromFiles } from "@aegis/guardrails";
  */
 
 // Shaped like a real key, so the sample shows that problem; assembled here so
-// this script never holds one whole and Aegis does not report itself.
+// this script never holds one whole and ShipBrace does not report itself.
 const SAMPLE_KEY = ["sk", "liveT4kQ9wZr7Lm2Xc8Vb5Nd3"].join("-");
 
 const SAMPLE = [

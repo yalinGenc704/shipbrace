@@ -1,17 +1,17 @@
-# Running Aegis on a server
+# Running ShipBrace on a server
 
 Five containers, defined in [compose.yaml](compose.yaml):
 
 | Container | Job | Can reach |
 | --- | --- | --- |
-| `aegis` | The review server and dashboard | the database, the reviewer, and the internet (GitHub, the AI provider, OSV.dev) |
-| `reviewer` | Reads users' code, one sealed process per review | **nothing**: no network at all, only a private socket shared with `aegis` |
-| `postgres` | Review history | only `aegis` and `backup`; no internet |
+| `shipbrace` | The review server and dashboard | the database, the reviewer, and the internet (GitHub, the AI provider, OSV.dev) |
+| `reviewer` | Reads users' code, one sealed process per review | **nothing**: no network at all, only a private socket shared with `shipbrace` |
+| `postgres` | Review history | only `shipbrace` and `backup`; no internet |
 | `backup` | A copy of the database every night, 14 kept | only `postgres` |
-| `cloudflared` | The tunnel: the only way in | Cloudflare, and `aegis` |
+| `cloudflared` | The tunnel: the only way in | Cloudflare, and `shipbrace` |
 
 Nothing listens on the server's own address. Every container runs without
-administrator rights, cannot gain them, and has a memory cap. `aegis` and
+administrator rights, cannot gain them, and has a memory cap. `shipbrace` and
 `reviewer` also have read-only disks. All of this was tested on a laptop
 first: a review through every container, the reviewer unable to reach the
 internet or the database, the database unable to reach the internet, no ports
@@ -49,37 +49,37 @@ added when it is created, a domain on Cloudflare, and this Mac's `.env` and
    three times), then add the contents of `~/.ssh/id_ed25519.pub` to the
    repository on GitHub under Settings → Deploy keys, **without** write access.
    ```bash
-   git clone git@github.com:yalinGenc704/aegis.git ~/aegis
+   git clone git@github.com:yalinGenc704/shipbrace.git ~/shipbrace
    ```
 
 5. **The Cloudflare tunnel.** In Cloudflare's dashboard: Zero Trust → Networks →
    Tunnels → Create a tunnel → Cloudflared. Copy the token it shows. Under
-   *Public hostname*, add `aegis.<your-domain>` pointing to `http://aegis:3000`.
+   *Public hostname*, add `app.<your-domain>` pointing to `http://shipbrace:3000`.
 
 6. **Settings and the App key.** Settings go in `deploy/.env` on the server only:
    ```bash
-   cd ~/aegis/deploy
+   cd ~/shipbrace/deploy
    cp .env.production.example .env && chmod 600 .env
    sed -i "s/<generate-me>/$(openssl rand -hex 32)/" .env
    nano .env    # PUBLIC_URL, CLOUDFLARE_TUNNEL_TOKEN, GITHUB_WEBHOOK_SECRET, optionally ANTHROPIC_API_KEY
    ```
    Copy the App key from the Mac (run this **on the Mac**):
    ```bash
-   scp "/Users/yalingenc/Documents/Inspirit AI Project/aegis/github-app.pem" root@<server-address>:aegis/deploy/secrets/github-app.pem
+   scp <your checkout>/github-app.pem root@<server-address>:shipbrace/deploy/secrets/github-app.pem
    ```
    Then make it readable by the container's user only (on the server):
    ```bash
-   chown 1000:1000 ~/aegis/deploy/secrets/github-app.pem && chmod 400 ~/aegis/deploy/secrets/github-app.pem
+   chown 1000:1000 ~/shipbrace/deploy/secrets/github-app.pem && chmod 400 ~/shipbrace/deploy/secrets/github-app.pem
    ```
 
 7. **Start it:**
    ```bash
-   cd ~/aegis/deploy && docker compose up -d --build && docker compose ps
+   cd ~/shipbrace/deploy && docker compose up -d --build && docker compose ps
    ```
-   All five should say `Up`, and `aegis` should say `healthy` within a minute.
+   All five should say `Up`, and `shipbrace` should say `healthy` within a minute.
 
 8. **Point GitHub at it.** In the App's settings, set the webhook URL to
-   `https://aegis.<your-domain>/api/github/webhook`. That is the last time it
+   `https://app.<your-domain>/api/github/webhook`. That is the last time it
    changes.
 
 9. **Rate limiting** (Cloudflare → your domain → Security → WAF → Rate
@@ -88,14 +88,14 @@ added when it is created, a domain on Cloudflare, and this Mac's `.env` and
 
 ## Day to day
 
-- **Update to the latest version:** `sh ~/aegis/deploy/update.sh`
-- **See what is running:** `cd ~/aegis/deploy && docker compose ps`
-- **Read the logs:** `docker compose logs --tail 100 aegis`
+- **Update to the latest version:** `sh ~/shipbrace/deploy/update.sh`
+- **See what is running:** `cd ~/shipbrace/deploy && docker compose ps`
+- **Read the logs:** `docker compose logs --tail 100 shipbrace`
 - **Stop everything:** `docker compose down` (keeps the data; `down -v` deletes it)
 
 ## Backups
 
-Every night `backup` writes `aegis-<date>.dump` into the `backups` volume and
+Every night `backup` writes `shipbrace-<date>.dump` into the `backups` volume and
 deletes copies older than 14 days. **These copies live on the same server**, so
 they protect against mistakes, not against losing the server. For that, switch
 on the provider's own server backups, or copy the files elsewhere. That choice
@@ -103,11 +103,11 @@ is still open.
 
 **Restore** (replaces the current history with a backup):
 ```bash
-cd ~/aegis/deploy
+cd ~/shipbrace/deploy
 docker compose exec backup ls /backups
-docker compose stop aegis
-docker compose exec backup pg_restore --clean --if-exists -d aegis /backups/aegis-<date>.dump
-docker compose start aegis
+docker compose stop shipbrace
+docker compose exec backup pg_restore --clean --if-exists -d shipbrace /backups/shipbrace-<date>.dump
+docker compose start shipbrace
 ```
 
 ## Trying it on a laptop

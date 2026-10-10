@@ -9,7 +9,7 @@ COPY server/package.json server/
 COPY cloud/package.json cloud/
 COPY packages/guardrails/package.json packages/guardrails/
 COPY packages/scaffold/package.json packages/scaffold/
-RUN npm ci --ignore-scripts --omit=dev --workspace @aegis/server
+RUN npm ci --ignore-scripts --omit=dev --workspace @shipbrace/server
 
 FROM node:26-bookworm-slim@sha256:86f07bc9c5dce4578cf37e5a418b7bfc7f817cda25cde66e2b66e95ed86c4567
 ENV NODE_ENV=production

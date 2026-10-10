@@ -398,3 +398,24 @@ test("a model that refuses leaves the rules' findings intact and says so", async
     ?.items.find((i) => i.id === "injection/database");
   assert.equal(item?.risks.length, 1, "the rules' own finding must survive the refusal");
 });
+
+test("webhooks and sign-in callbacks are public by design, not open doors", async () => {
+  const review = await runSecurityReview(
+    snapshotFromFiles([{
+      path: "server/src/index.ts",
+      content: [
+        'import { Hono } from "hono";',
+        "const app = new Hono();",
+        'app.post("/api/github/webhook", async (c) => c.json(await handle(c)));',
+        'app.get("/auth/callback", async (c) => c.redirect("/"));',
+        'app.post("/api/orders", async (c) => c.json(await createOrder(c)));',
+      ].join("\n"),
+    }]),
+  );
+  const open = review.modules
+    .flatMap((m) => m.items)
+    .find((i) => i.id === "access-control/unguarded-routes")!
+    .risks.map((r) => r.what);
+  assert.equal(open.length, 1);
+  assert.match(open[0]!, /\/api\/orders/, "an ordinary route without sign-in is still reported");
+});

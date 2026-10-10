@@ -1,4 +1,4 @@
-import type { ActionItem, ReviewModule, Unproven } from "@aegis/guardrails";
+import type { ActionItem, ReviewModule, Unproven } from "@shipbrace/guardrails";
 import { ChevronRight, Eye, FileCode2 } from "lucide-react";
 import { useState } from "react";
 import type { Mode } from "../lib/review.ts";

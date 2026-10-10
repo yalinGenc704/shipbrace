@@ -1,7 +1,7 @@
 // A throwaway check that the reviewer's "no internet" setting holds on
 // Cloudflare. Deploy, open /run, delete. See index.ts.
 {
-  "name": "aegis-wall-check",
+  "name": "shipbrace-wall-check",
   "main": "index.ts",
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],

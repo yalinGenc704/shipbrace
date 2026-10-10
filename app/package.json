@@ -1,5 +1,5 @@
 {
-  "name": "@aegis/app",
+  "name": "@shipbrace/app",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -10,7 +10,7 @@
     "fixture": "node --experimental-strip-types scripts/make-fixture.ts"
   },
   "dependencies": {
-    "@aegis/guardrails": "*",
+    "@shipbrace/guardrails": "*",
     "@tanstack/react-query": "5.102.8",
     "@tanstack/react-router": "1.170.32",
     "chart.js": "4.5.1",

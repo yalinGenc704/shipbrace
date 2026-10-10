@@ -48,7 +48,7 @@ export function redact(text: string): string {
       (_m, head: string, q: string) => `${head}${q}[redacted]${q}`,
     )
     // Bare provider-shaped tokens anywhere on the line.
-    .replace(/\b(sk-|ghp_|github_pat_|xox[baprs]-|AKIA)[A-Za-z0-9_\-]{8,}/g, "$1[redacted]")
+    .replace(/\b(sk-|ghp_|github_pat_|xox[baprs]-|AKIA)[A-Za-z0-9_-]{8,}/g, "$1[redacted]")
     // JWTs.
     .replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+/g, "[redacted-jwt]");
 }

@@ -1,4 +1,4 @@
-import type { ReviewResult } from "@aegis/guardrails";
+import type { ReviewResult } from "@shipbrace/guardrails";
 
 /**
  * Past reviews kept by the server (server/src/history.ts), read back by the

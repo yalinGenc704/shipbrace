@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
-const KEY = "aegis.reviewed.v1";
+const KEY = "shipbrace.reviewed.v1";
 
 /**
  * Which "your call" items the user has ticked off.

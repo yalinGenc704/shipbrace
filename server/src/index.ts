@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import Anthropic from "@anthropic-ai/sdk";
-import { createClaudeProposer, createOsvSource, type RepoSnapshot, type ReviewResult } from "@aegis/guardrails";
+import { createClaudeProposer, createOsvSource, type RepoSnapshot, type ReviewResult } from "@shipbrace/guardrails";
 import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
@@ -211,7 +211,7 @@ function failure(c: Context, error: unknown) {
 }
 
 /**
- * The built dashboard (`npm run build --workspace @aegis/app`), so the links in
+ * The built dashboard (`npm run build --workspace @shipbrace/app`), so the links in
  * GitHub checks open on the same address as the API. Each page the dashboard
  * has gets its one HTML file, which then picks what to show; anything else is
  * a 404 rather than a page.
