@@ -13,7 +13,9 @@ export async function loadReview(): Promise<ReviewResult | null> {
   const response = await fetch("/api/review").catch(() => null);
 
   if (response?.ok) return (await response.json()) as ReviewResult;
-  if (response?.status === 404 && !import.meta.env.DEV) return null;
+  // No folder review here (hosted): show the home page. 401 is the same
+  // answer from a server that asks everyone to sign in first.
+  if ((response?.status === 404 || response?.status === 401) && !import.meta.env.DEV) return null;
 
   if (import.meta.env.DEV) {
     // Real engine output, so the shape is guaranteed to match.

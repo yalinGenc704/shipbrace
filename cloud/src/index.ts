@@ -62,6 +62,10 @@ app.post("/api/github/webhook", async (c) => {
   return result.status === 204 ? c.body(null, 204) : c.json(result.body, result.status as 200);
 });
 
+// There is no folder to review on Cloudflare (that is the laptop's feature).
+// Answered before sign-in, so the front page can tell and show the home page.
+app.get("/api/review", (c) => c.json({ error: "Not found." }, 404));
+
 // Sign-in, the notices, pasting a link, and kept reviews for people who may see them.
 app.route("/", accountRoutes());
 
