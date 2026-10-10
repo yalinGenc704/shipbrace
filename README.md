@@ -7,6 +7,13 @@ ShipBrace reviews the app's security: what is *proven* wrong, why it matters,
 and what to do, in plain language. After that, every push is checked
 automatically and the result appears right on the commit in GitHub.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/report-dark.png">
+  <img alt="A ShipBrace report: a summary of problems found, then each one explained in plain language with why it matters and what to do" src="docs/images/report-light.png" width="720">
+</picture>
+
+<sub>A ShipBrace report on a deliberately flawed sample app.</sub>
+
 More and more people build web apps by describing what they want to an AI
 coding assistant, without reading the code. ShipBrace is meant to sit next to
 whichever assistant they use and take care of the parts that need an expert:
