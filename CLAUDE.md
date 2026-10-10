@@ -59,6 +59,7 @@ review     → ten OWASP Top 10:2025 modules for the user
 | `packages/guardrails/bench/` | **The benchmark.** Sample apps with a known answer key (`cases.ts`) and the grader (`grade.ts`). `test/bench.test.ts` ratchets the scores |
 | `packages/guardrails/src/review/vulnerabilities.ts` | Known flaws in installed packages via OSV.dev (A03). Off unless a `VulnerabilitySource` is passed; the server passes one |
 | `docs/legal/third-party-services.md` | What leaves the platform, what users must be told, draft privacy-policy text |
+| `README.md` | Plain-language overview for anyone: the vision, how a review decides, the rules, honest numbers, what is built |
 | `scripts/bench.ts` | Prints the benchmark scores: rules alone, perfect suggester, optionally a real model |
 
 ### Do not use these — they are legacy and still exported
@@ -212,7 +213,7 @@ launch entry expects `~/aegis-test-repos/dvna.env` there.
   across files. It does not follow method calls (`obj.fn(x)`), and a helper
   name defined twice, unknown code, or destructured parameters make the
   claim `undecidable` (never `no-path`).
-- 17 of 35 checklist items have no detector and are left to the user. The
+- 16 of 38 checklist items have no detector and are left to the user (counted 2026-10-09). The
   checklist follows OWASP Top 10:2025; the four items added for its new
   categories (A03 supply chain, A10 exceptional conditions) have no detector yet.
 - **GitHub App works end to end (first live run 2026-10-01):** App ID 5157570
