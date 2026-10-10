@@ -15,6 +15,7 @@ export interface ConnectedRepo {
   name: string;
   private: boolean;
   canReview: boolean;
+  installationId: number;
   historyId: string | null;
   latest: { id: string; createdAt: string; conclusion: "success" | "neutral" | "failure"; title: string } | null;
 }
@@ -49,6 +50,22 @@ export async function signOut(): Promise<void> {
   await fetch("/auth/logout", { method: "POST" });
   window.location.href = "/";
 }
+
+export interface InstallationSettings {
+  id: number;
+  account: string;
+  packageLookup: boolean;
+  aiReview: boolean;
+}
+
+export async function loadInstallations(): Promise<{ installations: InstallationSettings[]; aiAvailable: boolean }> {
+  const response = await fetch("/api/installations");
+  if (!response.ok) throw new Error(`The server answered ${response.status}.`);
+  return (await response.json()) as { installations: InstallationSettings[]; aiAvailable: boolean };
+}
+
+export const saveSettings = (id: number, change: { packageLookup?: boolean; aiReview?: boolean }) =>
+  send<{ ok?: boolean; error?: string }>(`/api/installations/${id}/settings`, change);
 
 export async function loadRepos(): Promise<ConnectedRepo[]> {
   const response = await fetch("/api/repos");

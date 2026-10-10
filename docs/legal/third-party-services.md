@@ -24,7 +24,7 @@ open-source security team.
 | Credit the source of the flaw data | Much of OSV's npm data comes from the GitHub Advisory Database under the CC-BY 4.0 licence, which requires attribution wherever the data is shown | Every result shows the notice: OSV.dev, GitHub Advisory Database, CC-BY 4.0 (`OSV_NOTICE`). It shows on the checklist item whether or not anything was found |
 | Tell users what leaves their system | Transparency is required by most privacy laws (for example GDPR Articles 13–14) when personal data is involved, and is expected in any case by customers handing over their code. Package names are usually not personal data, but a lockfile can occasionally reveal something about a person or company | The notice on the item says what was sent and to whom, on every review |
 | Tell users **before** the first send | A notice after the fact informs; it does not let someone decline | **Not built yet** — there is no sign-up flow. When sign-up is built, it must show this disclosure before the first review runs (see section 4) |
-| Let users decline | Good practice, and required in some contracts | `PACKAGE_LOOKUP=off` turns it off for the whole server. **A per-user setting is needed** once there are multiple users |
+| Let users decline | Good practice, and required in some contracts | A switch per GitHub account or organisation (Settings on app.shipbrace.com, built 2026-10-10); `PACKAGE_LOOKUP=off` turns it off for everyone |
 | Name the service in the privacy policy | Privacy policies must list the outside services personal data may go to | Draft text in section 5 |
 
 ## 2. The AI step: the model provider

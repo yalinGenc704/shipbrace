@@ -30,7 +30,10 @@
     "GITHUB_CLIENT_ID": "Iv23liy8pr9ByG3NznCo",
     "AI_REVIEW": "off",
     "PACKAGE_LOOKUP": "on",
-    "DAILY_REVIEW_LIMIT": "200"
+    // Low while ShipBrace is private; raise at launch.
+    "DAILY_REVIEW_LIMIT": "20",
+    // Invite-only until launch: only these GitHub accounts can sign in.
+    "ALLOWED_GITHUB_USERS": "yalinGenc704"
   },
 
   // Review history. Create once with `npx wrangler d1 create aegis-history`
@@ -59,7 +62,7 @@
       "image": "./reviewer.Dockerfile",
       "image_build_context": "..",
       "instance_type": "standard-1",
-      "max_instances": 5
+      "max_instances": 2
     }
   ],
   "durable_objects": {

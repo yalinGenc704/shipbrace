@@ -3,7 +3,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { beforeEach, test } from "node:test";
 import { runSecurityReview, snapshotFromFiles } from "@aegis/guardrails";
 import { Hono } from "hono";
-import { accountRoutes, forgetInstallation, installationIsSetUp, NOTICE_VERSION } from "../src/accounts.ts";
+import { accountRoutes, forgetInstallation, installationIsSetUp, installationSwitches, NOTICE_VERSION } from "../src/accounts.ts";
 import { decrypt, encrypt, randomToken } from "../src/crypto.ts";
 import type { Env } from "../src/env.ts";
 import { parseRepoLink } from "../src/github-user.ts";
@@ -38,7 +38,7 @@ function fakeGitHub(): typeof fetch {
       return Response.json({ access_token: "user-token", expires_in: 28800, refresh_token: "refresh-token" });
     }
     if (path === "/user") return Response.json({ id: 5, login: "murat" });
-    if (path === "/user/installations") return Response.json({ installations: [{ id: 7 }] });
+    if (path === "/user/installations") return Response.json({ installations: [{ id: 7, account: { login: "murat" } }] });
     if (path === "/user/installations/7/repositories") {
       return Response.json({ repositories: [repoBody("murat/shop")] });
     }
@@ -275,4 +275,52 @@ test("an encrypted token cannot be altered or opened with another key", async ()
   await assert.rejects(decrypt(KEY, tampered));
   const otherKey = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
   await assert.rejects(decrypt(otherKey, sealed));
+});
+
+// --- invite-only ----------------------------------------------------------------------
+
+test("while invite-only, an account not on the list gets no session at all", async () => {
+  env.ALLOWED_GITHUB_USERS = "someone-else";
+  const start = await call("/auth/login");
+  const stateCookie = start.headers.get("set-cookie")!.split(";")[0]!;
+  const state = new URL(start.headers.get("location")!).searchParams.get("state")!;
+  const back = await call(`/auth/callback?code=abc&state=${state}`, {}, stateCookie);
+  assert.equal(back.headers.get("location"), "/?invite-only=1");
+  assert.ok(!back.headers.getSetCookie().some((c) => c.startsWith("__Host-shipbrace=")));
+  assert.equal(await env.DB.prepare("SELECT count(*) AS n FROM users").first<{ n: number }>().then((r) => r?.n), 0, "nothing stored about them");
+});
+
+test("taking someone off the invite list ends their access immediately", async () => {
+  env.ALLOWED_GITHUB_USERS = "Murat";
+  const cookie = await signIn();
+  assert.equal((await call("/api/repos", {}, cookie)).status, 200, "the list is not case-sensitive");
+  env.ALLOWED_GITHUB_USERS = "someone-else";
+  assert.equal((await call("/api/repos", {}, cookie)).status, 401);
+});
+
+// --- the off switches ----------------------------------------------------------------
+
+test("the package check can be switched off for your installation, and only yours", async () => {
+  const cookie = await signIn();
+  assert.equal((await post("/api/installations/7/settings", { packageLookup: false }, cookie)).status, 409, "not set up yet");
+  await post("/api/repos", { link: "murat/shop" }, cookie);
+  assert.deepEqual(await installationSwitches(env.DB, 7), { packageLookup: true, aiReview: false }, "the defaults the notices describe");
+
+  assert.equal((await post("/api/installations/7/settings", { packageLookup: false }, cookie)).status, 200);
+  assert.deepEqual(await installationSwitches(env.DB, 7), { packageLookup: false, aiReview: false });
+  const listed = (await (await call("/api/installations", {}, cookie)).json()) as { installations: Array<{ id: number; packageLookup: boolean }> };
+  assert.deepEqual(listed.installations.map((i) => [i.id, i.packageLookup]), [[7, false]]);
+
+  assert.equal((await post("/api/installations/9/settings", { packageLookup: false }, cookie)).status, 403, "someone else's");
+});
+
+test("the AI step cannot be switched on before it is offered", async () => {
+  const cookie = await signIn();
+  await post("/api/repos", { link: "murat/shop" }, cookie);
+  assert.equal((await post("/api/installations/7/settings", { aiReview: true }, cookie)).status, 403);
+  assert.deepEqual(await installationSwitches(env.DB, 7), { packageLookup: true, aiReview: false });
+});
+
+test("an installation nobody set up sends nothing anywhere", async () => {
+  assert.deepEqual(await installationSwitches(env.DB, 12345), { packageLookup: false, aiReview: false });
 });

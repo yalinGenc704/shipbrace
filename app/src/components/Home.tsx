@@ -4,10 +4,12 @@ import { AlertTriangle, CircleHelp, ExternalLink, Loader2, LogIn, LogOut, Shield
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   acceptNotice,
+  loadInstallations,
   loadMe,
   loadRepos,
   pasteLink,
   rememberLink,
+  saveSettings,
   setUpInstallation,
   signInUrl,
   signOut,
@@ -65,6 +67,11 @@ function SignedOut() {
         Sign in with GitHub
       </a>
       <p className="mt-3 text-xs text-ink-soft">ShipBrace never sees or stores a password.</p>
+      {new URLSearchParams(window.location.search).has("invite-only") && (
+        <p className="mt-4 rounded-xl bg-review-bg p-3 text-sm text-ink">
+          ShipBrace isn't open to everyone yet. Your GitHub account isn't on the invite list.
+        </p>
+      )}
     </Shell>
   );
 }
@@ -102,7 +109,7 @@ function Notice({ version }: { version: string }) {
         {point("What ShipBrace reads", "The code in repositories you connect, read from GitHub. It is read, never run, in a sealed container with no internet access.")}
         {point(
           "What leaves ShipBrace",
-          "The names and versions of the public packages your app uses are sent to OSV.dev, a free database of known flaws run by Google. Never your code, your file names, or private package names. A way to switch this off is coming; until then, don't connect a repository if you'd rather it wasn't sent.",
+          "The names and versions of the public packages your app uses are sent to OSV.dev, a free database of known flaws run by Google. Never your code, your file names, or private package names. It's on unless you switch it off: there's a switch under Settings once you've connected a repository.",
         )}
         {point(
           "The AI step",
@@ -183,6 +190,8 @@ function Paste({ login }: { login: string }) {
       </form>
       <Outcome result={result} waiting={Boolean(waitingFor)} />
 
+      <Settings />
+
       <h2 className="mt-10 text-sm font-semibold text-ink">Connected repositories</h2>
       {repos.isPending ? (
         <p className="mt-2 text-sm text-ink-soft">Loading…</p>
@@ -240,6 +249,70 @@ function RepoRow({ repo }: { repo: ConnectedRepo }) {
         </Link>
       )}
     </li>
+  );
+}
+
+/**
+ * What leaves the platform, per GitHub account or organisation ShipBrace is
+ * installed on. A switch only changes reviews started after it is flipped.
+ */
+function Settings() {
+  const client = useQueryClient();
+  const data = useQuery({ queryKey: ["installations"], queryFn: loadInstallations });
+  const [error, setError] = useState("");
+  if (!data.data || data.data.installations.length === 0) return null;
+
+  async function flip(id: number, change: { packageLookup?: boolean; aiReview?: boolean }) {
+    setError("");
+    const result = await saveSettings(id, change);
+    if (!result.ok) setError(result.error ?? "That didn't save. Please try again.");
+    void client.invalidateQueries({ queryKey: ["installations"] });
+  }
+
+  return (
+    <section className="mt-10">
+      <h2 className="text-sm font-semibold text-ink">Settings</h2>
+      <ul className="mt-3 space-y-3">
+        {data.data.installations.map((inst) => (
+          <li key={inst.id} className="rounded-2xl border border-line bg-surface-raised p-4">
+            <p className="text-sm font-medium text-ink">{inst.account}</p>
+            <Switch
+              label="Check packages for known flaws"
+              detail="Sends the names and versions of your public packages to OSV.dev. Never your code."
+              on={inst.packageLookup}
+              onChange={(on) => void flip(inst.id, { packageLookup: on })}
+            />
+            <Switch
+              label="AI-assisted review"
+              detail={data.data!.aiAvailable ? "Sends short excerpts of your code, secrets removed, to Anthropic." : "Not available yet. Nothing is sent to an AI."}
+              on={inst.aiReview}
+              disabled={!data.data!.aiAvailable}
+              onChange={(on) => void flip(inst.id, { aiReview: on })}
+            />
+          </li>
+        ))}
+      </ul>
+      {error && <p className="mt-2 text-sm text-danger">{error}</p>}
+    </section>
+  );
+}
+
+function Switch({ label, detail, on, disabled, onChange }: { label: string; detail: string; on: boolean; disabled?: boolean; onChange: (on: boolean) => void }) {
+  return (
+    <label className={`mt-3 flex items-start justify-between gap-4 ${disabled ? "opacity-60" : "cursor-pointer"}`}>
+      <span>
+        <span className="block text-sm text-ink">{label}</span>
+        <span className="mt-0.5 block text-xs text-ink-soft">{detail}</span>
+      </span>
+      <input
+        type="checkbox"
+        role="switch"
+        checked={on}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+        className="mt-1 size-5 shrink-0 accent-[var(--color-ok)]"
+      />
+    </label>
   );
 }
 

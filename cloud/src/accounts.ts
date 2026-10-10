@@ -31,7 +31,7 @@ import { clearedSessionCookie, closeSession, cookieValue, openSession, readSessi
  */
 
 /** Bump when the notices change; everyone is asked again. */
-export const NOTICE_VERSION = "2026-10-10";
+export const NOTICE_VERSION = "2026-10-10.2";
 const REVIEWS_PER_HOUR = 10;
 const STATE_COOKIE = "__Host-shipbrace-state";
 
@@ -47,6 +47,16 @@ const configured = (env: Env) => Boolean(env.GITHUB_CLIENT_SECRET && env.SESSION
 
 /** Where to send someone after signing in: a path on this site, never elsewhere. */
 const safeReturn = (path: string | undefined) => (path && /^\/(?!\/)[\w\-./?=&%]*$/.test(path) ? path : "/");
+
+/**
+ * While ShipBrace is not open to the public, only these GitHub accounts may
+ * sign in (ALLOWED_GITHUB_USERS, comma-separated, any case). Empty means open
+ * to everyone.
+ */
+export function allowed(env: Env, login: string): boolean {
+  const list = (env.ALLOWED_GITHUB_USERS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+  return list.length === 0 || list.includes(login.toLowerCase());
+}
 
 /** Two strings compared without leaking, through timing, how much matched. */
 function sameString(a: string, b: string): boolean {
@@ -94,6 +104,8 @@ export function accountRoutes() {
     try {
       const tokens = await exchangeCode(oauthApp(c.env), code);
       const user = await currentUser(tokens.accessToken);
+      // Not on the invite list: no session, nothing stored about them.
+      if (!allowed(c.env, user.login)) return c.redirect("/?invite-only=1");
       const value = await openSession(c.env.DB, c.env.SESSION_KEY!, user, tokens);
       c.header("Set-Cookie", sessionCookie(value), { append: true });
       c.header("Set-Cookie", `${STATE_COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0`, { append: true });
@@ -117,9 +129,11 @@ export function accountRoutes() {
     }
     if (!configured(c.env)) return c.json({ error: "Sign-in is not set up yet." }, 503);
     const session = await readSession(c.env.DB, c.env.SESSION_KEY!, oauthApp(c.env), c.req.header("cookie"));
-    if (!session && c.req.path === "/api/me") return c.json({ signedIn: false, noticeVersion: NOTICE_VERSION });
-    if (!session) return c.json({ error: "Please sign in." }, 401);
-    c.set("session", session);
+    // Someone taken off the invite list loses access at once, not at session expiry.
+    const current = session && allowed(c.env, session.login) ? session : null;
+    if (!current && c.req.path === "/api/me") return c.json({ signedIn: false, noticeVersion: NOTICE_VERSION });
+    if (!current) return c.json({ error: "Please sign in." }, 401);
+    c.set("session", current);
     c.header("Cache-Control", "no-store");
     c.header("X-Robots-Tag", "noindex");
     await next();
@@ -218,7 +232,7 @@ export function accountRoutes() {
   app.get("/api/repos", async (c) => {
     const session = c.get("session");
     const installations = (await userInstallations(session.token)).slice(0, 10);
-    const repos = (await Promise.all(installations.map((id) => installationRepos(session.token, id).then((r) => r.map((x) => ({ ...x, installationId: id }))))))
+    const repos = (await Promise.all(installations.map(({ id }) => installationRepos(session.token, id).then((r) => r.map((x) => ({ ...x, installationId: id }))))))
       .flat()
       .filter((r) => r.read)
       .slice(0, 90);
@@ -243,6 +257,7 @@ export function accountRoutes() {
           name: r.name,
           private: r.private,
           canReview: r.write,
+          installationId: r.installationId,
           historyId: row?.history_id ?? null,
           latest: row?.review_id ? { id: row.review_id, createdAt: row.created_at, conclusion: row.conclusion, title: row.title } : null,
         };
@@ -256,12 +271,53 @@ export function accountRoutes() {
     if (session.noticeVersion !== NOTICE_VERSION) return c.json({ error: "Please read the notices first." }, 403);
     const id = Number(c.req.param("id"));
     // The address can be typed by anyone; GitHub says whether this person can see that installation.
-    if (!Number.isSafeInteger(id) || !(await userInstallations(session.token)).includes(id)) {
+    if (!Number.isSafeInteger(id) || !(await userInstallations(session.token)).some((i) => i.id === id)) {
       return c.json({ error: "That installation isn't yours." }, 403);
     }
     await c.env.DB.prepare("INSERT INTO installations (installation_id, set_up_by) VALUES (?, ?) ON CONFLICT DO NOTHING")
       .bind(id, session.githubId)
       .run();
+    return c.json({ ok: true });
+  });
+
+  // --- what leaves the platform: per-installation switches -------------------------
+
+  /** The installations this person can see that are set up, with their switches. */
+  app.get("/api/installations", async (c) => {
+    const visible = await userInstallations(c.get("session").token);
+    if (visible.length === 0) return c.json({ installations: [], aiAvailable: c.env.AI_REVIEW === "on" });
+    const { results } = await c.env.DB.prepare(
+      `SELECT installation_id, package_lookup, ai_review FROM installations WHERE installation_id IN (${visible.map(() => "?").join(",")})`,
+    )
+      .bind(...visible.map((i) => i.id))
+      .all<{ installation_id: number; package_lookup: number; ai_review: number }>();
+    return c.json({
+      aiAvailable: c.env.AI_REVIEW === "on",
+      installations: results.map((row) => ({
+        id: row.installation_id,
+        account: visible.find((i) => i.id === row.installation_id)?.account ?? "",
+        packageLookup: row.package_lookup === 1,
+        aiReview: row.ai_review === 1,
+      })),
+    });
+  });
+
+  app.post("/api/installations/:id/settings", async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isSafeInteger(id) || !(await userInstallations(c.get("session").token)).some((i) => i.id === id)) {
+      return c.json({ error: "That installation isn't yours." }, 403);
+    }
+    const body = (await c.req.json().catch(() => ({}))) as { packageLookup?: unknown; aiReview?: unknown };
+    if (body.aiReview === true && c.env.AI_REVIEW !== "on") return c.json({ error: "The AI step isn't available yet." }, 403);
+    const updates: Array<[string, number]> = [];
+    if (typeof body.packageLookup === "boolean") updates.push(["package_lookup", body.packageLookup ? 1 : 0]);
+    if (typeof body.aiReview === "boolean") updates.push(["ai_review", body.aiReview ? 1 : 0]);
+    if (updates.length === 0) return c.json({ error: "Nothing to change." }, 400);
+    // Column names come from the fixed list above, never from the request.
+    const result = await c.env.DB.prepare(`UPDATE installations SET ${updates.map(([col]) => `${col} = ?`).join(", ")} WHERE installation_id = ?`)
+      .bind(...updates.map(([, v]) => v), id)
+      .run();
+    if (!result.meta.changes) return c.json({ error: "Set this installation up first by reviewing one of its repositories." }, 409);
     return c.json({ ok: true });
   });
 
@@ -295,6 +351,12 @@ export function accountRoutes() {
 /** What the webhook needs: is an installation set up, and deleting what an uninstall removes. */
 export const installationIsSetUp = async (db: D1Database, id: number) =>
   Boolean(await db.prepare("SELECT 1 FROM installations WHERE installation_id = ?").bind(id).first());
+
+/** An installation's switches. Unknown installations get nothing sent anywhere. */
+export async function installationSwitches(db: D1Database, id: number): Promise<{ packageLookup: boolean; aiReview: boolean }> {
+  const row = await db.prepare("SELECT package_lookup, ai_review FROM installations WHERE installation_id = ?").bind(id).first<{ package_lookup: number; ai_review: number }>();
+  return { packageLookup: row?.package_lookup === 1, aiReview: row?.ai_review === 1 };
+}
 
 export async function forgetInstallation(db: D1Database, installationId: number, repositoryIds: number[] | "all"): Promise<void> {
   if (repositoryIds === "all") {

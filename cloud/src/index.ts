@@ -5,7 +5,7 @@ import type { ReviewReply, ReviewRequest } from "@aegis/server/sandbox/reviewer-
 import { ReviewStoppedError } from "@aegis/server/sandbox/stopped.ts";
 import { Hono } from "hono";
 import { secureHeaders } from "hono/secure-headers";
-import { accountRoutes, forgetInstallation, installationIsSetUp } from "./accounts.ts";
+import { accountRoutes, forgetInstallation, installationIsSetUp, installationSwitches } from "./accounts.ts";
 import type { Env } from "./env.ts";
 import { d1History } from "./history-d1.ts";
 
@@ -78,18 +78,21 @@ app.all("/api/*", (c) => c.json({ error: "Not found." }, 404));
  * started: a ceiling on what any burst -- or abuse -- can cost. The check
  * says so in plain words instead.
  */
-async function reviewInContainer(env: Env, snapshot: RepoSnapshot): Promise<ReviewResult> {
+async function reviewInContainer(env: Env, snapshot: RepoSnapshot, installationId: number): Promise<ReviewResult> {
   const today = await env.DB.prepare("SELECT count(*) AS n FROM reviews WHERE created_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 day')").first<{ n: number }>();
   if ((today?.n ?? 0) >= Number(env.DAILY_REVIEW_LIMIT || 200)) {
     console.error("daily review limit reached; review not started");
     throw new ReviewStoppedError("busy");
   }
+  // Each outside step needs both: offered on this deployment, and switched on
+  // for this installation. Switched off, the report says it was not checked.
+  const switches = await installationSwitches(env.DB, installationId);
   const reviewer = env.REVIEWER.get(env.REVIEWER.newUniqueId());
   const request: ReviewRequest = {
     files: snapshot.files.map(({ path, content }) => ({ path, content })),
     tracked: [...snapshot.tracked],
-    ...(env.AI_REVIEW === "on" && env.ANTHROPIC_API_KEY ? { proposer: { name: "claude" } } : {}),
-    ...(env.PACKAGE_LOOKUP === "on" ? { vulnerabilities: { notice: OSV_NOTICE } } : {}),
+    ...(env.AI_REVIEW === "on" && env.ANTHROPIC_API_KEY && switches.aiReview ? { proposer: { name: "claude" } } : {}),
+    ...(env.PACKAGE_LOOKUP === "on" && switches.packageLookup ? { vulnerabilities: { notice: OSV_NOTICE } } : {}),
   };
 
   try {
@@ -119,10 +122,10 @@ function isReviewResult(value: unknown): value is ReviewResult {
   return typeof r === "object" && r !== null && Array.isArray(r.modules) && typeof r.summary === "object" && typeof r.stats === "object";
 }
 
-function reviewDeps(env: Env): ReviewDeps {
+function reviewDeps(env: Env, job: PushJob): ReviewDeps {
   return {
     credentials: { appId: env.GITHUB_APP_ID, privateKey: env.GITHUB_PRIVATE_KEY ?? "" },
-    review: (snapshot) => reviewInContainer(env, snapshot),
+    review: (snapshot) => reviewInContainer(env, snapshot, job.installationId),
     history: d1History(env.DB),
     publicUrl: env.PUBLIC_URL.replace(/\/+$/, ""),
     log: (message, error) => console.error(message, error instanceof Error ? error.message : ""),
@@ -151,7 +154,7 @@ export default {
    */
   async queue(batch: MessageBatch<PushJob>, env: Env): Promise<void> {
     for (const message of batch.messages) {
-      await reviewPush(reviewDeps(env), message.body);
+      await reviewPush(reviewDeps(env, message.body), message.body);
       message.ack();
     }
   },
