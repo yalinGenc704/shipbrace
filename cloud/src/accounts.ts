@@ -1,0 +1,314 @@
+import { appJwt } from "@aegis/server/github/auth.ts";
+import { Hono, type Context } from "hono";
+import { randomToken } from "./crypto.ts";
+import type { Env } from "./env.ts";
+import {
+  authorizeUrl,
+  currentUser,
+  exchangeCode,
+  installationRepos,
+  parseRepoLink,
+  repoAccess,
+  repoAccessById,
+  userInstallations,
+  type OAuthApp,
+} from "./github-user.ts";
+import { d1History } from "./history-d1.ts";
+import { clearedSessionCookie, closeSession, cookieValue, openSession, readSession, sessionCookie, type Session } from "./session.ts";
+
+/**
+ * Everything a signed-in person does: sign in and out, accept the notices,
+ * paste a repository link, finish setting up the GitHub App, and read kept
+ * reviews -- each one only for repositories GitHub says they may see.
+ *
+ * The rules, in order of importance:
+ *  - A review can only be *started* on a repository the person can change.
+ *    Otherwise ShipBrace would map the weak spots of other people's sites.
+ *  - A kept review can only be *read* by someone GitHub lets see the repository,
+ *    asked again (at most five minutes stale) every time.
+ *  - Nothing is reviewed, so nothing is sent anywhere, until the person has
+ *    accepted the current notices.
+ */
+
+/** Bump when the notices change; everyone is asked again. */
+export const NOTICE_VERSION = "2026-10-10";
+const REVIEWS_PER_HOUR = 10;
+const STATE_COOKIE = "__Host-shipbrace-state";
+
+type C = Context<{ Bindings: Env; Variables: { session: Session } }>;
+
+const oauthApp = (env: Env): OAuthApp => ({
+  clientId: env.GITHUB_CLIENT_ID,
+  clientSecret: env.GITHUB_CLIENT_SECRET ?? "",
+  redirectUri: `${env.PUBLIC_URL.replace(/\/+$/, "")}/auth/callback`,
+});
+
+const configured = (env: Env) => Boolean(env.GITHUB_CLIENT_SECRET && env.SESSION_KEY && env.GITHUB_PRIVATE_KEY);
+
+/** Where to send someone after signing in: a path on this site, never elsewhere. */
+const safeReturn = (path: string | undefined) => (path && /^\/(?!\/)[\w\-./?=&%]*$/.test(path) ? path : "/");
+
+/** Two strings compared without leaking, through timing, how much matched. */
+function sameString(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+/** Answers to "may this person see repository N", per session, for five minutes. */
+const accessCache = new Map<string, { read: boolean; until: number }>();
+
+async function canRead(session: Session, githubId: number): Promise<boolean> {
+  const key = `${session.idHash}:${githubId}`;
+  const cached = accessCache.get(key);
+  if (cached && cached.until > Date.now()) return cached.read;
+  const access = await repoAccessById(session.token, githubId);
+  const read = Boolean(access?.read);
+  if (accessCache.size > 5_000) accessCache.clear();
+  accessCache.set(key, { read, until: Date.now() + 5 * 60_000 });
+  return read;
+}
+
+export function accountRoutes() {
+  const app = new Hono<{ Bindings: Env; Variables: { session: Session } }>();
+
+  // --- signing in and out --------------------------------------------------------
+
+  app.get("/auth/login", (c) => {
+    if (!configured(c.env)) return c.text("Sign-in is not set up yet.", 503);
+    const state = randomToken();
+    const back = safeReturn(c.req.query("return"));
+    c.header("Set-Cookie", `${STATE_COOKIE}=${state}.${encodeURIComponent(back)}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=600`);
+    return c.redirect(authorizeUrl(oauthApp(c.env), state));
+  });
+
+  app.get("/auth/callback", async (c) => {
+    if (!configured(c.env)) return c.text("Sign-in is not set up yet.", 503);
+    const [expected, back] = (cookieValue(c.req.header("cookie"), STATE_COOKIE) ?? "").split(".");
+    const state = c.req.query("state") ?? "";
+    const code = c.req.query("code");
+    // The state ties this callback to the sign-in this browser started; without
+    // it, another site could sign a visitor into the attacker's account.
+    if (!expected || !code || !sameString(expected, state)) return c.text("Sign-in expired. Please try again.", 400);
+    try {
+      const tokens = await exchangeCode(oauthApp(c.env), code);
+      const user = await currentUser(tokens.accessToken);
+      const value = await openSession(c.env.DB, c.env.SESSION_KEY!, user, tokens);
+      c.header("Set-Cookie", sessionCookie(value), { append: true });
+      c.header("Set-Cookie", `${STATE_COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0`, { append: true });
+      return c.redirect(safeReturn(decodeURIComponent(back ?? "")));
+    } catch (error) {
+      console.error("sign-in failed:", error instanceof Error ? error.message : "unknown");
+      return c.text("Sign-in did not complete. Please try again.", 502);
+    }
+  });
+
+  // --- everything below needs a session ---------------------------------------------
+
+  app.use("/api/*", async (c, next) => {
+    // Changes must come from this site's own pages: same origin, sent as JSON
+    // (which another site cannot do without the browser asking first).
+    if (c.req.method !== "GET") {
+      const origin = c.req.header("origin");
+      if (origin !== new URL(c.env.PUBLIC_URL).origin || !c.req.header("content-type")?.startsWith("application/json")) {
+        return c.json({ error: "Refused." }, 403);
+      }
+    }
+    if (!configured(c.env)) return c.json({ error: "Sign-in is not set up yet." }, 503);
+    const session = await readSession(c.env.DB, c.env.SESSION_KEY!, oauthApp(c.env), c.req.header("cookie"));
+    if (!session && c.req.path === "/api/me") return c.json({ signedIn: false, noticeVersion: NOTICE_VERSION });
+    if (!session) return c.json({ error: "Please sign in." }, 401);
+    c.set("session", session);
+    c.header("Cache-Control", "no-store");
+    c.header("X-Robots-Tag", "noindex");
+    await next();
+  });
+
+  app.get("/api/me", (c) => {
+    const s = c.get("session");
+    return c.json({ signedIn: true, login: s.login, noticeVersion: NOTICE_VERSION, noticeAccepted: s.noticeVersion === NOTICE_VERSION });
+  });
+
+  app.post("/auth/logout", async (c) => {
+    if (c.req.header("origin") !== new URL(c.env.PUBLIC_URL).origin) return c.json({ error: "Refused." }, 403);
+    await closeSession(c.env.DB, c.req.header("cookie"));
+    c.header("Set-Cookie", clearedSessionCookie());
+    return c.json({ ok: true });
+  });
+
+  app.post("/api/notice", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as { version?: string };
+    if (body.version !== NOTICE_VERSION) return c.json({ error: "Please reload and read the current notices." }, 409);
+    await c.env.DB.prepare("UPDATE users SET notice_version = ?, notice_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE github_id = ?")
+      .bind(NOTICE_VERSION, c.get("session").githubId)
+      .run();
+    return c.json({ ok: true });
+  });
+
+  // --- pasting a link -------------------------------------------------------------------
+
+  app.post("/api/repos", async (c) => (await pasted(c)) as Response);
+
+  async function pasted(c: C) {
+    const session = c.get("session");
+    if (session.noticeVersion !== NOTICE_VERSION) return c.json({ status: "notice", error: "Please read the notices first." }, 403);
+
+    const { link } = (await c.req.json().catch(() => ({}))) as { link?: string };
+    const parsed = parseRepoLink(String(link ?? ""));
+    if (!parsed) return c.json({ status: "invalid", error: "That doesn't look like a GitHub repository link." }, 400);
+
+    const installUrl = `https://github.com/apps/${c.env.GITHUB_APP_SLUG}/installations/new`;
+    const repo = await repoAccess(session.token, parsed.owner, parsed.repo);
+    if (!repo) {
+      return c.json({
+        status: "needs-install",
+        installUrl,
+        message: "ShipBrace can't see this repository yet. If it's private, allow ShipBrace on it on GitHub, then paste the link again.",
+      });
+    }
+    if (!repo.write) {
+      return c.json(
+        { status: "not-yours", error: "You can only review repositories you can change: your own, or your team's." },
+        403,
+      );
+    }
+
+    // Is the App installed on it? Asked as the App, not as the person.
+    const asApp = await fetch(`https://api.github.com/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/installation`, {
+      headers: {
+        authorization: `Bearer ${appJwt(c.env.GITHUB_APP_ID, c.env.GITHUB_PRIVATE_KEY!)}`,
+        accept: "application/vnd.github+json",
+        "user-agent": "shipbrace",
+      },
+    });
+    if (asApp.status === 404) {
+      return c.json({ status: "needs-install", installUrl, message: "Allow ShipBrace on this repository on GitHub, then paste the link again." });
+    }
+    if (!asApp.ok) return c.json({ status: "error", error: "GitHub did not answer. Please try again." }, 502);
+    const { id: installationId } = (await asApp.json()) as { id: number };
+
+    const recent = await c.env.DB.prepare(
+      "SELECT count(*) AS n FROM review_requests WHERE github_id = ? AND requested_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 hour')",
+    )
+      .bind(session.githubId)
+      .first<{ n: number }>();
+    if ((recent?.n ?? 0) >= REVIEWS_PER_HOUR) {
+      return c.json({ status: "limit", error: `You can start ${REVIEWS_PER_HOUR} reviews an hour. Please try again later.` }, 429);
+    }
+
+    const head = await fetch(
+      `https://api.github.com/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/commits/${encodeURIComponent(repo.defaultBranch)}`,
+      { headers: { authorization: `Bearer ${session.token}`, accept: "application/vnd.github+json", "user-agent": "shipbrace" } },
+    );
+    const sha = head.ok ? ((await head.json()) as { sha?: string }).sha : undefined;
+    if (!sha || !/^[0-9a-f]{40}$/.test(sha)) return c.json({ status: "empty", error: "This repository has no commits to review yet." }, 409);
+
+    // Pasting with the notices accepted is setting the installation up: from
+    // now on its pushes are reviewed too.
+    await c.env.DB.batch([
+      c.env.DB.prepare("INSERT INTO installations (installation_id, set_up_by) VALUES (?, ?) ON CONFLICT DO NOTHING").bind(installationId, session.githubId),
+      c.env.DB.prepare("INSERT INTO review_requests (github_id) VALUES (?)").bind(session.githubId),
+    ]);
+    await c.env.REVIEWS.send({ installationId, githubId: repo.githubId, owner: repo.owner, repo: repo.name, sha });
+    return c.json({ status: "queued", repository: { githubId: repo.githubId, owner: repo.owner, name: repo.name, sha } });
+  }
+
+  /** Repositories this person can see through the App, with their latest review. */
+  app.get("/api/repos", async (c) => {
+    const session = c.get("session");
+    const installations = (await userInstallations(session.token)).slice(0, 10);
+    const repos = (await Promise.all(installations.map((id) => installationRepos(session.token, id).then((r) => r.map((x) => ({ ...x, installationId: id }))))))
+      .flat()
+      .filter((r) => r.read)
+      .slice(0, 90);
+    if (repos.length === 0) return c.json({ repositories: [] });
+
+    const { results } = await c.env.DB.prepare(
+      `SELECT p.github_id, p.history_id, r.id AS review_id, r.created_at, r.conclusion, r.title
+       FROM repositories p
+       LEFT JOIN reviews r ON r.id = (SELECT id FROM reviews WHERE repository_id = p.id ORDER BY created_at DESC LIMIT 1)
+       WHERE p.github_id IN (${repos.map(() => "?").join(",")})`,
+    )
+      .bind(...repos.map((r) => r.githubId))
+      .all<{ github_id: number; history_id: string; review_id: string | null; created_at: string | null; conclusion: string | null; title: string | null }>();
+    const kept = new Map(results.map((row) => [row.github_id, row]));
+
+    return c.json({
+      repositories: repos.map((r) => {
+        const row = kept.get(r.githubId);
+        return {
+          githubId: r.githubId,
+          owner: r.owner,
+          name: r.name,
+          private: r.private,
+          canReview: r.write,
+          historyId: row?.history_id ?? null,
+          latest: row?.review_id ? { id: row.review_id, createdAt: row.created_at, conclusion: row.conclusion, title: row.title } : null,
+        };
+      }),
+    });
+  });
+
+  /** GitHub's "Setup URL" lands here after someone installs the App. */
+  app.post("/api/installations/:id/setup", async (c) => {
+    const session = c.get("session");
+    if (session.noticeVersion !== NOTICE_VERSION) return c.json({ error: "Please read the notices first." }, 403);
+    const id = Number(c.req.param("id"));
+    // The address can be typed by anyone; GitHub says whether this person can see that installation.
+    if (!Number.isSafeInteger(id) || !(await userInstallations(session.token)).includes(id)) {
+      return c.json({ error: "That installation isn't yours." }, 403);
+    }
+    await c.env.DB.prepare("INSERT INTO installations (installation_id, set_up_by) VALUES (?, ?) ON CONFLICT DO NOTHING")
+      .bind(id, session.githubId)
+      .run();
+    return c.json({ ok: true });
+  });
+
+  // --- kept reviews: only for people who can see the repository ----------------------
+
+  app.get("/api/reviews/:id", async (c) => {
+    const row = await c.env.DB.prepare("SELECT p.github_id FROM reviews r JOIN repositories p ON p.id = r.repository_id WHERE r.id = ?")
+      .bind(c.req.param("id"))
+      .first<{ github_id: number }>();
+    if (!row) return c.json({ error: "No review at this address." }, 404);
+    if (!(await canRead(c.get("session"), row.github_id))) {
+      return c.json({ error: "You don't have access to this repository on GitHub." }, 403);
+    }
+    return c.json(await d1History(c.env.DB).review(c.req.param("id")));
+  });
+
+  app.get("/api/history/:id", async (c) => {
+    const row = await c.env.DB.prepare("SELECT github_id FROM repositories WHERE history_id = ?")
+      .bind(c.req.param("id"))
+      .first<{ github_id: number }>();
+    if (!row) return c.json({ error: "No review history at this address." }, 404);
+    if (!(await canRead(c.get("session"), row.github_id))) {
+      return c.json({ error: "You don't have access to this repository on GitHub." }, 403);
+    }
+    return c.json(await d1History(c.env.DB).repository(c.req.param("id")));
+  });
+
+  return app;
+}
+
+/** What the webhook needs: is an installation set up, and deleting what an uninstall removes. */
+export const installationIsSetUp = async (db: D1Database, id: number) =>
+  Boolean(await db.prepare("SELECT 1 FROM installations WHERE installation_id = ?").bind(id).first());
+
+export async function forgetInstallation(db: D1Database, installationId: number, repositoryIds: number[] | "all"): Promise<void> {
+  if (repositoryIds === "all") {
+    await db.batch([
+      db.prepare("DELETE FROM reviews WHERE repository_id IN (SELECT id FROM repositories WHERE installation_id = ?)").bind(installationId),
+      db.prepare("DELETE FROM repositories WHERE installation_id = ?").bind(installationId),
+      db.prepare("DELETE FROM installations WHERE installation_id = ?").bind(installationId),
+    ]);
+    return;
+  }
+  for (const id of repositoryIds.slice(0, 500)) {
+    await db.batch([
+      db.prepare("DELETE FROM reviews WHERE repository_id IN (SELECT id FROM repositories WHERE github_id = ?)").bind(id),
+      db.prepare("DELETE FROM repositories WHERE github_id = ?").bind(id),
+    ]);
+  }
+}

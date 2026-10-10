@@ -5,6 +5,7 @@ import { useState, type ReactNode } from "react";
 import type { Mode } from "../lib/review.ts";
 import { loadReview } from "../lib/review.ts";
 import { useReviewed } from "../lib/reviewed.ts";
+import { Home } from "./Home.tsx";
 import { ModuleCard } from "./ModuleCard.tsx";
 import { Summary } from "./Summary.tsx";
 
@@ -16,7 +17,7 @@ export function ReviewPage() {
 
   if (isPending) return <Loading>Reviewing your application…</Loading>;
 
-  if (review === null) return <Landing />;
+  if (review === null) return <Home />;
 
   if (error || !review) {
     return (
@@ -27,19 +28,6 @@ export function ReviewPage() {
   }
 
   return <ReviewView review={review} />;
-}
-
-/** The hosted front page: reports are opened from a GitHub check, never browsed. */
-function Landing() {
-  return (
-    <div className="mx-auto max-w-xl px-4 py-16 sm:py-24">
-      <h1 className="text-2xl font-semibold text-ink">ShipBrace</h1>
-      <p className="mt-3 text-sm leading-relaxed text-ink-soft">
-        ShipBrace reviews every change pushed to a connected GitHub repository and posts the result next to the
-        change on GitHub. Open a report from the check on your commit: each one has its own private link.
-      </p>
-    </div>
-  );
 }
 
 export function Loading({ children }: { children: ReactNode }) {

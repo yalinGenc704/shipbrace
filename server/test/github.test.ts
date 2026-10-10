@@ -251,3 +251,33 @@ test("a review stopped by its time limit says so on the check, in plain words", 
   assert.match(final.output.summary, /longer than its time limit/);
   assert.match(final.output.summary, /Nothing in this commit was checked/);
 });
+
+// --- setup and uninstall ------------------------------------------------------------
+
+test("pushes from an installation nobody has set up are not reviewed", async () => {
+  const github = fakeGitHub({ "server/src/api.ts": VULNERABLE });
+  const d = deps(github.fetchImpl);
+  const gated = { ...d, isSetUp: async (id: number) => id !== 7 };
+  const body = push();
+  const result = await handleWebhook(gated, { signature: sign(body), event: "push" }, body);
+  assert.equal(result.status, 202);
+  assert.equal(result.body.accepted, false);
+  assert.equal(d.done.length, 0);
+  assert.equal(github.calls.length, 0, "nothing was fetched or sent");
+});
+
+test("uninstalling deletes everything kept; removing repositories deletes theirs", async () => {
+  const forgotten: Array<[number, number[] | "all"]> = [];
+  const d = { ...deps(fakeGitHub({}).fetchImpl), forget: async (i: number, r: number[] | "all") => void forgotten.push([i, r]) };
+
+  const uninstall = JSON.stringify({ action: "deleted", installation: { id: 7 } });
+  assert.equal((await handleWebhook(d, { signature: sign(uninstall), event: "installation" }, uninstall)).status, 200);
+
+  const removed = JSON.stringify({ action: "removed", installation: { id: 7 }, repositories_removed: [{ id: 41 }, { id: 42 }] });
+  await handleWebhook(d, { signature: sign(removed), event: "installation_repositories" }, removed);
+
+  const forged = JSON.stringify({ action: "deleted", installation: { id: 8 } });
+  assert.equal((await handleWebhook(d, { signature: "sha256=forged", event: "installation" }, forged)).status, 401);
+
+  assert.deepEqual(forgotten, [[7, "all"], [7, [41, 42]]], "and an unsigned uninstall deletes nothing");
+});

@@ -1,11 +1,11 @@
 import type { RepoSnapshot, ReviewResult } from "@aegis/guardrails";
 import { OSV_NOTICE } from "@aegis/guardrails/vulnerabilities";
 import { handleWebhook, reviewPush, type PushJob, type ReviewDeps } from "@aegis/server/github/webhook.ts";
-import { historyRoutes } from "@aegis/server/history-routes.ts";
 import type { ReviewReply, ReviewRequest } from "@aegis/server/sandbox/reviewer-http.ts";
 import { ReviewStoppedError } from "@aegis/server/sandbox/stopped.ts";
 import { Hono } from "hono";
 import { secureHeaders } from "hono/secure-headers";
+import { accountRoutes, forgetInstallation, installationIsSetUp } from "./accounts.ts";
 import type { Env } from "./env.ts";
 import { d1History } from "./history-d1.ts";
 
@@ -41,16 +41,6 @@ app.use(
 // Nothing about the deployment: anyone can call this.
 app.get("/api/health", (c) => c.json({ ok: true }));
 
-app.all("/api/reviews/*", (c) => kept(c.req.raw, c.env));
-app.all("/api/history/*", (c) => kept(c.req.raw, c.env));
-
-/** Kept reviews, read back by unguessable link (server/src/history-routes.ts). */
-function kept(request: Request, env: Env) {
-  const url = new URL(request.url);
-  url.pathname = url.pathname.replace(/^\/api/, "");
-  return historyRoutes(d1History(env.DB)).fetch(new Request(url, request));
-}
-
 app.post("/api/github/webhook", async (c) => {
   const secret = c.env.GITHUB_WEBHOOK_SECRET;
   if (!secret || !c.env.GITHUB_PRIVATE_KEY) return c.json({ error: "GitHub integration is not configured." }, 503);
@@ -58,7 +48,12 @@ app.post("/api/github/webhook", async (c) => {
 
   const jobs: PushJob[] = [];
   const result = await handleWebhook(
-    { secret, schedule: (job) => void jobs.push(job) },
+    {
+      secret,
+      schedule: (job) => void jobs.push(job),
+      isSetUp: (id) => installationIsSetUp(c.env.DB, id),
+      forget: (id, repos) => forgetInstallation(c.env.DB, id, repos),
+    },
     { signature: c.req.header("x-hub-signature-256"), event: c.req.header("x-github-event") },
     await c.req.text(),
   );
@@ -66,6 +61,9 @@ app.post("/api/github/webhook", async (c) => {
   for (const job of jobs) await c.env.REVIEWS.send(job);
   return result.status === 204 ? c.body(null, 204) : c.json(result.body, result.status as 200);
 });
+
+// Sign-in, the notices, pasting a link, and kept reviews for people who may see them.
+app.route("/", accountRoutes());
 
 app.all("/api/*", (c) => c.json({ error: "Not found." }, 404));
 
@@ -116,8 +114,20 @@ function reviewDeps(env: Env): ReviewDeps {
   };
 }
 
+/** How long kept reviews are kept. Older ones are deleted every night. */
+const KEEP_DAYS = 90;
+
 export default {
   fetch: app.fetch,
+
+  /** Nightly: old reviews, finished sign-ins, and spent rate-limit records go. */
+  async scheduled(_event: ScheduledController, env: Env): Promise<void> {
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM reviews WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?)").bind(`-${KEEP_DAYS} days`),
+      env.DB.prepare("DELETE FROM sessions WHERE expires_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"),
+      env.DB.prepare("DELETE FROM review_requests WHERE requested_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 day')"),
+    ]);
+  },
 
   /**
    * One push at a time per message. Never retried: a failed review already

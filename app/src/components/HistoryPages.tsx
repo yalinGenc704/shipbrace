@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { AlertTriangle, ArrowLeft, CircleHelp, GitCommitHorizontal, ShieldCheck } from "lucide-react";
 import type { ReactNode } from "react";
-import { formatWhen, loadHistory, loadStoredReview, NotFound, type Conclusion } from "../lib/history.ts";
+import { formatWhen, loadHistory, loadStoredReview, NoAccess, NotFound, type Conclusion } from "../lib/history.ts";
 import { Loading, ReviewView } from "./ReviewPage.tsx";
 
 /**
@@ -15,14 +15,16 @@ export function StoredReviewPage({ id }: { id: string }) {
   const { data, isPending, error } = useQuery({
     queryKey: ["stored-review", id],
     queryFn: () => loadStoredReview(id),
-    retry: (count, e) => !(e instanceof NotFound) && count < 1,
+    retry: (count, e) => !(e instanceof NotFound) && !(e instanceof NoAccess) && count < 1,
   });
 
   if (isPending) return <Loading>Loading the review…</Loading>;
   if (error || !data) {
     return (
       <Problem>
-        {error instanceof NotFound
+        {error instanceof NoAccess
+          ? "This review belongs to a repository your GitHub account can't see. Ask its owner for access on GitHub."
+          : error instanceof NotFound
           ? "There is no review at this address. Check that the link was copied in full."
           : "The review could not be loaded. Do not treat this as a pass."}
       </Problem>
@@ -69,14 +71,16 @@ export function HistoryPage({ id }: { id: string }) {
   const { data, isPending, error } = useQuery({
     queryKey: ["history", id],
     queryFn: () => loadHistory(id),
-    retry: (count, e) => !(e instanceof NotFound) && count < 1,
+    retry: (count, e) => !(e instanceof NotFound) && !(e instanceof NoAccess) && count < 1,
   });
 
   if (isPending) return <Loading>Loading the review history…</Loading>;
   if (error || !data) {
     return (
       <Problem>
-        {error instanceof NotFound
+        {error instanceof NoAccess
+          ? "This history belongs to a repository your GitHub account can't see. Ask its owner for access on GitHub."
+          : error instanceof NotFound
           ? "There is no review history at this address. Check that the link was copied in full."
           : "The review history could not be loaded."}
       </Problem>

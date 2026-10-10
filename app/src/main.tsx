@@ -8,6 +8,7 @@ import {
 } from "@tanstack/react-router";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { SetupPage } from "./components/Home.tsx";
 import { HistoryPage, StoredReviewPage } from "./components/HistoryPages.tsx";
 import { ReviewPage } from "./components/ReviewPage.tsx";
 import "./styles.css";
@@ -37,8 +38,11 @@ const historyRoute = createRoute({
   },
 });
 
+// GitHub's "Setup URL": where people land after allowing ShipBrace on a repository.
+const setupRoute = createRoute({ getParentRoute: () => rootRoute, path: "/setup", component: SetupPage });
+
 const router = createRouter({
-  routeTree: rootRoute.addChildren([reviewRoute, storedReviewRoute, historyRoute]),
+  routeTree: rootRoute.addChildren([reviewRoute, storedReviewRoute, historyRoute, setupRoute]),
 });
 
 declare module "@tanstack/react-router" {

@@ -27,6 +27,8 @@ export interface Skipped {
 export interface NewReview {
   /** GitHub's repository id. Unlike the name, it survives renames and transfers. */
   githubId: number;
+  /** The App installation it came through, so an uninstall can delete it. */
+  installationId?: number;
   owner: string;
   repo: string;
   commitSha: string;

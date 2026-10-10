@@ -20,12 +20,14 @@
     "directory": "../app/dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"]
+    "run_worker_first": ["/api/*", "/auth/*"]
   },
 
   "vars": {
     "PUBLIC_URL": "https://app.shipbrace.com",
     "GITHUB_APP_ID": "5157570",
+    "GITHUB_APP_SLUG": "yg-aegis-review",
+    "GITHUB_CLIENT_ID": "<from the App's settings page>",
     "AI_REVIEW": "off",
     "PACKAGE_LOOKUP": "on"
   },
@@ -62,5 +64,8 @@
   "durable_objects": {
     "bindings": [{ "name": "REVIEWER", "class_name": "Reviewer" }]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Reviewer"] }]
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Reviewer"] }],
+
+  // Nightly clean-up (src/index.ts, `scheduled`): reviews older than 90 days.
+  "triggers": { "crons": ["17 3 * * *"] }
 }

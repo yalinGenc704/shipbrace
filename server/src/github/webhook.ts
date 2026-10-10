@@ -35,6 +35,20 @@ export interface WebhookDeps {
   secret: string;
   /** Takes the job after GitHub has been answered. */
   schedule: (job: PushJob) => void;
+  /**
+   * Whether this installation's pushes may be reviewed yet: someone signed in
+   * and accepted the notices for it. Until then nothing is sent anywhere.
+   * Omitted on a laptop, where the person running it is the one who agreed.
+   */
+  isSetUp?: (installationId: number) => Promise<boolean>;
+  /** The App was uninstalled (`"all"`), or repositories were removed from it: delete what was kept. */
+  forget?: (installationId: number, repositoryIds: number[] | "all") => Promise<void>;
+}
+
+interface InstallationEvent {
+  action?: string;
+  installation?: { id?: number };
+  repositories_removed?: Array<{ id?: number }>;
 }
 
 export interface ReviewDeps {
@@ -70,6 +84,9 @@ export async function handleWebhook(
   }
 
   if (headers.event === "ping") return { status: 200, body: { ok: true } };
+  if (headers.event === "installation" || headers.event === "installation_repositories") {
+    return forgetRemoved(deps, headers.event, rawBody);
+  }
   if (headers.event !== "push") return { status: 204, body: {} };
 
   let event: PushEvent;
@@ -91,8 +108,39 @@ export async function handleWebhook(
     return { status: 400, body: { error: "Invalid request." } };
   }
 
+  if (deps.isSetUp && !(await deps.isSetUp(installation))) {
+    return { status: 202, body: { accepted: false, reason: "This installation has not been set up yet." } };
+  }
+
   deps.schedule({ installationId: installation, githubId: githubId!, owner, repo, sha });
   return { status: 202, body: { accepted: true } };
+}
+
+/** Uninstalls and removed repositories: what was kept about them is deleted. */
+async function forgetRemoved(
+  deps: WebhookDeps,
+  event: "installation" | "installation_repositories",
+  rawBody: string,
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  let body: InstallationEvent;
+  try {
+    body = JSON.parse(rawBody) as InstallationEvent;
+  } catch {
+    return { status: 400, body: { error: "Invalid request." } };
+  }
+  const installation = body.installation?.id;
+  if (!deps.forget || !Number.isSafeInteger(installation)) return { status: 204, body: {} };
+
+  if (event === "installation" && body.action === "deleted") {
+    await deps.forget(installation!, "all");
+    return { status: 200, body: { forgotten: "installation" } };
+  }
+  if (event === "installation_repositories" && body.action === "removed") {
+    const ids = (body.repositories_removed ?? []).map((r) => r.id).filter((id): id is number => Number.isSafeInteger(id));
+    if (ids.length > 0) await deps.forget(installation!, ids);
+    return { status: 200, body: { forgotten: ids.length } };
+  }
+  return { status: 204, body: {} };
 }
 
 /** Reviews one push and posts the result back as a check. */
@@ -125,6 +173,7 @@ export async function reviewPush(
     const output = checkOutput(result, fetched.skipped);
     const link = await keep(deps, {
       githubId,
+      installationId,
       owner,
       repo,
       commitSha: sha,

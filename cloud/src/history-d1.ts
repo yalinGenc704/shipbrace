@@ -56,11 +56,12 @@ export function d1History(db: D1Database): ReviewHistory {
       // its history and its link under the new name.
       const repository = await db
         .prepare(
-          `INSERT INTO repositories (github_id, owner, name, history_id) VALUES (?, ?, ?, ?)
-           ON CONFLICT (github_id) DO UPDATE SET owner = excluded.owner, name = excluded.name
+          `INSERT INTO repositories (github_id, owner, name, history_id, installation_id) VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT (github_id) DO UPDATE SET owner = excluded.owner, name = excluded.name,
+             installation_id = coalesce(excluded.installation_id, repositories.installation_id)
            RETURNING id, history_id`,
         )
-        .bind(review.githubId, review.owner, review.repo, newLinkId())
+        .bind(review.githubId, review.owner, review.repo, newLinkId(), review.installationId ?? null)
         .first<{ id: number; history_id: string }>();
       if (!repository) throw new Error("repository row was not written");
 
