@@ -1,0 +1,12 @@
+// A throwaway check that the reviewer's "no internet" setting holds on
+// Cloudflare. Deploy, open /run, delete. See index.ts.
+{
+  "name": "aegis-wall-check",
+  "main": "index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "containers": [{ "class_name": "Probe", "image": "./Dockerfile", "instance_type": "lite", "max_instances": 1 }],
+  "durable_objects": { "bindings": [{ "name": "PROBE", "class_name": "Probe" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Probe"] }]
+}

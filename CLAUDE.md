@@ -53,6 +53,7 @@ review     → ten OWASP Top 10:2025 modules for the user
 | `packages/scaffold/` | Generates new apps from composable modules; `auth` is a per-app setting |
 | `server/` | Review API (`GET`/`POST /api/review`), GitHub webhook, kept reviews (`/api/reviews/:id`, `/api/history/:id`); serves `app/dist` when built |
 | `server/src/sandbox/` | **Every review runs here**, in a sealed child process: no secrets, no network, reads limited to Aegis's code, time and memory limits |
+| `cloud/` | **Where it runs: Cloudflare, live at https://app.shipbrace.com.** Worker (`src/index.ts`: webhook, queue job, kept-review API, dashboard assets), reviewer container class with internet off (`src/reviewer.ts`), D1 history (`src/history-d1.ts`, `migrations/`), `wrangler.jsonc`. `wall-check/` re-proves the internet wall |
 | `Dockerfile`, `deploy/` | **Hosting.** One image, two roles (server, reviewer); `deploy/compose.yaml` runs aegis, reviewer, postgres, backup, cloudflared; `deploy/README.md` is the server setup guide |
 | `server/src/history.ts` | Review history in PostgreSQL: schema migrations, save, read back by unguessable link |
 | `app/` | React dashboard: the live review at `/`, a kept review at `/reviews/:id`, a repository's history at `/history/:id` |
@@ -262,8 +263,27 @@ launch entry expects `~/aegis-test-repos/dvna.env` there.
   about 1 in 100,000 is wrongly skipped. Test fixtures that must look real
   assemble their keys at runtime. One false lead remains: a README sample in
   `scaffold/src/modules/base.ts` shows a SQL example (step 8).
-- **Hosting is packaged and tested locally (2026-10-09)**, not yet on a
-  server. The reviewer runs in its own container with `network_mode: none`,
+- **Live on Cloudflare since 2026-10-10** at https://app.shipbrace.com (Murat
+  chose Cloudflare over a rented server). Workers Paid plan. A push: the
+  Worker checks the signature and queues it; the queue job (no retries)
+  fetches the code, reviews it in a fresh `standard-1` reviewer container
+  (`enableInternet = false`; its only way out is `shipbrace.internal`,
+  answered by the Worker at most once per step), posts the check, keeps the
+  result in D1 (30-day time travel; rows over ~1.9 MB are not kept). First
+  live push: same result as the Node server (6 high, 9 medium, 2 low).
+  `wall-check/` proved on Cloudflare that web, raw-IP, socket and DNS
+  attempts all fail while `shipbrace.internal` works; it was then deleted.
+  The workers.dev address is off. Secrets were set by Murat with
+  `wrangler secret put`; wrangler's login uses narrow scopes and the macOS
+  Keychain. Deploy from `cloud/`: `npm run build --workspace @aegis/app`,
+  then `npx wrangler deploy` (builds the reviewer for linux/amd64 through
+  emulation; Colima must be running). For `wall-check/`, call
+  `node_modules/.bin/wrangler` with `--config`: `npx` runs from `cloud/` and
+  would deploy the main app instead. Local trial: `npx wrangler dev` with
+  `cloud/.dev.vars` (git-ignored); local containers run with extra
+  privileges, unlike Cloudflare.
+- **The Docker setup in `deploy/` is the fallback** for an ordinary server
+  (tested 2026-10-09, not in use). The reviewer runs in its own container with `network_mode: none`,
   talking to the server over a Unix socket (`sandbox/channel.ts`,
   `remote.ts`, `reviewer.ts`): V8 format towards the reviewer, size-capped
   JSON back, each outside step at most once, stop reasons from a fixed list.
@@ -283,13 +303,14 @@ things stand, present this list in plain language (grouped as below, with
 time estimates and the decisions each needs), give the recommendation, and
 ask Murat which to start. Wait for his answer.
 
-**Recommended next: 2**, once Murat has chosen where it runs and a domain.
-Proposed 2026-10-09, not yet agreed.
+**Recommended next (proposed 2026-10-10, not yet agreed): 4**, sign-up and
+the legal notices, now that it is online; and the rename once the trademark
+check is back.
 
 ### Making it usable without the laptop
 
 1. ~~**Store past reviews in PostgreSQL.**~~ Done 2026-10-09.
-2. **Put Aegis online, running all the time.** ~1-2 sessions. Needs two
+2. ~~**Put Aegis online, running all the time.**~~ ~1-2 sessions. Needs two
    decisions from Murat:
    - *Where it runs.* Recommendation: a small rented server (VPS) running
      Docker, with Cloudflare Tunnel in front -- exactly the stack's setup.
@@ -297,11 +318,9 @@ Proposed 2026-10-09, not yet agreed.
    - *A domain name* added to Cloudflare, so the tunnel has a permanent
      address and the GitHub App's webhook URL never changes again. Typically
      around $10/year.
-   - Packaging done and tested on the Mac (2026-10-09; see `deploy/README.md`).
-     Left: Murat rents the server and buys the domain, then go live together
-     (deploy/README.md steps 1-9), and decide on off-server backups. The
-     domain is `shipbrace.com` (bought 2026-10-09); provider recommended:
-     Hetzner CX23 in Germany, with backups on.
+   - **Done 2026-10-10: live on Cloudflare** (see Current state). Left:
+     Cloudflare rate limiting on `/api/*`, and turning the AI step on when
+     Murat wants it (`AI_REVIEW` in wrangler.jsonc; the key is already set).
 
 ### Required before anyone else uses it
 

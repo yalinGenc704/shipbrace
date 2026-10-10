@@ -11,6 +11,8 @@
 
   // The one public address. Cloudflare adds the DNS entry and certificate.
   "routes": [{ "pattern": "app.shipbrace.com", "custom_domain": true }],
+  // No second address on workers.dev: one front door.
+  "workers_dev": false,
 
   // The dashboard's built files. Page addresses fall back to index.html; only
   // /api/* runs the Worker. Security headers for these files: app/public/_headers.
