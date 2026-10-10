@@ -29,7 +29,8 @@
     "GITHUB_APP_SLUG": "yg-aegis-review",
     "GITHUB_CLIENT_ID": "Iv23liy8pr9ByG3NznCo",
     "AI_REVIEW": "off",
-    "PACKAGE_LOOKUP": "on"
+    "PACKAGE_LOOKUP": "on",
+    "DAILY_REVIEW_LIMIT": "200"
   },
 
   // Review history. Create once with `npx wrangler d1 create aegis-history`

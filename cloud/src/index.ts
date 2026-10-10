@@ -71,8 +71,19 @@ app.route("/", accountRoutes());
 
 app.all("/api/*", (c) => c.json({ error: "Not found." }, 404));
 
-/** One review in its own container, which is destroyed afterwards. */
+/**
+ * One review in its own container, which is destroyed afterwards.
+ *
+ * Above DAILY_REVIEW_LIMIT reviews in a day, across everyone, no more are
+ * started: a ceiling on what any burst -- or abuse -- can cost. The check
+ * says so in plain words instead.
+ */
 async function reviewInContainer(env: Env, snapshot: RepoSnapshot): Promise<ReviewResult> {
+  const today = await env.DB.prepare("SELECT count(*) AS n FROM reviews WHERE created_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 day')").first<{ n: number }>();
+  if ((today?.n ?? 0) >= Number(env.DAILY_REVIEW_LIMIT || 200)) {
+    console.error("daily review limit reached; review not started");
+    throw new ReviewStoppedError("busy");
+  }
   const reviewer = env.REVIEWER.get(env.REVIEWER.newUniqueId());
   const request: ReviewRequest = {
     files: snapshot.files.map(({ path, content }) => ({ path, content })),

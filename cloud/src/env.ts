@@ -12,6 +12,8 @@ export interface Env {
   AI_REVIEW: "on" | "off";
   PACKAGE_LOOKUP: "on" | "off";
   GITHUB_APP_ID: string;
+  /** Most reviews started per day, across everyone. */
+  DAILY_REVIEW_LIMIT: string;
   /** For "Sign in with GitHub", from the App's settings page. Not secret. */
   GITHUB_CLIENT_ID: string;
   /** The App's address on GitHub, for "allow ShipBrace on this repository". */

@@ -82,6 +82,7 @@ beforeEach(() => {
     AI_REVIEW: "off",
     PACKAGE_LOOKUP: "on",
     GITHUB_APP_ID: "12345",
+    DAILY_REVIEW_LIMIT: "200",
     GITHUB_CLIENT_ID: "client-id",
     GITHUB_APP_SLUG: "shipbrace-test",
     GITHUB_PRIVATE_KEY: PEM,

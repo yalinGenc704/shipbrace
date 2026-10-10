@@ -1,0 +1,13 @@
+// shipbrace.com and www.shipbrace.com forward to the app (see index.ts).
+// Deploy with node_modules/.bin/wrangler and --config: `npx` would pick the
+// main app's config in cloud/.
+{
+  "name": "shipbrace-redirect",
+  "main": "index.ts",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": false,
+  "routes": [
+    { "pattern": "shipbrace.com", "custom_domain": true },
+    { "pattern": "www.shipbrace.com", "custom_domain": true }
+  ]
+}
