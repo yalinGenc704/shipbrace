@@ -12,6 +12,10 @@ import { runSecurityReview, snapshotFromFiles } from "@aegis/guardrails";
  * person to notice is a user looking at a broken screen.
  */
 
+// Shaped like a real key, so the sample shows that problem; assembled here so
+// this script never holds one whole and Aegis does not report itself.
+const SAMPLE_KEY = ["sk", "liveT4kQ9wZr7Lm2Xc8Vb5Nd3"].join("-");
+
 const SAMPLE = [
   'import { Hono } from "hono";',
   'import { execSync } from "node:child_process";',
@@ -36,7 +40,7 @@ const SAMPLE = [
   "  return c.text(await upstream.text());",
   "});",
   "",
-  'const OPENAI_KEY = "sk-liveaccountkey1234567890abcdef";',
+  `const OPENAI_KEY = "${SAMPLE_KEY}";`,
 ].join("\n");
 
 const CLIENT = [

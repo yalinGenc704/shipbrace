@@ -49,6 +49,12 @@ const schema = z.object({
    * The address people reach this server at (the tunnel, later the domain),
    * used for the links in GitHub checks. https, except on this machine.
    */
+  /**
+   * The "review this folder" page (`/api/review` and the dashboard's front
+   * page). Useful on a laptop; on a hosted server it would let anyone start
+   * reviews of the server's own files, so hosting turns it off.
+   */
+  LOCAL_REVIEW: z.enum(["on", "off"]).default("on"),
   PUBLIC_URL: z
     .url()
     .refine((value) => /^https:\/\//.test(value) || /^http:\/\/localhost(:\d+)?\/?$/.test(value), {
@@ -74,6 +80,7 @@ export const config = {
   packageLookup: parsed.data.PACKAGE_LOOKUP === "on",
   aiReview: aiReviewEnabled(parsed.data),
   github: githubConfig(parsed.data),
+  localReview: parsed.data.LOCAL_REVIEW === "on",
   databaseUrl: parsed.data.DATABASE_URL ?? null,
   publicUrl: publicUrl(parsed.data),
 };

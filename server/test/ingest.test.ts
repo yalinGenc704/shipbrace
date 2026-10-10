@@ -132,3 +132,28 @@ test("reviewing a subfolder narrows the snapshot", async () => {
 test("pointing at a file rather than a folder is rejected", async () => {
   await assert.rejects(() => ingest(root, "package.json"), /not a directory/);
 });
+
+// --- the folder's own git settings ---------------------------------------------------
+
+test("a folder's git settings cannot make the review run its program", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const { chmod } = await import("node:fs/promises");
+  const { existsSync } = await import("node:fs");
+
+  const repo = join(base, "trapped");
+  const marker = join(base, "trap-sprung");
+  await mkdir(repo, { recursive: true });
+  await writeFile(join(repo, "app.ts"), "export const x = 1;");
+  const git = (...args: string[]) => spawnSync("git", args, { cwd: repo, encoding: "utf8" });
+  if (git("init", "-q").status !== 0) return;
+  git("add", "app.ts");
+  // The trap: git runs this "file system monitor" whenever it reads the index.
+  await writeFile(join(repo, "trap.sh"), `#!/bin/sh\ntouch "${marker}"\n`);
+  await chmod(join(repo, "trap.sh"), 0o755);
+  git("config", "core.fsmonitor", join(repo, "trap.sh"));
+
+  const { snapshot, isGitRepository } = await ingest(repo);
+  assert.equal(existsSync(marker), false, "the folder's program never ran");
+  assert.equal(isGitRepository, true, "and git still answered");
+  assert.ok(snapshot.tracked.has("app.ts"));
+});

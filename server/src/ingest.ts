@@ -97,14 +97,29 @@ export async function confine(root: string, target: string): Promise<string> {
  * -- the same discipline the product's own guardrails demand of generated apps.
  * A folder that is not a repository yields an empty set, which is correct:
  * nothing there is committed anywhere.
+ *
+ * The folder's own `.git/config` is someone else's too, and git obeys it: a
+ * `core.fsmonitor` setting there makes even `git ls-files` run a program of
+ * the folder's choosing (tested; it does). So every setting that can start a
+ * program is overridden on the command line, which wins over the folder's
+ * config, and git gets a bare environment instead of the server's.
  */
+const GIT_OVERRIDES = [
+  "-c", "core.fsmonitor=false",
+  "-c", "core.hooksPath=/dev/null",
+  "-c", "core.pager=cat",
+  "-c", "core.sshCommand=false",
+  "-c", "protocol.allow=never",
+];
+
 function trackedFiles(directory: string): { tracked: Set<string>; isRepository: boolean } {
-  const result = spawnSync("git", ["ls-files", "-z"], {
+  const result = spawnSync("git", [...GIT_OVERRIDES, "ls-files", "-z"], {
     cwd: directory,
     encoding: "utf8",
     timeout: 10_000,
     maxBuffer: 16 * 1024 * 1024,
     shell: false,
+    env: { PATH: process.env.PATH ?? "/usr/bin:/bin", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0" },
   });
 
   if (result.status !== 0 || typeof result.stdout !== "string") {

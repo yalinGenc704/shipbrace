@@ -36,9 +36,11 @@ export interface SandboxLimits {
   memoryMb: number;
   /** Reviews running at once; the rest wait their turn. */
   concurrency: number;
+  /** Reviews allowed to wait. Beyond this they are refused, so a flood of pushes cannot exhaust memory. */
+  maxWaiting: number;
 }
 
-export const DEFAULT_SANDBOX_LIMITS: SandboxLimits = { workMs: 60_000, memoryMb: 1_024, concurrency: 2 };
+export const DEFAULT_SANDBOX_LIMITS: SandboxLimits = { workMs: 60_000, memoryMb: 1_024, concurrency: 2, maxWaiting: 50 };
 
 /** Waiting on the outside steps is not counted as work, but is not unlimited either. */
 const MAX_WALL_MS = 15 * 60_000;
@@ -47,6 +49,7 @@ const MESSAGES = {
   time: "The review stopped because it took longer than its time limit. Very large or unusual files can cause this. Nothing in this commit was checked.",
   memory: "The review stopped because it needed more memory than it is allowed. Very large or unusual files can cause this. Nothing in this commit was checked.",
   crash: "The review stopped unexpectedly while reading the code. Nothing in this commit was checked.",
+  busy: "The review was not started because too many reviews were already waiting. Nothing in this commit was checked.",
 } as const;
 
 /** A review the sandbox stopped. `userMessage` is fixed text, safe to show anyone. */
@@ -95,7 +98,10 @@ export function createSandbox(
   const queue: Array<() => void> = [];
 
   return async (snapshot, options = {}) => {
-    if (running >= limits.concurrency) await new Promise<void>((resolve) => queue.push(resolve));
+    if (running >= limits.concurrency) {
+      if (queue.length >= limits.maxWaiting) throw new ReviewStoppedError("busy");
+      await new Promise<void>((resolve) => queue.push(resolve));
+    }
     running++;
     try {
       return await reviewOnce(snapshot, options, limits, entry, log);

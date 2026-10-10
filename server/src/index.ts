@@ -44,7 +44,28 @@ if (config.databaseUrl) {
 
 const app = new Hono();
 
-app.use("*", secureHeaders());
+/**
+ * Everything the dashboard loads comes from this server, so the browser is
+ * told to refuse scripts, styles and connections from anywhere else. If
+ * something hostile ever reached a page, it could neither load more code nor
+ * send what it read elsewhere.
+ */
+app.use(
+  "*",
+  secureHeaders({
+    contentSecurityPolicy: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'"],
+      imgSrc: ["'self'", "data:"],
+      connectSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      baseUri: ["'none'"],
+      formAction: ["'none'"],
+      frameAncestors: ["'none'"],
+    },
+  }),
+);
 
 app.use(
   "/api/*",
@@ -116,24 +137,27 @@ function reviewOnce(snapshot: RepoSnapshot): Promise<ReviewResult> {
   return pending;
 }
 
-app.get("/api/review", async (c) => {
-  try {
-    return c.json(await review("."));
-  } catch (error) {
-    return failure(c, error);
-  }
-});
+// Off on a hosted server: no route, so nothing to call.
+if (config.localReview) {
+  app.get("/api/review", async (c) => {
+    try {
+      return c.json(await review("."));
+    } catch (error) {
+      return failure(c, error);
+    }
+  });
 
-app.post("/api/review", async (c) => {
-  const body = reviewRequest.safeParse(await c.req.json().catch(() => ({})));
-  if (!body.success) return c.json({ error: "Invalid request." }, 400);
+  app.post("/api/review", bodyLimit({ maxSize: 16 * 1024 }), async (c) => {
+    const body = reviewRequest.safeParse(await c.req.json().catch(() => ({})));
+    if (!body.success) return c.json({ error: "Invalid request." }, 400);
 
-  try {
-    return c.json(await review(body.data.path));
-  } catch (error) {
-    return failure(c, error);
-  }
-});
+    try {
+      return c.json(await review(body.data.path));
+    } catch (error) {
+      return failure(c, error);
+    }
+  });
+}
 
 /**
  * GitHub's push notifications. The body is read as raw text because the
@@ -188,14 +212,14 @@ function failure(c: Context, error: unknown) {
 const dashboard = fileURLToPath(new URL("../../app/dist", import.meta.url));
 if (existsSync(dashboard)) {
   app.use("/assets/*", serveStatic({ root: dashboard }));
-  for (const page of ["/", "/reviews/:id", "/history/:id"]) {
+  for (const page of [...(config.localReview ? ["/"] : []), "/reviews/:id", "/history/:id"]) {
     app.get(page, serveStatic({ root: dashboard, path: "index.html" }));
   }
 }
 
 serve({ fetch: app.fetch, port: config.port }, (info) => {
   console.log(`review API listening on http://localhost:${info.port}`);
-  console.log(`reviewing folders under ${config.reviewRoot}`);
+  console.log(config.localReview ? `reviewing folders under ${config.reviewRoot}` : "Folder reviews off (LOCAL_REVIEW=off)");
   console.log(config.github ? "GitHub App connected" : "GitHub App not configured");
   console.log(history ? "Review history ON (PostgreSQL)" : "Review history off (no DATABASE_URL)");
   console.log(existsSync(dashboard) ? "Dashboard served from app/dist" : "Dashboard not built; run it with Vite instead");

@@ -158,3 +158,19 @@ test("reviews beyond the limit wait their turn instead of all running at once", 
   await Promise.all([1, 2, 3, 4].map(() => review(VULNERABLE, { proposer })));
   assert.equal(peak, 2);
 });
+
+test("when too many reviews are waiting, more are refused plainly instead of piling up", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const proposer: AttackProposer = { name: "m", propose: async () => (await gate, []) };
+  const review = createSandbox({ ...DEFAULT_SANDBOX_LIMITS, concurrency: 1, maxWaiting: 1 }, undefined, quiet);
+
+  const running = review(VULNERABLE, { proposer });
+  const waiting = review(VULNERABLE, { proposer });
+  await assert.rejects(
+    review(VULNERABLE, { proposer }),
+    (error: unknown) => error instanceof ReviewStoppedError && error.reason === "busy",
+  );
+  release();
+  await Promise.all([running, waiting]);
+});

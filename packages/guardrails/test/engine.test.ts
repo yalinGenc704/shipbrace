@@ -7,9 +7,14 @@ import { redact } from "../src/util.ts";
 
 const file = (path: string, content: string) => ({ path, content });
 
+// Shaped like real keys, but assembled here so this file never holds one whole:
+// Aegis reviews its own code, and a test fixture should not read as a leak.
+const OPENAI_KEY = ["sk", "Q7vR2mX9pL4tW8nK3sB6"].join("-");
+const GITHUB_TOKEN = ["ghp", "Zr4Kq9Lm2Xv8Tn5Wb7Pc3Hd6Jf1Sg0Ya4Ue9"].join("_");
+
 test("flags a hardcoded provider token", () => {
   const { findings } = scan(
-    snapshotFromFiles([file("server/src/ai.ts", 'const key = "sk-abcdefghijklmnop1234";')]),
+    snapshotFromFiles([file("server/src/ai.ts", `const key = "${OPENAI_KEY}";`)]),
   );
   assert.equal(findings.length, 1);
   assert.equal(findings[0]?.ruleId, "secrets/hardcoded-credential");
@@ -18,10 +23,23 @@ test("flags a hardcoded provider token", () => {
 
 test("redacts the secret out of the reported excerpt", () => {
   const { findings } = scan(
-    snapshotFromFiles([file("server/src/ai.ts", 'const key = "sk-abcdefghijklmnop1234";')]),
+    snapshotFromFiles([file("server/src/ai.ts", `const key = "${OPENAI_KEY}";`)]),
   );
   const excerpt = findings[0]?.location?.excerpt ?? "";
-  assert.ok(!excerpt.includes("abcdefghijklmnop"), `excerpt leaked the key: ${excerpt}`);
+  assert.ok(!excerpt.includes("Q7vR2mX9pL4tW8nK3sB6"), `excerpt leaked the key: ${excerpt}`);
+});
+
+test("obvious placeholders are not reported as leaked keys", () => {
+  const placeholders = [
+    'const key = "sk-your-key-here-replace-me";',
+    'const key = "sk-xxxxxxxxxxxxxxxxxxxxxxxx";',
+    'const key = "sk-abcdefghijklmnop1234";',
+    'const aws = "AKIAIOSFODNN7EXAMPLE";',
+  ];
+  for (const line of placeholders) {
+    const { findings } = scan(snapshotFromFiles([file("server/src/ai.ts", line)]));
+    assert.deepEqual(findings, [], line);
+  }
 });
 
 test("does not flag .env.example", () => {
@@ -94,7 +112,7 @@ test("one throwing rule does not abort the scan", () => {
 test("findings are sorted most severe first", () => {
   const { findings } = scan(snapshotFromFiles([
     file("app/src/a.tsx", "<div dangerouslySetInnerHTML={{ __html: bio }} />"),
-    file("server/src/b.ts", 'const k = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";'),
+    file("server/src/b.ts", `const k = "${GITHUB_TOKEN}";`),
   ]));
   assert.equal(findings[0]?.severity, "critical");
   assert.equal(findings.at(-1)?.severity, "high");
@@ -102,7 +120,7 @@ test("findings are sorted most severe first", () => {
 
 test("auto mode reports no code, supervise mode reports the line", () => {
   const { findings } = scan(snapshotFromFiles([
-    file("server/src/ai.ts", 'const key = "sk-abcdefghijklmnop1234";'),
+    file("server/src/ai.ts", `const key = "${OPENAI_KEY}";`),
   ]));
 
   const auto = renderAuto(findings);

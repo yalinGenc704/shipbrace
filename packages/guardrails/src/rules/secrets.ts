@@ -15,6 +15,37 @@ const TOKEN_SHAPES: Array<{ re: RegExp; vendor: string }> = [
   { re: /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/, vendor: "a private key" },
 ];
 
+/**
+ * Values that are obviously made up: tutorial placeholders ("sk-your-key-here"),
+ * runs of one character, or the alphabet or digits in order. A real key is
+ * random, so the chance of one containing six repeated or six consecutive
+ * characters, or one of these words, is negligible -- while flagging a
+ * placeholder is a warning on correct code, the kind that teaches people to
+ * stop reading the warnings.
+ */
+// Case-sensitive on purpose: placeholders are written in one case, while a
+// random key mixes cases, so matching either case would mistake real keys for
+// placeholders far more often.
+const PLACEHOLDER_WORD = /example|EXAMPLE|sample|placeholder|your|YOUR|dummy|fake|changeme|redacted|xxxxx|XXXXX/;
+
+export function looksMadeUp(value: string): boolean {
+  if (PLACEHOLDER_WORD.test(value)) return true;
+  if (/(.)\1{5,}/.test(value)) return true;
+  return hasRun(value.toLowerCase(), 6);
+}
+
+/** True when `value` holds `length` consecutive characters in order, like "abcdef" or "345678". */
+function hasRun(value: string, length: number): boolean {
+  let run = 1;
+  for (let i = 1; i < value.length; i++) {
+    const step = value.charCodeAt(i) - value.charCodeAt(i - 1);
+    const sameClass = /[a-z]/.test(value[i]!) === /[a-z]/.test(value[i - 1]!) && /[a-z0-9]/.test(value[i]!);
+    run = step === 1 && sameClass ? run + 1 : 1;
+    if (run >= length) return true;
+  }
+  return false;
+}
+
 export const hardcodedCredential: Rule = {
   id: "secrets/hardcoded-credential",
   category: "secrets",
@@ -49,6 +80,8 @@ export const hardcodedCredential: Rule = {
 
     for (const { re, vendor } of TOKEN_SHAPES) {
       for (const hit of scanLines(file, re, { includeComments: true })) {
+        const value = hit.match[0];
+        if (vendor !== "a private key" && looksMadeUp(value)) continue;
         findings.push({
           ruleId: hardcodedCredential.id,
           category: "secrets",

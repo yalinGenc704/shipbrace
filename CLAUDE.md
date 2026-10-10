@@ -81,7 +81,7 @@ everywhere:
 # PostgreSQL 18 (Homebrew, not started at login). Databases: aegis, aegis_test.
 LC_ALL=en_US.UTF-8 /opt/homebrew/opt/postgresql@18/bin/pg_ctl -D /opt/homebrew/var/postgresql@18 -l /opt/homebrew/var/log/postgresql@18.log start
 
-# all tests (expect 170 pass). Without TEST_DATABASE_URL the 6 database tests
+# all tests (expect 174 pass). Without TEST_DATABASE_URL the 6 database tests
 # are skipped and say so; it must name a database ending in _test (it is wiped).
 TEST_DATABASE_URL=postgres:///aegis_test node --experimental-strip-types --test packages/guardrails/test/*.test.ts packages/scaffold/test/*.test.ts server/test/*.test.ts
 
@@ -241,6 +241,22 @@ launch entry expects `~/aegis-test-repos/dvna.env` there.
   processes), 60 s work limit excluding AI waits, 1 GB JS memory, two at once.
   Identical results on all 56 benchmark apps; ~75 ms extra per review. It is a
   JavaScript-level wall: the full seal is a locked-down container at hosting.
+- **Security pass on Aegis itself (2026-10-09).** Fixed: a reviewed folder's
+  own `.git/config` could make `git ls-files` run its program via
+  `core.fsmonitor` (confirmed, now overridden; test fails on the old code);
+  no Content Security Policy (now strict, same-origin only); no way to turn
+  off folder reviews (`LOCAL_REVIEW=off`, for hosting: removes `/api/review`
+  and `/`); no size limit on `POST /api/review`; no cap on waiting reviews
+  (`maxWaiting` 50, then refused as "busy"). Left for hosting: rate limiting
+  in Cloudflare (behind the tunnel the server cannot see visitors' addresses).
+- **Aegis reviews itself clean (2026-10-09):** 0 risks (was 2 high, 10
+  medium, all false). The logging check now reads parsed code and judges the
+  values passed to `console.*`, not words in the message. The key check skips
+  obvious placeholders (`looksMadeUp`: placeholder words in one case, six
+  repeated or consecutive characters); measured on 1M random realistic keys,
+  about 1 in 100,000 is wrongly skipped. Test fixtures that must look real
+  assemble their keys at runtime. One false lead remains: a README sample in
+  `scaffold/src/modules/base.ts` shows a SQL example (step 8).
 - **The query check trusts tagged templates by name** (`SAFE_TAG`: `sql`, `db`,
   `query`). postgres.js transactions are usually written `` tx`...` ``, which
   gets a false "worth a look"; `history.ts` names its transaction `sql` to
@@ -292,7 +308,8 @@ Proposed 2026-10-09, not yet agreed.
 8. **More detection:** stored attacks (bad data saved, shown later),
    browser-side code, the XML upload attack (XXE), and sign-in checks written
    inside a handler (Juice Shop `dataErasure`), and transactions written
-   `` tx`...` `` (see above). Also remove or deprecate the legacy exports listed
+   `` tx`...` `` (see above), and SQL-looking text in documentation templates.
+   Also remove or deprecate the legacy exports listed
    above.
 
 See `docs/architecture.md` for the reasoning behind these decisions.

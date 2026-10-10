@@ -1,3 +1,4 @@
+import { dottedName, locationOf, parseFile, walk, type Node } from "../analysis/ast.ts";
 import type { Inventory } from "../analysis/inventory.ts";
 import type { CodeLocation, RepoSnapshot, SourceFile } from "../types.ts";
 import { isSource, isTestPath, redact } from "../util.ts";
@@ -427,6 +428,34 @@ const rateLimiting: ProjectCheck = {
 
 // --- A09: logs must not contain secrets --------------------------------------
 
+const SECRET_NAME = /password|passwd|token|secret|apikey|api_key|credential/i;
+const LOG_CALL = /^console\.(?:log|info|warn|error|debug)$/;
+
+/**
+ * The first log call that passes a secret-named value, judged from the parsed
+ * code: the names of the values handed to the call (variables, properties,
+ * object keys), never the words inside its message. "AI_REVIEW=on needs
+ * ANTHROPIC_API_KEY." names a setting; it does not print one. Reading the line
+ * as text could not tell the two apart and warned about correct code.
+ */
+function secretLogged(file: SourceFile): CodeLocation | null {
+  const parsed = parseFile(file);
+  if (!parsed) return null;
+
+  let found: CodeLocation | null = null;
+  walk(parsed.program, (node) => {
+    if (found || node.type !== "CallExpression" || !LOG_CALL.test(dottedName(node.callee) ?? "")) return;
+    for (const argument of (node.arguments ?? []) as Node[]) {
+      walk(argument, (inner) => {
+        if (!found && inner.type === "Identifier" && SECRET_NAME.test(String(inner.name ?? ""))) {
+          found = locationOf(parsed, node);
+        }
+      });
+    }
+  });
+  return found;
+}
+
 const logsWithoutSecrets: ProjectCheck = {
   id: "logging:no-secrets-logged",
   itemId: "logging/no-secrets",
@@ -437,12 +466,11 @@ const logsWithoutSecrets: ProjectCheck = {
       return { status: "not-applicable", reason: "No application code was found." };
     }
 
-    const logged =
-      /console\.(?:log|info|warn|error|debug)\s*\([^)]*\b\w*(?:password|passwd|token|secret|apiKey|api_key|credential)\w*\b/i;
     const risks: Risk[] = [];
 
     for (const file of files) {
-      if (!logged.test(file.content)) continue;
+      const where = secretLogged(file);
+      if (!where) continue;
 
       risks.push(
         risk(
@@ -451,7 +479,7 @@ const logsWithoutSecrets: ProjectCheck = {
           `${file.path} writes a password, token, or key into the logs.`,
           "Logs travel further than almost anything else you store -- shipped to other services, copied into support tickets, readable by more people than your database. A secret written into one has to be treated as public.",
           "Remove the value from the log line, or log only a description of it. If it has already run in production, treat that credential as exposed and replace it.",
-          lineOf(file, logged),
+          where,
         ),
       );
     }

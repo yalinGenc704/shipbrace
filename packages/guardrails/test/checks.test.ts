@@ -182,6 +182,21 @@ test("logging a secret is a high risk; logging anything else is not", () => {
   assert.equal(statusOf([fine], "logging/no-secrets"), "pass");
 });
 
+test("a log message that only names a setting is not a leak; passing its value is", () => {
+  const names: File = {
+    path: "server/src/config.ts",
+    content: 'if (!env.ANTHROPIC_API_KEY) console.error("AI_REVIEW=on needs ANTHROPIC_API_KEY.");',
+  };
+  const prints: File = { path: "server/src/config.ts", content: "console.error(env.ANTHROPIC_API_KEY);" };
+  const property: File = { path: "server/src/a.ts", content: 'console.log("signed in", user.passwordHash);' };
+  const labelled: File = { path: "server/src/a.ts", content: 'console.log({ password: body.pw });' };
+
+  assert.equal(statusOf([names], "logging/no-secrets"), "pass");
+  assert.equal(statusOf([prints], "logging/no-secrets"), "risks");
+  assert.equal(statusOf([property], "logging/no-secrets"), "risks");
+  assert.equal(statusOf([labelled], "logging/no-secrets"), "risks");
+});
+
 // --- resilience --------------------------------------------------------------
 
 test("a check that throws is recorded as unable to run, not as a pass", () => {
