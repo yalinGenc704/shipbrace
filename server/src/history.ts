@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { LINK_ID, newLinkId } from "./links.ts";
 import type { ReviewResult } from "@aegis/guardrails";
 import postgres from "postgres";
 import type { Conclusion } from "./github/report.ts";
@@ -64,9 +64,7 @@ export interface ReviewHistory {
   close(): Promise<void>;
 }
 
-/** 18 random bytes, written as 24 URL-safe characters. */
-export const newLinkId = () => randomBytes(18).toString("base64url");
-export const LINK_ID = /^[A-Za-z0-9_-]{24}$/;
+export { LINK_ID, newLinkId } from "./links.ts";
 
 /** The newest reviews shown on a repository's page. */
 const HISTORY_LIMIT = 100;

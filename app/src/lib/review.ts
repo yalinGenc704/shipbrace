@@ -1,20 +1,26 @@
 import type { ReviewResult } from "@aegis/guardrails";
-import fixture from "../fixtures/review.json";
 
 /**
- * Where the dashboard gets a review from.
+ * The front page's review: a review of a folder on the machine the server runs
+ * on (laptop use). A hosted server has no such review and answers 404; the
+ * page then explains where reports come from instead (`null`).
  *
- * Today it is a fixture generated from the real engine (`npm run fixture`).
- * When the server exists this becomes a fetch against it; the component tree
- * does not change, because it only ever sees a `ReviewResult`.
+ * The sample review (`npm run fixture`) appears only while developing the
+ * dashboard with no server running. In a real deployment, sample data on the
+ * front page would read as somebody's actual result.
  */
-export async function loadReview(): Promise<ReviewResult> {
+export async function loadReview(): Promise<ReviewResult | null> {
   const response = await fetch("/api/review").catch(() => null);
 
   if (response?.ok) return (await response.json()) as ReviewResult;
+  if (response?.status === 404 && !import.meta.env.DEV) return null;
 
-  // The fixture is real engine output, so the shape is guaranteed to match.
-  return fixture as unknown as ReviewResult;
+  if (import.meta.env.DEV) {
+    // Real engine output, so the shape is guaranteed to match.
+    const fixture = await import("../fixtures/review.json");
+    return fixture.default as unknown as ReviewResult;
+  }
+  throw new Error(`The server answered ${response?.status ?? "nothing"}.`);
 }
 
 export type Mode = "essentials" | "detailed";

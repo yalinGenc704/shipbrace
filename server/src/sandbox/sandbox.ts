@@ -2,7 +2,10 @@ import { fork } from "node:child_process";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { RepoSnapshot, ReviewOptions, ReviewResult } from "@aegis/guardrails";
+import { ReviewStoppedError } from "./stopped.ts";
 import type { FromWorker, ToWorker } from "./worker.ts";
+
+export { ReviewStoppedError };
 
 /**
  * Reviews run sealed off, one process each.
@@ -44,27 +47,6 @@ export const DEFAULT_SANDBOX_LIMITS: SandboxLimits = { workMs: 60_000, memoryMb:
 
 /** Waiting on the outside steps is not counted as work, but is not unlimited either. */
 const MAX_WALL_MS = 15 * 60_000;
-
-const MESSAGES = {
-  time: "The review stopped because it took longer than its time limit. Very large or unusual files can cause this. Nothing in this commit was checked.",
-  memory: "The review stopped because it needed more memory than it is allowed. Very large or unusual files can cause this. Nothing in this commit was checked.",
-  crash: "The review stopped unexpectedly while reading the code. Nothing in this commit was checked.",
-  busy: "The review was not started because too many reviews were already waiting. Nothing in this commit was checked.",
-  unavailable: "The review could not start because the review service is not running. Nothing in this commit was checked.",
-} as const;
-
-/** A review the sandbox stopped. `userMessage` is fixed text, safe to show anyone. */
-export class ReviewStoppedError extends Error {
-  readonly reason: keyof typeof MESSAGES;
-  readonly userMessage: string;
-
-  constructor(reason: keyof typeof MESSAGES) {
-    super(`review stopped: ${reason}`);
-    this.name = "ReviewStoppedError";
-    this.reason = reason;
-    this.userMessage = MESSAGES[reason];
-  }
-}
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const WORKER = fileURLToPath(new URL("./worker.ts", import.meta.url));

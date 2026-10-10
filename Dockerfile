@@ -10,6 +10,7 @@ COPY app/package.json app/
 COPY server/package.json server/
 COPY packages/guardrails/package.json packages/guardrails/
 COPY packages/scaffold/package.json packages/scaffold/
+COPY cloud/package.json cloud/
 # Install scripts stay off: nothing in the tree needs one, and they are the
 # usual way a compromised package runs code at install time.
 RUN npm ci --ignore-scripts
@@ -24,6 +25,7 @@ COPY app/package.json app/
 COPY server/package.json server/
 COPY packages/guardrails/package.json packages/guardrails/
 COPY packages/scaffold/package.json packages/scaffold/
+COPY cloud/package.json cloud/
 RUN npm ci --ignore-scripts --omit=dev --workspace @aegis/server
 
 # --- what runs --------------------------------------------------------------------

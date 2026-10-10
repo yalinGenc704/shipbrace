@@ -11,7 +11,7 @@ import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
 import { z } from "zod";
 import { config } from "./config.ts";
-import { handleWebhook } from "./github/webhook.ts";
+import { handleWebhook, reviewPush, type ReviewDeps } from "./github/webhook.ts";
 import { connect, migrate, postgresHistory, type ReviewHistory } from "./history.ts";
 import { historyRoutes } from "./history-routes.ts";
 import { ingest, PathOutsideRootError } from "./ingest.ts";
@@ -171,15 +171,18 @@ if (config.localReview) {
 app.post("/api/github/webhook", bodyLimit({ maxSize: 5 * 1024 * 1024 }), async (c) => {
   if (!config.github) return c.json({ error: "GitHub integration is not configured." }, 503);
 
+  const github = config.github;
+  const reviewDeps: ReviewDeps = {
+    credentials: { appId: github.appId, privateKey: github.privateKey },
+    review: reviewOnce,
+    ...(history ? { history } : {}),
+    ...(config.publicUrl ? { publicUrl: config.publicUrl } : {}),
+  };
   const result = await handleWebhook(
     {
-      secret: config.github.webhookSecret,
-      credentials: { appId: config.github.appId, privateKey: config.github.privateKey },
-      review: reviewOnce,
-      ...(history ? { history } : {}),
-      ...(config.publicUrl ? { publicUrl: config.publicUrl } : {}),
+      secret: github.webhookSecret,
       // Answer GitHub now, review afterwards.
-      schedule: (task) => void task(),
+      schedule: (job) => void reviewPush(reviewDeps, job),
     },
     { signature: c.req.header("x-hub-signature-256"), event: c.req.header("x-github-event") },
     await c.req.text(),

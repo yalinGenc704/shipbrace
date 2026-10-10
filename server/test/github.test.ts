@@ -3,7 +3,7 @@ import { createHmac, createVerify, generateKeyPairSync } from "node:crypto";
 import { test } from "node:test";
 import { runSecurityReview } from "@aegis/guardrails";
 import { appJwt, verifyWebhookSignature } from "../src/github/auth.ts";
-import { handleWebhook, type WebhookDeps } from "../src/github/webhook.ts";
+import { handleWebhook, reviewPush, type ReviewDeps, type WebhookDeps } from "../src/github/webhook.ts";
 import { ReviewStoppedError } from "../src/sandbox/sandbox.ts";
 
 const SECRET = "a-long-random-webhook-secret-for-tests";
@@ -52,18 +52,23 @@ function fakeGitHub(files: Record<string, string | Buffer>, extraTree: Array<{ p
   return { fetchImpl, calls };
 }
 
-function deps(fetchImpl: typeof fetch, over: Partial<WebhookDeps> = {}): WebhookDeps & { done: Promise<void>[] } {
+function deps(
+  fetchImpl: typeof fetch,
+  over: Partial<ReviewDeps> = {},
+): WebhookDeps & ReviewDeps & { done: Promise<void>[] } {
   const done: Promise<void>[] = [];
-  return {
+  const d: WebhookDeps & ReviewDeps & { done: Promise<void>[] } = {
     secret: SECRET,
     credentials: { appId: "12345", privateKey: PEM },
     review: (snapshot) => runSecurityReview(snapshot),
-    schedule: (task) => void done.push(task()),
+    // The job runs inline, exactly as the laptop server runs it after answering.
+    schedule: (job) => void done.push(reviewPush(d, job)),
     fetchImpl,
     log: () => {},
     done,
     ...over,
   };
+  return d;
 }
 
 const push = (over: Record<string, unknown> = {}) =>

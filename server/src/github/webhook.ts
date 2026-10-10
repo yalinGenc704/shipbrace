@@ -4,7 +4,7 @@ import { verifyWebhookSignature } from "./auth.ts";
 import { installationClient, type AppCredentials, type GitHubClient } from "./client.ts";
 import { checkOutput } from "./report.ts";
 import { fetchRepository } from "./repository.ts";
-import { ReviewStoppedError } from "../sandbox/sandbox.ts";
+import { ReviewStoppedError } from "../sandbox/stopped.ts";
 
 /**
  * GitHub tells this server when someone pushes; the server reviews that commit
@@ -18,12 +18,28 @@ import { ReviewStoppedError } from "../sandbox/sandbox.ts";
  * GitHub gives up waiting after ten seconds and a review can take longer.
  */
 
+/**
+ * One push to review: everything needed to do it later, somewhere else. On a
+ * laptop it is run right after GitHub is answered; on Cloudflare it goes onto
+ * a queue. Plain data, so it can travel either way.
+ */
+export interface PushJob {
+  installationId: number;
+  githubId: number;
+  owner: string;
+  repo: string;
+  sha: string;
+}
+
 export interface WebhookDeps {
   secret: string;
+  /** Takes the job after GitHub has been answered. */
+  schedule: (job: PushJob) => void;
+}
+
+export interface ReviewDeps {
   credentials: AppCredentials;
   review: (snapshot: RepoSnapshot) => Promise<ReviewResult>;
-  /** Runs the review after the response is sent. Tests run it inline. */
-  schedule: (task: () => Promise<void>) => void;
   fetchImpl?: typeof fetch;
   log?: (message: string, error?: unknown) => void;
   /** Where finished reviews are kept. Without it, the check is the only record. */
@@ -75,15 +91,14 @@ export async function handleWebhook(
     return { status: 400, body: { error: "Invalid request." } };
   }
 
-  deps.schedule(() => reviewCommit(deps, installation, { githubId: githubId!, owner, repo }, sha));
+  deps.schedule({ installationId: installation, githubId: githubId!, owner, repo, sha });
   return { status: 202, body: { accepted: true } };
 }
 
-async function reviewCommit(
-  deps: WebhookDeps,
-  installationId: number,
-  { githubId, owner, repo }: { githubId: number; owner: string; repo: string },
-  sha: string,
+/** Reviews one push and posts the result back as a check. */
+export async function reviewPush(
+  deps: ReviewDeps,
+  { installationId, githubId, owner, repo, sha }: PushJob,
 ): Promise<void> {
   const log = deps.log ?? ((message, error) => console.error(message, error));
   const where = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
@@ -163,7 +178,7 @@ async function reviewCommit(
  * right, and withholding it because the history is down would hide a risk.
  */
 async function keep(
-  deps: WebhookDeps,
+  deps: ReviewDeps,
   review: Parameters<ReviewHistory["record"]>[0],
 ): Promise<{ review: string; history: string } | null> {
   if (!deps.history) return null;

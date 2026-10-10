@@ -5,7 +5,10 @@
   "private": true,
   "main": "./src/index.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./snapshot": "./src/snapshot.ts",
+    "./proposer": "./src/analysis/proposer.ts",
+    "./vulnerabilities": "./src/review/vulnerabilities.ts"
   },
   "scripts": {
     "test": "bun test"

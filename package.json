@@ -2,8 +2,15 @@
   "name": "aegis",
   "private": true,
   "type": "module",
-  "workspaces": ["app", "server", "packages/*"],
-  "engines": { "bun": ">=1.4.0" },
+  "workspaces": [
+    "app",
+    "server",
+    "cloud",
+    "packages/*"
+  ],
+  "engines": {
+    "bun": ">=1.4.0"
+  },
   "scripts": {
     "dev": "bun run --filter '*' dev",
     "build": "bun run --filter '*' build",

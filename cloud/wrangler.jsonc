@@ -1,0 +1,61 @@
+// ShipBrace on Cloudflare (still "aegis" in names until the rename).
+// Secrets are never written here: `npx wrangler secret put GITHUB_PRIVATE_KEY`
+// and the same for GITHUB_WEBHOOK_SECRET and ANTHROPIC_API_KEY.
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "aegis",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+
+  // The dashboard's built files. Page addresses fall back to index.html; only
+  // /api/* runs the Worker. Security headers for these files: app/public/_headers.
+  "assets": {
+    "directory": "../app/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+
+  "vars": {
+    "PUBLIC_URL": "https://app.shipbrace.com",
+    "GITHUB_APP_ID": "5157570",
+    "AI_REVIEW": "off",
+    "PACKAGE_LOOKUP": "on"
+  },
+
+  // Review history. Create once with `npx wrangler d1 create aegis-history`
+  // and put the id it prints here.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "aegis-history",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  // Pushes wait here, so GitHub is answered at once. One at a time, never
+  // retried (a retry would post a second check for the same commit).
+  "queues": {
+    "producers": [{ "binding": "REVIEWS", "queue": "aegis-reviews" }],
+    "consumers": [{ "queue": "aegis-reviews", "max_batch_size": 1, "max_retries": 0 }]
+  },
+
+  // The reviewer: one container per review, no internet (src/reviewer.ts).
+  // standard-1 = half a CPU and 4 GB, room for a review's 1 GB limit.
+  "containers": [
+    {
+      "class_name": "Reviewer",
+      "image": "./reviewer.Dockerfile",
+      "image_build_context": "..",
+      "instance_type": "standard-1",
+      "max_instances": 5
+    }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "REVIEWER", "class_name": "Reviewer" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Reviewer"] }]
+}
