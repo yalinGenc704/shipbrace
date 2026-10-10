@@ -228,8 +228,12 @@ launch entry expects `~/aegis-test-repos/dvna.env` there.
   plus two links atop the summary; needs `PUBLIC_URL`). No sign-in yet: pages
   are reached by unguessable 144-bit links only the check shows. If saving
   fails the check is still posted in full, without links. Nothing is deleted
-  yet; retention and deletion on uninstall are in the legal checklist. Not yet
-  tried against the live App on this Mac.
+  yet; retention and deletion on uninstall are in the legal checklist. First
+  live run 2026-10-09 (this Mac, new App key): a push to aegis-dvna-test was
+  saved and posted as a failing check (6 high, 9 medium, 2 low), with links
+  that opened through the tunnel. Quick tunnels can drop ("Tunnel not
+  found"); restart it, update PUBLIC_URL and the webhook URL, and use
+  Redeliver under the App's Advanced page rather than pushing again.
 - **Every review is sealed off (2026-10-09)** in a child process
   (`server/src/sandbox/`, details in docs/architecture.md): empty environment,
   Node permission model (reads only Aegis's code; no network, writes or child
