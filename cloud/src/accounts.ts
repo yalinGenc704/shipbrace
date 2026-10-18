@@ -53,7 +53,7 @@ const safeReturn = (path: string | undefined) => (path && /^\/(?!\/)[\w\-./?=&%]
  * sign in (ALLOWED_GITHUB_USERS, comma-separated, any case). Empty means open
  * to everyone.
  */
-export function allowed(env: Env, login: string): boolean {
+function allowed(env: Env, login: string): boolean {
   const list = (env.ALLOWED_GITHUB_USERS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
   return list.length === 0 || list.includes(login.toLowerCase());
 }

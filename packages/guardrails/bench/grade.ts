@@ -175,7 +175,7 @@ function explainMiss(entry: KeyEntry, at: { path: string; line: number }, invent
   return `checker said "${verdict.verdict}": ${verdict.reason}`;
 }
 
-export async function gradeCase(
+async function gradeCase(
   benchCase: BenchCase,
   mode: Mode,
   model?: AttackProposer,

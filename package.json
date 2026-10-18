@@ -22,9 +22,10 @@
     "fmt": "oxfmt ."
   },
   "devDependencies": {
-    "typescript": "7.0.2",
+    "@anthropic-ai/sdk": "0.131.0",
+    "oxfmt": "0.72.0",
     "oxlint": "1.80.0",
-    "oxfmt": "0.72.0"
+    "typescript": "7.0.2"
   },
   "description": "A safety net for apps built with AI: rule-verified security reviews of every GitHub push."
 }

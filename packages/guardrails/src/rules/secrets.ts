@@ -28,7 +28,7 @@ const TOKEN_SHAPES: Array<{ re: RegExp; vendor: string }> = [
 // placeholders far more often.
 const PLACEHOLDER_WORD = /example|EXAMPLE|sample|placeholder|your|YOUR|dummy|fake|changeme|redacted|xxxxx|XXXXX/;
 
-export function looksMadeUp(value: string): boolean {
+function looksMadeUp(value: string): boolean {
   if (PLACEHOLDER_WORD.test(value)) return true;
   if (/(.)\1{5,}/.test(value)) return true;
   return hasRun(value.toLowerCase(), 6);
@@ -46,7 +46,7 @@ function hasRun(value: string, length: number): boolean {
   return false;
 }
 
-export const hardcodedCredential: Rule = {
+const hardcodedCredential: Rule = {
   id: "secrets/hardcoded-credential",
   category: "secrets",
   severity: "critical",
@@ -120,7 +120,7 @@ export const hardcodedCredential: Rule = {
  * production credentials: the model writes real values into .env to make the
  * app run, and nothing stops the next `git add .`.
  */
-export const committedDotenv: Rule = {
+const committedDotenv: Rule = {
   id: "secrets/committed-dotenv",
   category: "secrets",
   severity: "critical",
@@ -159,7 +159,7 @@ export const committedDotenv: Rule = {
  * time. Putting a server-side secret behind that prefix ships it to every
  * visitor -- and it reads as "correct" because the app works.
  */
-export const secretInClientBundle: Rule = {
+const secretInClientBundle: Rule = {
   id: "secrets/client-exposed-env",
   category: "secrets",
   severity: "critical",

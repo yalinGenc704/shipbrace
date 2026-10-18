@@ -5,7 +5,7 @@ import { isSource, isTestPath, locate, scanLines } from "../util.ts";
  * `origin: "*"` plus credentials is the combination an LLM produces when told
  * "fix the CORS error" -- it silences the browser and opens the API to every site.
  */
-export const permissiveCors: Rule = {
+const permissiveCors: Rule = {
   id: "auth/permissive-cors",
   category: "auth",
   severity: "high",
@@ -41,7 +41,7 @@ export const permissiveCors: Rule = {
  * Tokens in localStorage are readable by any script on the page, so a single XSS
  * becomes a full account takeover. httpOnly cookies are not readable by script.
  */
-export const tokenInLocalStorage: Rule = {
+const tokenInLocalStorage: Rule = {
   id: "auth/token-in-localstorage",
   category: "auth",
   severity: "high",
@@ -74,7 +74,7 @@ export const tokenInLocalStorage: Rule = {
 };
 
 /** A fallback secret means the app silently runs on a publicly-known signing key. */
-export const weakJwtSecret: Rule = {
+const weakJwtSecret: Rule = {
   id: "auth/default-jwt-secret",
   category: "auth",
   severity: "critical",

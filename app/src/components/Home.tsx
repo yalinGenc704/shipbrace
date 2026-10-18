@@ -18,7 +18,7 @@ import {
   type PasteResult,
 } from "../lib/account.ts";
 import { formatWhen } from "../lib/history.ts";
-import { Loading } from "./ReviewPage.tsx";
+import { Loading } from "./ui.tsx";
 
 /**
  * The hosted front page: sign in with GitHub, accept the notices once, then

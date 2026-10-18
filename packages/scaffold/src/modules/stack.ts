@@ -15,7 +15,7 @@ const f = (path: string, contents: string): GeneratedFile => ({ path, contents }
  * carries published security flaws; the vendor's build is current. Pinned by
  * the version in the URL, which the lockfile then records with a checksum.
  */
-export const SHEETJS = "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz";
+const SHEETJS = "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz";
 
 export const stackModule: Module = {
   id: "stack",

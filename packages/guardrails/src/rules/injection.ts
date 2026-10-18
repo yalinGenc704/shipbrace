@@ -94,7 +94,7 @@ const COPY: Partial<Record<SinkKind, SinkCopy>> = {
   },
 };
 
-export const unsafeSinks: Rule = {
+const unsafeSinks: Rule = {
   id: "injection/unsafe-sink",
   category: "injection",
   severity: "critical",

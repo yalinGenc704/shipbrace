@@ -1,5 +1,5 @@
 import type { Grade, ItemStatus } from "@shipbrace/guardrails";
-import { AlertTriangle, Check, CircleHelp, ShieldCheck } from "lucide-react";
+import { AlertTriangle, Check, CircleHelp, Loader2, ShieldCheck } from "lucide-react";
 import type { ReactNode } from "react";
 
 /**
@@ -57,6 +57,16 @@ export function GradeBadge({ grade }: { grade: Grade }) {
     >
       {label}
     </span>
+  );
+}
+
+/** A one-line "working on it" message, used while a page loads. */
+export function Loading({ children }: { children: ReactNode }) {
+  return (
+    <p className="flex items-center gap-2 p-8 text-sm text-ink-soft">
+      <Loader2 className="size-4 animate-spin" aria-hidden />
+      {children}
+    </p>
   );
 }
 

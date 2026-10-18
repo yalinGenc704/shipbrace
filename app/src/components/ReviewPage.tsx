@@ -1,12 +1,13 @@
 import type { ReviewResult } from "@shipbrace/guardrails";
 import { useQuery } from "@tanstack/react-query";
-import { FlaskConical, Loader2 } from "lucide-react";
+import { FlaskConical } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import type { Mode } from "../lib/review.ts";
 import { loadReview } from "../lib/review.ts";
 import { useReviewed } from "../lib/reviewed.ts";
 import { Home } from "./Home.tsx";
 import { ModuleCard } from "./ModuleCard.tsx";
+import { Loading } from "./ui.tsx";
 import { Summary } from "./Summary.tsx";
 
 export function ReviewPage() {
@@ -28,15 +29,6 @@ export function ReviewPage() {
   }
 
   return <ReviewView review={review} />;
-}
-
-export function Loading({ children }: { children: ReactNode }) {
-  return (
-    <p className="flex items-center gap-2 p-8 text-sm text-ink-soft">
-      <Loader2 className="size-4 animate-spin" aria-hidden />
-      {children}
-    </p>
-  );
 }
 
 /**

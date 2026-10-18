@@ -12,8 +12,8 @@ import { refreshTokens, type OAuthApp, type Tokens } from "./github-user.ts";
  * only in the browser.
  */
 
-export const SESSION_COOKIE = "__Host-shipbrace";
-export const SESSION_DAYS = 7;
+const SESSION_COOKIE = "__Host-shipbrace";
+const SESSION_DAYS = 7;
 
 export interface Session {
   idHash: string;

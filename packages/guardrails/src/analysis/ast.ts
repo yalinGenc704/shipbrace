@@ -106,7 +106,7 @@ function isNode(value: unknown): value is Node {
 }
 
 /** 1-indexed line containing `offset`, by binary search over line starts. */
-export function lineAt(parsed: ParsedFile, offset: number): number {
+function lineAt(parsed: ParsedFile, offset: number): number {
   const starts = parsed.lineStarts;
   let low = 0;
   let high = starts.length - 1;

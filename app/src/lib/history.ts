@@ -11,7 +11,7 @@ import type { ReviewResult } from "@shipbrace/guardrails";
 
 export type Conclusion = "success" | "neutral" | "failure";
 
-export interface ReviewEntry {
+interface ReviewEntry {
   id: string;
   commitSha: string;
   createdAt: string;
@@ -20,13 +20,13 @@ export interface ReviewEntry {
   counts: { high: number; medium: number; low: number; awaitingReview: number; unproven: number };
 }
 
-export interface StoredReview extends ReviewEntry {
+interface StoredReview extends ReviewEntry {
   repository: { owner: string; name: string; historyId: string };
   result: ReviewResult;
   skipped: { notReadable: number; tooLarge: number; overLimit: number; treeTruncated: boolean };
 }
 
-export interface RepositoryHistory {
+interface RepositoryHistory {
   owner: string;
   name: string;
   reviews: ReviewEntry[];

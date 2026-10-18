@@ -3,7 +3,8 @@ import { Link } from "@tanstack/react-router";
 import { AlertTriangle, ArrowLeft, CircleHelp, GitCommitHorizontal, ShieldCheck } from "lucide-react";
 import type { ReactNode } from "react";
 import { formatWhen, loadHistory, loadStoredReview, NoAccess, NotFound, type Conclusion } from "../lib/history.ts";
-import { Loading, ReviewView } from "./ReviewPage.tsx";
+import { ReviewView } from "./ReviewPage.tsx";
+import { Loading } from "./ui.tsx";
 
 /**
  * A review kept from a push, at the address the GitHub check links to.
