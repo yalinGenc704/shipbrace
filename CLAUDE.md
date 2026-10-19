@@ -297,11 +297,60 @@ the server with the AI step, start it with an extra `--env-file` that sets
   gets a false "worth a look"; `history.ts` names its transaction `sql` to
   avoid it. Users' apps would hit this (step 8).
 
+## Claude Code setup for this project (2026-10-18)
+
+- **Hooks** (`.claude/settings.json`, scripts in `.claude/hooks/`):
+  `protect-secrets.sh` blocks Read/Edit/Write of `.env`, `.env.*`,
+  `.dev.vars*` and `*.pem` (not `*.example`); `lint-edited.sh` runs
+  `oxlint --deny-warnings` on each edited `.ts/.tsx/.js/.mjs` file and hands
+  problems back. Shell commands are not covered by the secret hook; the rule
+  "never print secret values" still applies there.
+- **Skill** `/ship` (`.claude/skills/ship/`): user-only. Checks a clean,
+  pushed tree, runs typecheck, lint, tests and the benchmark, applies pending
+  D1 migrations, deploys, then checks the live site (health, sign-in, CSP,
+  robots, unsigned webhook refused, no folder review).
+- **Planned:** a `conventions-reviewer` sub-agent (`.claude/agents/`) that
+  checks finished work against the load-bearing conventions above and runs
+  tests and benchmark, to be added with the smarter-checker work; the
+  Cloudflare Observability MCP server, when live debugging is needed.
+
+**Tools evaluated (2026-10-18), for reference.** *Claude Code Setup*
+(Anthropic, official) is installed; its read-only scan recommended the hooks,
+`/ship` and the planned reviewer above. *Fallow* (MIT, fallow-rs) is run on
+demand with `npx fallow@3.34.1`, not installed: its first scan found a circular
+import and an unlisted dependency (both fixed) plus `findAssignments` (left for
+the smarter-checker work); its other findings are false positives (the
+separate redirect and wall-check Workers, scripts run by hand, test fixtures
+loaded by path, and `Reviewer.claim`, which is called over Cloudflare's RPC and
+enforces "each outside step once" -- never remove it), so never use its
+auto-fix. *NVIDIA SkillSpector* is a real open-source scanner for agent
+skills; not installed, but worth running on any skill from outside the
+Anthropic Directory before installing it. Not adopted: *Claude-Mem* (duplicates
+CLAUDE.md, CLAUDE.local.md and built-in memory, and records every action,
+secret-touching ones included); *Agent Reach* (acts through logged-in social
+accounts via unofficial routes, and pulls text that can carry prompt
+injection into a session holding Cloudflare and GitHub access); *Obsidian +
+Graphify*-style code graphs (independent measurements show 13-34% savings on
+medium projects, and a stale map misleads; Obsidian alone is a fine personal
+notes app); *Everything Claude Code* (hundreds of generic skills, agents and
+third-party hooks crowd the context and run code nobody chose; borrow single
+pieces only). Rule of thumb: prefer the Anthropic Directory, check viral
+claims against the source, and read any outside skill before installing it.
+
 ## Roadmap
 
 Done: review history (2026-10-09), the sealed reviewer (2026-10-09), hosting
 on Cloudflare (2026-10-10), sign-in with GitHub, paste-a-link, notices and
-per-installation switches (2026-10-10), and the name ShipBrace.
+per-installation switches (2026-10-10), the name ShipBrace, a public
+repository with CI and a README screenshot, a dead-code cleanup, and the
+Claude Code setup above (2026-10-18).
+
+**Recommended next (agreed 2026-10-18; waiting for the go-ahead): the smarter
+checker**, roadmap item 6 below: stored attacks (the only benchmark miss),
+matching each sanitizer to the kinds of operation it protects, not flagging
+routes that only return constants, XXE and the other practice-app gaps, and
+removing `findAssignments` with the rest of the legacy exports. Add the
+`conventions-reviewer` sub-agent at its start.
 
 ### Before anyone else uses it
 
