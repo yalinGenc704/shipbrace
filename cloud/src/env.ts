@@ -16,6 +16,8 @@ export interface Env {
   ALLOWED_GITHUB_USERS?: string;
   /** Most reviews started per day, across everyone. */
   DAILY_REVIEW_LIMIT: string;
+  /** Most reviews started per day by one installation. */
+  INSTALLATION_DAILY_LIMIT?: string;
   /** For "Sign in with GitHub", from the App's settings page. Not secret. */
   GITHUB_CLIENT_ID: string;
   /** The App's address on GitHub, for "allow ShipBrace on this repository". */

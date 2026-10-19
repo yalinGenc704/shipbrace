@@ -1,13 +1,11 @@
-import type { RepoSnapshot, ReviewResult } from "@shipbrace/guardrails";
-import { OSV_NOTICE } from "@shipbrace/guardrails/vulnerabilities";
 import { handleWebhook, reviewPush, type PushJob, type ReviewDeps } from "@shipbrace/server/github/webhook.ts";
-import type { ReviewReply, ReviewRequest } from "@shipbrace/server/sandbox/reviewer-http.ts";
-import { ReviewStoppedError } from "@shipbrace/server/sandbox/stopped.ts";
 import { Hono } from "hono";
 import { secureHeaders } from "hono/secure-headers";
-import { accountRoutes, forgetInstallation, installationIsSetUp, installationSwitches } from "./accounts.ts";
+import { accountRoutes, forgetInstallation, installationIsSetUp } from "./accounts.ts";
 import type { Env } from "./env.ts";
 import { d1History } from "./history-d1.ts";
+import { forgetOldStarts } from "./limits.ts";
+import { reviewInContainer } from "./review-container.ts";
 
 export { ContainerProxy } from "@cloudflare/containers";
 export { Reviewer } from "./reviewer.ts";
@@ -26,7 +24,6 @@ export { Reviewer } from "./reviewer.ts";
  * `assets`); only /api/* reaches this code.
  */
 
-const STOP_REASONS = new Set(["time", "memory", "crash", "busy", "unavailable"]);
 const MAX_WEBHOOK_BYTES = 5 * 1024 * 1024;
 
 const app = new Hono<{ Bindings: Env }>();
@@ -71,57 +68,6 @@ app.route("/", accountRoutes());
 
 app.all("/api/*", (c) => c.json({ error: "Not found." }, 404));
 
-/**
- * One review in its own container, which is destroyed afterwards.
- *
- * Above DAILY_REVIEW_LIMIT reviews in a day, across everyone, no more are
- * started: a ceiling on what any burst -- or abuse -- can cost. The check
- * says so in plain words instead.
- */
-async function reviewInContainer(env: Env, snapshot: RepoSnapshot, installationId: number): Promise<ReviewResult> {
-  const today = await env.DB.prepare("SELECT count(*) AS n FROM reviews WHERE created_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 day')").first<{ n: number }>();
-  if ((today?.n ?? 0) >= Number(env.DAILY_REVIEW_LIMIT || 200)) {
-    console.error("daily review limit reached; review not started");
-    throw new ReviewStoppedError("busy");
-  }
-  // Each outside step needs both: offered on this deployment, and switched on
-  // for this installation. Switched off, the report says it was not checked.
-  const switches = await installationSwitches(env.DB, installationId);
-  const reviewer = env.REVIEWER.get(env.REVIEWER.newUniqueId());
-  const request: ReviewRequest = {
-    files: snapshot.files.map(({ path, content }) => ({ path, content })),
-    tracked: [...snapshot.tracked],
-    ...(env.AI_REVIEW === "on" && env.ANTHROPIC_API_KEY && switches.aiReview ? { proposer: { name: "claude" } } : {}),
-    ...(env.PACKAGE_LOOKUP === "on" && switches.packageLookup ? { vulnerabilities: { notice: OSV_NOTICE } } : {}),
-  };
-
-  try {
-    let response: Response;
-    try {
-      response = await reviewer.fetch("http://reviewer/review", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(request),
-      });
-    } catch (error) {
-      console.error("reviewer container could not be reached:", error);
-      throw new ReviewStoppedError("unavailable");
-    }
-    // The container reads hostile code; what it says is checked, not trusted.
-    const reply = (await response.json().catch(() => null)) as ReviewReply | null;
-    if (reply?.type === "done" && isReviewResult(reply.result)) return reply.result;
-    if (reply?.type === "stopped" && STOP_REASONS.has(reply.reason)) throw new ReviewStoppedError(reply.reason as never);
-    throw new ReviewStoppedError("crash");
-  } finally {
-    await reviewer.destroy().catch(() => {});
-  }
-}
-
-function isReviewResult(value: unknown): value is ReviewResult {
-  const r = value as ReviewResult;
-  return typeof r === "object" && r !== null && Array.isArray(r.modules) && typeof r.summary === "object" && typeof r.stats === "object";
-}
-
 function reviewDeps(env: Env, job: PushJob): ReviewDeps {
   return {
     credentials: { appId: env.GITHUB_APP_ID, privateKey: env.GITHUB_PRIVATE_KEY ?? "" },
@@ -144,6 +90,7 @@ export default {
       env.DB.prepare("DELETE FROM reviews WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?)").bind(`-${KEEP_DAYS} days`),
       env.DB.prepare("DELETE FROM sessions WHERE expires_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"),
       env.DB.prepare("DELETE FROM review_requests WHERE requested_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 day')"),
+      forgetOldStarts(env.DB),
     ]);
   },
 

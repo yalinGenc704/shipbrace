@@ -252,6 +252,20 @@ test("a review stopped by its time limit says so on the check, in plain words", 
   assert.match(final.output.summary, /Nothing in this commit was checked/);
 });
 
+test("a review over the daily limit says so, without suggesting an immediate retry", async () => {
+  const github = fakeGitHub({ "server/src/api.ts": VULNERABLE });
+  const d = deps(github.fetchImpl, { review: () => Promise.reject(new ReviewStoppedError("limit")) });
+  const body = push();
+  await handleWebhook(d, { signature: sign(body), event: "push" }, body);
+  await Promise.all(d.done);
+
+  const final = github.calls.filter((c) => c.method === "PATCH").at(-1)?.body;
+  assert.equal(final.conclusion, "neutral", "never a pass");
+  assert.match(final.output.summary, /daily review limit has been reached/);
+  assert.match(final.output.summary, /Try again tomorrow\.$/);
+  assert.doesNotMatch(final.output.summary, /Push again/);
+});
+
 // --- setup and uninstall ------------------------------------------------------------
 
 test("pushes from an installation nobody has set up are not reviewed", async () => {

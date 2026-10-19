@@ -34,8 +34,10 @@
     "GITHUB_CLIENT_ID": "Iv23liy8pr9ByG3NznCo",
     "AI_REVIEW": "off",
     "PACKAGE_LOOKUP": "on",
-    // Low while ShipBrace is private; raise at launch.
+    // Reviews started per rolling 24 hours, across everyone and per GitHub
+    // installation. Low while ShipBrace is private; raise at launch.
     "DAILY_REVIEW_LIMIT": "20",
+    "INSTALLATION_DAILY_LIMIT": "10",
     // Invite-only until launch: only these GitHub accounts can sign in.
     "ALLOWED_GITHUB_USERS": "yalinGenc704"
   },

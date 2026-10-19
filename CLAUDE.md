@@ -44,7 +44,7 @@ review     → ten OWASP Top 10:2025 modules for the user
 | `packages/scaffold/` | Generates new apps from composable modules; `auth` is a per-app setting |
 | `server/` | Review API (`GET`/`POST /api/review`), GitHub webhook, kept reviews (`/api/reviews/:id`, `/api/history/:id`); serves `app/dist` when built |
 | `server/src/sandbox/` | **Every review runs here**, in a sealed child process: no secrets, no network, reads limited to ShipBrace's code, time and memory limits |
-| `cloud/` | **Where it runs: Cloudflare, live at https://app.shipbrace.com.** Worker (`src/index.ts`: webhook, queue job, kept-review API, dashboard assets), reviewer container class with internet off (`src/reviewer.ts`), D1 history (`src/history-d1.ts`, `migrations/`), `wrangler.jsonc`. `wall-check/` re-proves the internet wall |
+| `cloud/` | **Where it runs: Cloudflare, live at https://app.shipbrace.com.** Worker (`src/index.ts`: webhook, queue job, kept-review API, dashboard assets), one review in a container (`src/review-container.ts`), daily limits counted at each start (`src/limits.ts`), reviewer container class with internet off (`src/reviewer.ts`), D1 history (`src/history-d1.ts`, `migrations/`), `wrangler.jsonc`. `wall-check/` re-proves the internet wall |
 | `Dockerfile`, `deploy/` | **Hosting.** One image, two roles (server, reviewer); `deploy/compose.yaml` runs shipbrace, reviewer, postgres, backup, cloudflared; `deploy/README.md` is the server setup guide |
 | `server/src/history.ts` | Review history in PostgreSQL: schema migrations, save, read back by unguessable link |
 | `app/` | React dashboard: the live review at `/`, a kept review at `/reviews/:id`, a repository's history at `/history/:id` |
@@ -74,7 +74,7 @@ everywhere:
 # PostgreSQL 18 (Homebrew, not started at login). Databases: shipbrace, shipbrace_test.
 LC_ALL=en_US.UTF-8 /opt/homebrew/opt/postgresql@18/bin/pg_ctl -D /opt/homebrew/var/postgresql@18 -l /opt/homebrew/var/log/postgresql@18.log start
 
-# all tests (expect 215 pass). Without TEST_DATABASE_URL the 6 database tests
+# all tests (expect 222 pass). Without TEST_DATABASE_URL the 6 database tests
 # are skipped and say so; it must name a database ending in _test (it is wiped).
 # CI (.github/workflows/ci.yml) runs typecheck, lint, tests and build on every push.
 TEST_DATABASE_URL=postgres:///shipbrace_test npm test
@@ -415,7 +415,7 @@ removing `findAssignments` with the rest of the legacy exports. Add the
    section 5, reviewed by a lawyer; the AI provider's data processing
    agreement; a trademark check on "ShipBrace".
 2. **Opening up:** make the GitHub App public, widen `ALLOWED_GITHUB_USERS`,
-   raise `DAILY_REVIEW_LIMIT`, add Cloudflare rate limiting on `/api/*`, and
+   raise `DAILY_REVIEW_LIMIT` and `INSTALLATION_DAILY_LIMIT` (wrangler.jsonc), add Cloudflare rate limiting on `/api/*`, and
    decide who may use the AI step (the only part with a per-review cost).
 3. **Small gaps:** "your call" ticks are per browser, shared across every
    repository; they should be per repository.
