@@ -29,6 +29,8 @@ export interface NewReview {
   githubId: number;
   /** The App installation it came through, so an uninstall can delete it. */
   installationId?: number;
+  /** GitHub id of the person who started it: who pushed, or who pasted the link. */
+  ranBy?: number;
   owner: string;
   repo: string;
   commitSha: string;

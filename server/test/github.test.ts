@@ -3,7 +3,7 @@ import { createHmac, createVerify, generateKeyPairSync } from "node:crypto";
 import { test } from "node:test";
 import { runSecurityReview } from "@shipbrace/guardrails";
 import { appJwt, verifyWebhookSignature } from "../src/github/auth.ts";
-import { handleWebhook, reviewPush, type ReviewDeps, type WebhookDeps } from "../src/github/webhook.ts";
+import { handleWebhook, type PushJob, reviewPush, type ReviewDeps, type WebhookDeps } from "../src/github/webhook.ts";
 import { ReviewStoppedError } from "../src/sandbox/sandbox.ts";
 
 const SECRET = "a-long-random-webhook-secret-for-tests";
@@ -280,4 +280,12 @@ test("uninstalling deletes everything kept; removing repositories deletes theirs
   assert.equal((await handleWebhook(d, { signature: "sha256=forged", event: "installation" }, forged)).status, 401);
 
   assert.deepEqual(forgotten, [[7, "all"], [7, [41, 42]]], "and an unsigned uninstall deletes nothing");
+});
+
+test("a push remembers who pushed it, so only they and the repository's admins can open its report", async () => {
+  const jobs: PushJob[] = [];
+  const body = push({ sender: { id: 31 } });
+  const result = await handleWebhook({ secret: SECRET, schedule: (job) => void jobs.push(job) }, { signature: sign(body), event: "push" }, body);
+  assert.equal(result.status, 202);
+  assert.equal(jobs[0]?.ranBy, 31);
 });

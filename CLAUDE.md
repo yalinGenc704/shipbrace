@@ -74,7 +74,7 @@ everywhere:
 # PostgreSQL 18 (Homebrew, not started at login). Databases: shipbrace, shipbrace_test.
 LC_ALL=en_US.UTF-8 /opt/homebrew/opt/postgresql@18/bin/pg_ctl -D /opt/homebrew/var/postgresql@18 -l /opt/homebrew/var/log/postgresql@18.log start
 
-# all tests (expect 207 pass). Without TEST_DATABASE_URL the 6 database tests
+# all tests (expect 215 pass). Without TEST_DATABASE_URL the 6 database tests
 # are skipped and say so; it must name a database ending in _test (it is wiped).
 # CI (.github/workflows/ci.yml) runs typecheck, lint, tests and build on every push.
 TEST_DATABASE_URL=postgres:///shipbrace_test npm test
@@ -292,6 +292,21 @@ the server with the AI step, start it with an extra `--env-file` that sets
   in the checker that day: a fetch whose *public* origin is fixed in the code
   is not request forgery (internal hosts still are), and `/webhook(s)`,
   `/callback`, `/oauth` routes are public by design.
+- **Security audit of ShipBrace (2026-10-18, `security-auditor`).** `npm
+  audit`: 0 known vulnerabilities. Fixed the same day: `redact()` now hides
+  unquoted credential values in environment files, Stripe/GitHub/Google key
+  shapes, connection-string passwords and private-key blocks, and the
+  committed-`.env` finding shows the variable name only; every GitHub and
+  OSV.dev request has a time limit (the Anthropic SDK has its own, 10
+  minutes). Kept reviews now open only for the person who started them (who
+  pushed, from the push's `sender`, or who pasted the link: `reviews.ran_by`,
+  migration 0004) and the repository's admins, while GitHub still lets them
+  read it (user decision 2026-10-18, all repositories, public ones
+  included). Others with access see only their own reviews in a history;
+  reviews kept before 0004 open for admins only. The Docker fallback stores
+  nothing about who ran a review. **This repository is public: open findings are not written
+  here.** They are kept in Claude's private memory for this project and
+  listed when Murat asks what is left to fix.
 - **The query check trusts tagged templates by name** (`SAFE_TAG`: `sql`, `db`,
   `query`). postgres.js transactions are usually written `` tx`...` ``, which
   gets a false "worth a look"; `history.ts` names its transaction `sql` to
@@ -309,6 +324,14 @@ the server with the AI step, start it with an extra `--env-file` that sets
   pushed tree, runs typecheck, lint, tests and the benchmark, applies pending
   D1 migrations, deploys, then checks the live site (health, sign-in, CSP,
   robots, unsigned webhook refused, no folder review).
+- **Sub-agent** `security-auditor` (`.claude/agents/`, added 2026-10-18):
+  a read-only (Read, Grep, Glob) audit of ShipBrace itself, adapted from
+  Osmani's agent-skills (MIT) with ShipBrace's own risky areas: webhook,
+  sign-in, hostile repositories, the reviewer's internet wall, D1. It skips
+  the benchmark's deliberately vulnerable apps. Run on request, before
+  opening up, or after changes to those areas; its findings are leads that
+  the main session verifies. It cannot run `npm audit`, so the main session
+  does. First run 2026-10-18.
 - **Planned:** a `conventions-reviewer` sub-agent (`.claude/agents/`) that
   checks finished work against the load-bearing conventions above and runs
   tests and benchmark, to be added with the smarter-checker work; the
@@ -334,7 +357,41 @@ Graphify*-style code graphs (independent measurements show 13-34% savings on
 medium projects, and a stale map misleads; Obsidian alone is a fine personal
 notes app); *Everything Claude Code* (hundreds of generic skills, agents and
 third-party hooks crowd the context and run code nobody chose; borrow single
-pieces only). Rule of thumb: prefer the Anthropic Directory, check viral
+pieces only); *Liner Model API* (checked 2026-10-18: a router that picks an
+undisclosed model per request; "half price" is measured against OpenRouter's
+cheapest model in a tier and the benchmarks are Liner's own, against Sonnet,
+not Opus; OpenAI-style API only, so Claude Code cannot use it. ShipBrace makes
+one optional AI call per review, so there is little to save, and sending code
+excerpts to unnamed models would break the disclosure in
+docs/legal/third-party-services.md. If cost matters later, try a cheaper
+Claude model through `options.model` in `proposer.ts` and keep it only if
+`scripts/bench.ts --model` still matches the perfect suggester with no
+refusals); *Agent Skills* (addyosmani/agent-skills, MIT, checked 2026-10-18:
+25 skills, 7 commands, 4 sub-agents; text only, its hooks are not wired into
+Claude Code. Generic spec-to-ship advice that overlaps CLAUDE.md, `/ship` and
+the built-in `/code-review`, `/simplify` and `/security-review`, and 25 skill
+descriptions crowd the context. Worth borrowing: the layout of
+`agents/code-reviewer.md` as a starting shape for `conventions-reviewer`.
+Its `security-auditor` agent is a model judging code by checklist, so it
+must never feed the product's findings. It is useful for auditing ShipBrace
+itself: the built-in `/security-review` only covers pending changes, while
+the auditor can review the whole system. Its checklist is also worth
+reading as a list of detector ideas for the 16 items with none);
+*Ponytail* (DietrichGebert/ponytail, MIT, v5.3.2, checked 2026-10-18: the
+"-53% code" is the author's own benchmark; an independent JetBrains test is
+reported at about 15% less code and 10% lower cost, and an earlier 80-94%
+claim was withdrawn. The plugin runs its own Node scripts on every session
+start and prompt, logs per-turn costs to `~/.config/ponytail/`, and can send
+them to a webhook. Its useful idea fits in two lines of CLAUDE.md and needs
+no plugin; any "less code" pressure must never trim a detector, a test or an
+`undecidable` branch; the user declined adding it, 2026-10-18); *MiroFish*
+(666ghj/MiroFish, AGPL-3.0, ~80k stars, checked 2026-10-18: a separate
+Python app, not a Claude Code tool, that simulates a crowd of AI personas
+reacting to your material. Its predictions are not validated anywhere we
+found, and it sends the material to an OpenAI-style model (Alibaba's Qwen by
+default) and to Zep Cloud for agent memory. Not useful before launch;
+before opening up, a handful of real AI-app builders beat simulated ones).
+Rule of thumb: prefer the Anthropic Directory, check viral
 claims against the source, and read any outside skill before installing it.
 
 ## Roadmap

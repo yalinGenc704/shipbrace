@@ -26,6 +26,8 @@ import { ReviewStoppedError } from "../sandbox/stopped.ts";
 export interface PushJob {
   installationId: number;
   githubId: number;
+  /** GitHub id of the person who pushed or pasted the link, when known. */
+  ranBy?: number;
   owner: string;
   repo: string;
   sha: string;
@@ -67,6 +69,7 @@ interface PushEvent {
   deleted?: boolean;
   repository?: { id?: number; name?: string; owner?: { login?: string; name?: string } };
   installation?: { id?: number };
+  sender?: { id?: number };
 }
 
 const CHECK_NAME = "ShipBrace security review";
@@ -112,7 +115,8 @@ export async function handleWebhook(
     return { status: 202, body: { accepted: false, reason: "This installation has not been set up yet." } };
   }
 
-  deps.schedule({ installationId: installation, githubId: githubId!, owner, repo, sha });
+  const ranBy = event.sender?.id;
+  deps.schedule({ installationId: installation, githubId: githubId!, owner, repo, sha, ...(typeof ranBy === "number" && Number.isSafeInteger(ranBy) ? { ranBy } : {}) });
   return { status: 202, body: { accepted: true } };
 }
 
@@ -146,7 +150,7 @@ async function forgetRemoved(
 /** Reviews one push and posts the result back as a check. */
 export async function reviewPush(
   deps: ReviewDeps,
-  { installationId, githubId, owner, repo, sha }: PushJob,
+  { installationId, githubId, ranBy, owner, repo, sha }: PushJob,
 ): Promise<void> {
   const log = deps.log ?? ((message, error) => console.error(message, error));
   const where = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
@@ -174,6 +178,7 @@ export async function reviewPush(
     const link = await keep(deps, {
       githubId,
       installationId,
+      ...(ranBy === undefined ? {} : { ranBy }),
       owner,
       repo,
       commitSha: sha,

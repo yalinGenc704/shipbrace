@@ -146,3 +146,41 @@ test("redact handles JWTs and key-value pairs", () => {
   assert.ok(!redact('password: "s3cr3tvalue"').includes("s3cr3tvalue"));
   assert.ok(redact("eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2Q").includes("[redacted-jwt]"));
 });
+
+test("redact hides unquoted env values, provider keys, connection-string passwords and key blocks", () => {
+  // Assembled at runtime, like the keys above.
+  const stripe = ["sk", "live", "4eC39HqLyjWDarjtT1zdp7dc"].join("_");
+  const oauth = ["gho", "Zr4Kq9Lm2Xv8Tn5Wb7Pc3Hd6Jf1Sg0Ya4Ue9"].join("_");
+  const google = "AIza" + "SyD4kq9Lm2Xv8Tn5Wb7Pc3Hd6Jf1Sg0Ya4U";
+  const pem = ["-----BEGIN RSA PRIVATE", "KEY-----\nMIIEow7Kq9Lm2Xv8\n-----END RSA PRIVATE", "KEY-----"].join(" ");
+  const cases: Array<[string, string]> = [
+    [`STRIPE_SECRET_KEY=${stripe}`, stripe],
+    [`export SESSION_TOKEN=plainvalue123`, "plainvalue123"],
+    [`const s = new Stripe("${stripe}");`, stripe],
+    [`token: ${oauth}`, oauth],
+    [`const maps = "${google}";`, google],
+    ["DATABASE_URL=postgres://app:Hunter2pw@db.internal/prod", "Hunter2pw"],
+    [`const db = "mysql://root:Tr0ub4dor@localhost/app";`, "Tr0ub4dor"],
+    [pem, "MIIEow7Kq9Lm2Xv8"],
+  ];
+  for (const [text, secret] of cases) {
+    assert.ok(!redact(text).includes(secret), `leaked: ${redact(text)}`);
+  }
+});
+
+test("redact leaves ordinary code readable", () => {
+  for (const code of [
+    "const token = getToken(req);",
+    "const password = req.body.password;",
+    'fetch("https://api.github.com/repos/a/b")',
+    "PUBLIC_URL=https://app.shipbrace.com",
+  ]) {
+    assert.equal(redact(code), code);
+  }
+});
+
+test("a committed .env finding names the variable but never shows its value", () => {
+  const { findings } = scan(snapshotFromFiles([file(".env", "# settings\nAPP_NAME=shop-prod-7731\nDEBUG=1")], [".env"]));
+  const excerpt = findings.find((f) => f.ruleId === "secrets/committed-dotenv")?.location?.excerpt;
+  assert.equal(excerpt, "APP_NAME=[redacted]");
+});

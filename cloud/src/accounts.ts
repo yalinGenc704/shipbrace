@@ -33,6 +33,7 @@ import { clearedSessionCookie, closeSession, cookieValue, openSession, readSessi
 /** Bump when the notices change; everyone is asked again. */
 export const NOTICE_VERSION = "2026-10-10.2";
 const REVIEWS_PER_HOUR = 10;
+const GITHUB_TIMEOUT_MS = 15_000;
 const STATE_COOKIE = "__Host-shipbrace-state";
 
 type C = Context<{ Bindings: Env; Variables: { session: Session } }>;
@@ -66,19 +67,29 @@ function sameString(a: string, b: string): boolean {
   return diff === 0;
 }
 
-/** Answers to "may this person see repository N", per session, for five minutes. */
-const accessCache = new Map<string, { read: boolean; until: number }>();
+/** Answers to "what may this person do with repository N", per session, for five minutes. */
+const accessCache = new Map<string, { read: boolean; admin: boolean; until: number }>();
 
-async function canRead(session: Session, githubId: number): Promise<boolean> {
+async function accessTo(session: Session, githubId: number): Promise<{ read: boolean; admin: boolean }> {
   const key = `${session.idHash}:${githubId}`;
   const cached = accessCache.get(key);
-  if (cached && cached.until > Date.now()) return cached.read;
+  if (cached && cached.until > Date.now()) return cached;
   const access = await repoAccessById(session.token, githubId);
-  const read = Boolean(access?.read);
+  const answer = { read: Boolean(access?.read), admin: Boolean(access?.admin) };
   if (accessCache.size > 5_000) accessCache.clear();
-  accessCache.set(key, { read, until: Date.now() + 5 * 60_000 });
-  return read;
+  accessCache.set(key, { ...answer, until: Date.now() + 5 * 60_000 });
+  return answer;
 }
+
+/**
+ * A kept review opens for the person who started it and for the repository's
+ * admins, and only while GitHub still lets them see the repository: being
+ * able to read a repository, even a public one, is not enough on its own.
+ */
+const mayOpen = (session: Session, access: { read: boolean; admin: boolean }, ranBy: number | null) =>
+  access.read && (access.admin || ranBy === session.githubId);
+
+const NOT_YOURS = "Only the person who started this review and the repository's admins can open it.";
 
 export function accountRoutes() {
   const app = new Hono<{ Bindings: Env; Variables: { session: Session } }>();
@@ -195,6 +206,7 @@ export function accountRoutes() {
         accept: "application/vnd.github+json",
         "user-agent": "shipbrace",
       },
+      signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
     });
     if (asApp.status === 404) {
       return c.json({ status: "needs-install", installUrl, message: "Allow ShipBrace on this repository on GitHub, then paste the link again." });
@@ -213,7 +225,7 @@ export function accountRoutes() {
 
     const head = await fetch(
       `https://api.github.com/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/commits/${encodeURIComponent(repo.defaultBranch)}`,
-      { headers: { authorization: `Bearer ${session.token}`, accept: "application/vnd.github+json", "user-agent": "shipbrace" } },
+      { headers: { authorization: `Bearer ${session.token}`, accept: "application/vnd.github+json", "user-agent": "shipbrace" }, signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS) },
     );
     const sha = head.ok ? ((await head.json()) as { sha?: string }).sha : undefined;
     if (!sha || !/^[0-9a-f]{40}$/.test(sha)) return c.json({ status: "empty", error: "This repository has no commits to review yet." }, 409);
@@ -224,7 +236,7 @@ export function accountRoutes() {
       c.env.DB.prepare("INSERT INTO installations (installation_id, set_up_by) VALUES (?, ?) ON CONFLICT DO NOTHING").bind(installationId, session.githubId),
       c.env.DB.prepare("INSERT INTO review_requests (github_id) VALUES (?)").bind(session.githubId),
     ]);
-    await c.env.REVIEWS.send({ installationId, githubId: repo.githubId, owner: repo.owner, repo: repo.name, sha });
+    await c.env.REVIEWS.send({ installationId, githubId: repo.githubId, ranBy: session.githubId, owner: repo.owner, repo: repo.name, sha });
     return c.json({ status: "queued", repository: { githubId: repo.githubId, owner: repo.owner, name: repo.name, sha } });
   }
 
@@ -238,13 +250,19 @@ export function accountRoutes() {
       .slice(0, 90);
     if (repos.length === 0) return c.json({ repositories: [] });
 
+    // The latest review this person may open: any, where they are an admin;
+    // otherwise the latest they started. `?` lists are built from the count only.
+    const admin = repos.filter((r) => r.admin).map((r) => r.githubId);
     const { results } = await c.env.DB.prepare(
       `SELECT p.github_id, p.history_id, r.id AS review_id, r.created_at, r.conclusion, r.title
        FROM repositories p
-       LEFT JOIN reviews r ON r.id = (SELECT id FROM reviews WHERE repository_id = p.id ORDER BY created_at DESC LIMIT 1)
+       LEFT JOIN reviews r ON r.id = (
+         SELECT id FROM reviews
+         WHERE repository_id = p.id AND (p.github_id IN (${admin.map(() => "?").join(",")}) OR ran_by = ?)
+         ORDER BY created_at DESC LIMIT 1)
        WHERE p.github_id IN (${repos.map(() => "?").join(",")})`,
     )
-      .bind(...repos.map((r) => r.githubId))
+      .bind(...admin, session.githubId, ...repos.map((r) => r.githubId))
       .all<{ github_id: number; history_id: string; review_id: string | null; created_at: string | null; conclusion: string | null; title: string | null }>();
     const kept = new Map(results.map((row) => [row.github_id, row]));
 
@@ -321,28 +339,28 @@ export function accountRoutes() {
     return c.json({ ok: true });
   });
 
-  // --- kept reviews: only for people who can see the repository ----------------------
+  // --- kept reviews: only for who started them, and the repository's admins ----------
 
   app.get("/api/reviews/:id", async (c) => {
-    const row = await c.env.DB.prepare("SELECT p.github_id FROM reviews r JOIN repositories p ON p.id = r.repository_id WHERE r.id = ?")
+    const row = await c.env.DB.prepare("SELECT p.github_id, r.ran_by FROM reviews r JOIN repositories p ON p.id = r.repository_id WHERE r.id = ?")
       .bind(c.req.param("id"))
-      .first<{ github_id: number }>();
+      .first<{ github_id: number; ran_by: number | null }>();
     if (!row) return c.json({ error: "No review at this address." }, 404);
-    if (!(await canRead(c.get("session"), row.github_id))) {
-      return c.json({ error: "You don't have access to this repository on GitHub." }, 403);
-    }
+    const session = c.get("session");
+    if (!mayOpen(session, await accessTo(session, row.github_id), row.ran_by)) return c.json({ error: NOT_YOURS }, 403);
     return c.json(await d1History(c.env.DB).review(c.req.param("id")));
   });
 
+  /** Admins see every review of the repository; anyone else only the ones they started. */
   app.get("/api/history/:id", async (c) => {
     const row = await c.env.DB.prepare("SELECT github_id FROM repositories WHERE history_id = ?")
       .bind(c.req.param("id"))
       .first<{ github_id: number }>();
     if (!row) return c.json({ error: "No review history at this address." }, 404);
-    if (!(await canRead(c.get("session"), row.github_id))) {
-      return c.json({ error: "You don't have access to this repository on GitHub." }, 403);
-    }
-    return c.json(await d1History(c.env.DB).repository(c.req.param("id")));
+    const session = c.get("session");
+    const access = await accessTo(session, row.github_id);
+    if (!access.read) return c.json({ error: "You don't have access to this repository on GitHub." }, 403);
+    return c.json(await d1History(c.env.DB).repository(c.req.param("id"), access.admin ? undefined : session.githubId));
   });
 
   return app;

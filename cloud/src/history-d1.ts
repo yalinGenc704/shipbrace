@@ -43,7 +43,8 @@ const entry = (row: ReviewRow): ReviewEntry => ({
   },
 });
 
-export function d1History(db: D1Database): ReviewHistory {
+/** `repository` takes an extra filter here: only the reviews one person started. */
+export function d1History(db: D1Database): ReviewHistory & { repository(historyId: string, ranBy?: number): ReturnType<ReviewHistory["repository"]> } {
   return {
     async record(review) {
       const result = JSON.stringify(review.result);
@@ -69,12 +70,12 @@ export function d1History(db: D1Database): ReviewHistory {
       await db
         .prepare(
           `INSERT INTO reviews (id, repository_id, commit_sha, conclusion, title,
-                                high, medium, low, awaiting, unproven, result, skipped)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                                high, medium, low, awaiting, unproven, result, skipped, ran_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .bind(
           reviewId, repository.id, review.commitSha, review.conclusion, review.title,
-          high, medium, low, awaitingReview, unproven, result, JSON.stringify(review.skipped),
+          high, medium, low, awaitingReview, unproven, result, JSON.stringify(review.skipped), review.ranBy ?? null,
         )
         .run();
       return { reviewId, historyId: repository.history_id };
@@ -99,7 +100,7 @@ export function d1History(db: D1Database): ReviewHistory {
       };
     },
 
-    async repository(historyId) {
+    async repository(historyId: string, ranBy?: number) {
       if (!LINK_ID.test(historyId)) return null;
       const repository = await db
         .prepare("SELECT id, owner, name FROM repositories WHERE history_id = ?")
@@ -109,9 +110,10 @@ export function d1History(db: D1Database): ReviewHistory {
       const { results } = await db
         .prepare(
           `SELECT id, commit_sha, created_at, conclusion, title, high, medium, low, awaiting, unproven
-           FROM reviews WHERE repository_id = ? ORDER BY created_at DESC, id LIMIT ?`,
+           FROM reviews WHERE repository_id = ? AND (? IS NULL OR ran_by = ?)
+           ORDER BY created_at DESC, id LIMIT ?`,
         )
-        .bind(repository.id, HISTORY_LIMIT)
+        .bind(repository.id, ranBy ?? null, ranBy ?? null, HISTORY_LIMIT)
         .all<ReviewRow>();
       return { owner: repository.owner, name: repository.name, reviews: results.map(entry) };
     },

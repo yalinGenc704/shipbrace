@@ -24,7 +24,7 @@ export function StoredReviewPage({ id }: { id: string }) {
     return (
       <Problem>
         {error instanceof NoAccess
-          ? "This review belongs to a repository your GitHub account can't see. Ask its owner for access on GitHub."
+          ? "Only the person who started this review and the repository's admins can open it. If that is you, check that you signed in with the right GitHub account."
           : error instanceof NotFound
           ? "There is no review at this address. Check that the link was copied in full."
           : "The review could not be loaded. Do not treat this as a pass."}

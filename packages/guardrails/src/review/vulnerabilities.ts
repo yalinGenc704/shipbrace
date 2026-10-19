@@ -253,6 +253,8 @@ interface OsvVuln {
 
 const OSV = "https://api.osv.dev/v1";
 const BATCH = 1000;
+// OSV.dev answers in well under a second; a call that hangs fails the lookup instead.
+const TIMEOUT_MS = 20_000;
 const DETAIL_CONCURRENCY = 8;
 
 function gradeOf(vuln: OsvVuln): Grade {
@@ -289,6 +291,7 @@ export function createOsvSource(fetchImpl: typeof fetch = fetch): VulnerabilityS
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
     });
     if (!response.ok) throw new Error(`OSV answered ${response.status}`);
     return response.json() as Promise<unknown>;
@@ -319,7 +322,7 @@ export function createOsvSource(fetchImpl: typeof fetch = fetch): VulnerabilityS
       for (let i = 0; i < ids.length; i += DETAIL_CONCURRENCY) {
         await Promise.all(
           ids.slice(i, i + DETAIL_CONCURRENCY).map(async (id) => {
-            const response = await fetchImpl(`${OSV}/vulns/${encodeURIComponent(id)}`);
+            const response = await fetchImpl(`${OSV}/vulns/${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(TIMEOUT_MS) });
             if (!response.ok) throw new Error(`OSV answered ${response.status}`);
             details.set(id, (await response.json()) as OsvVuln);
           }),

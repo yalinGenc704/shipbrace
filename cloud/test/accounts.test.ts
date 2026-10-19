@@ -20,7 +20,7 @@ const KEY = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32
 const PEM = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({ type: "pkcs1", format: "pem" }).toString();
 
 /** Repositories the stand-in GitHub knows, and what our test person may do with each. */
-const REPOS: Record<string, { id: number; private: boolean; push: boolean; pull: boolean; installed: number | null }> = {
+const REPOS: Record<string, { id: number; private: boolean; push: boolean; pull: boolean; admin?: boolean; installed: number | null }> = {
   "ada/shop": { id: 101, private: true, push: true, pull: true, installed: 7 },
   "ada/fresh": { id: 102, private: false, push: true, pull: true, installed: null },
   "stranger/bank": { id: 201, private: false, push: false, pull: true, installed: 9 },
@@ -67,7 +67,7 @@ function fakeGitHub(): typeof fetch {
 function repoBody(full: string) {
   const [owner, name] = full.split("/");
   const r = REPOS[full]!;
-  return { id: r.id, name, private: r.private, default_branch: "main", owner: { login: owner, id: 1 }, permissions: { push: r.push, pull: r.pull } };
+  return { id: r.id, name, private: r.private, default_branch: "main", owner: { login: owner, id: 1 }, permissions: { push: r.push, pull: r.pull, admin: Boolean(r.admin) } };
 }
 
 beforeEach(() => {
@@ -178,7 +178,7 @@ test("pasting your own repository queues a review of its latest commit and sets 
   const cookie = await signIn();
   const response = await post("/api/repos", { link: "https://github.com/ada/shop.git" }, cookie);
   assert.equal(((await response.json()) as { status: string }).status, "queued");
-  assert.deepEqual(queued, [{ installationId: 7, githubId: 101, owner: "ada", repo: "shop", sha: "c".repeat(40) }]);
+  assert.deepEqual(queued, [{ installationId: 7, githubId: 101, ranBy: ME, owner: "ada", repo: "shop", sha: "c".repeat(40) }]);
   assert.equal(await installationIsSetUp(env.DB, 7), true, "its later pushes are reviewed too");
 });
 
@@ -221,11 +221,15 @@ test("setting up an installation that isn't yours is refused", async () => {
 
 // --- reading kept reviews -----------------------------------------------------------------
 
-async function keep(githubId: number, repo: string) {
+/** The test person is GitHub user 5; `ranBy` is who started the review. */
+const ME = 5;
+
+async function keep(githubId: number, repo: string, ranBy?: number) {
   const result = await runSecurityReview(snapshotFromFiles([{ path: "a.ts", content: "export const x = 1;" }]));
   return d1History(env.DB).record({
     githubId,
     installationId: 7,
+    ...(ranBy === undefined ? {} : { ranBy }),
     owner: repo.split("/")[0]!,
     repo: repo.split("/")[1]!,
     commitSha: "d".repeat(40),
@@ -237,7 +241,7 @@ async function keep(githubId: number, repo: string) {
 }
 
 test("a kept review opens only for someone GitHub lets see the repository", async () => {
-  const mine = await keep(101, "ada/shop");
+  const mine = await keep(101, "ada/shop", ME);
   const cookie = await signIn();
   assert.equal((await call(`/api/reviews/${mine.reviewId}`, {}, cookie)).status, 200);
   assert.equal((await call(`/api/history/${mine.historyId}`, {}, cookie)).status, 200);
@@ -249,6 +253,49 @@ test("a kept review opens only for someone GitHub lets see the repository", asyn
   assert.equal((await call(`/api/reviews/${mine.reviewId}`, {}, other)).status, 403, "removed from the repository, removed from its reviews");
   REPOS["ada/shop"]!.pull = true;
   REPOS["ada/shop"]!.push = true;
+});
+
+test("being able to read a public repository is not enough to open its reports", async () => {
+  const theirs = await keep(201, "stranger/bank", 99);
+  const cookie = await signIn();
+  const opened = await call(`/api/reviews/${theirs.reviewId}`, {}, cookie);
+  assert.equal(opened.status, 403);
+  assert.match(((await opened.json()) as { error: string }).error, /started this review/);
+  const history = (await (await call(`/api/history/${theirs.historyId}`, {}, cookie)).json()) as { reviews: unknown[] };
+  assert.deepEqual(history.reviews, [], "the history lists none of someone else's reviews");
+});
+
+test("a teammate who is not an admin opens only the reviews they started", async () => {
+  const theirs = await keep(101, "ada/shop", 99);
+  const mine = await keep(101, "ada/shop", ME);
+  const cookie = await signIn();
+  assert.equal((await call(`/api/reviews/${theirs.reviewId}`, {}, cookie)).status, 403);
+  assert.equal((await call(`/api/reviews/${mine.reviewId}`, {}, cookie)).status, 200);
+  const history = (await (await call(`/api/history/${mine.historyId}`, {}, cookie)).json()) as { reviews: Array<{ id: string }> };
+  assert.deepEqual(history.reviews.map((r) => r.id), [mine.reviewId]);
+  const repos = (await (await call("/api/repos", {}, cookie)).json()) as { repositories: Array<{ latest: { id: string } | null }> };
+  assert.equal(repos.repositories[0]?.latest?.id, mine.reviewId, "the dashboard shows the latest one they may open");
+});
+
+test("the repository's admins open every review of it, even ones kept before anyone was recorded", async () => {
+  const theirs = await keep(101, "ada/shop", 99);
+  const older = await keep(101, "ada/shop");
+  REPOS["ada/shop"]!.admin = true;
+  try {
+    const cookie = await signIn();
+    assert.equal((await call(`/api/reviews/${theirs.reviewId}`, {}, cookie)).status, 200);
+    assert.equal((await call(`/api/reviews/${older.reviewId}`, {}, cookie)).status, 200);
+    const history = (await (await call(`/api/history/${theirs.historyId}`, {}, cookie)).json()) as { reviews: unknown[] };
+    assert.equal(history.reviews.length, 2);
+  } finally {
+    REPOS["ada/shop"]!.admin = false;
+  }
+});
+
+test("pasting a link records who started the review", async () => {
+  const cookie = await signIn();
+  await post("/api/repos", { link: "ada/shop" }, cookie);
+  assert.equal((queued[0] as { ranBy?: number }).ranBy, ME);
 });
 
 test("uninstalling deletes that installation's reviews and nothing else", async () => {

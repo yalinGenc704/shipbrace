@@ -10,6 +10,8 @@
  */
 
 const API = "https://api.github.com";
+// A GitHub call that has not answered by then is treated as failed, never waited on forever.
+const TIMEOUT_MS = 15_000;
 const HEADERS = { accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28", "user-agent": "shipbrace" };
 
 export interface Tokens {
@@ -31,6 +33,7 @@ export const authorizeUrl = (app: OAuthApp, state: string) =>
 async function tokenRequest(app: OAuthApp, params: Record<string, string>, fetchImpl: typeof fetch): Promise<Tokens> {
   const response = await fetchImpl("https://github.com/login/oauth/access_token", {
     method: "POST",
+    signal: AbortSignal.timeout(TIMEOUT_MS),
     headers: { accept: "application/json", "content-type": "application/json", "user-agent": "shipbrace" },
     body: JSON.stringify({ client_id: app.clientId, client_secret: app.clientSecret, ...params }),
   });
@@ -56,7 +59,7 @@ export const refreshTokens = (app: OAuthApp, refreshToken: string, fetchImpl: ty
   tokenRequest(app, { grant_type: "refresh_token", refresh_token: refreshToken }, fetchImpl);
 
 async function get<T>(token: string, path: string, fetchImpl: typeof fetch): Promise<{ status: number; body: T | null }> {
-  const response = await fetchImpl(`${API}${path}`, { headers: { ...HEADERS, authorization: `Bearer ${token}` } });
+  const response = await fetchImpl(`${API}${path}`, { headers: { ...HEADERS, authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(TIMEOUT_MS) });
   return { status: response.status, body: response.ok ? ((await response.json()) as T) : null };
 }
 
@@ -77,6 +80,8 @@ export interface RepoAccess {
   read: boolean;
   /** Can change it: write, maintain or admin. Required to start a review. */
   write: boolean;
+  /** Administers it (organisation owners included). May open every kept review of it. */
+  admin: boolean;
 }
 
 interface RepoBody {
@@ -97,6 +102,7 @@ const access = (repo: RepoBody): RepoAccess => ({
   defaultBranch: repo.default_branch,
   read: Boolean(repo.permissions?.pull || repo.permissions?.push || repo.permissions?.admin),
   write: Boolean(repo.permissions?.push || repo.permissions?.maintain || repo.permissions?.admin),
+  admin: Boolean(repo.permissions?.admin),
 });
 
 /**

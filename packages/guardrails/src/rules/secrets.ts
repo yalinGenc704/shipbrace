@@ -1,5 +1,5 @@
 import type { Finding, Rule } from "../types.ts";
-import { isExampleEnv, isSource, isTestPath, locate, redact, scanLines } from "../util.ts";
+import { isExampleEnv, isSource, isTestPath, locate, scanLines } from "../util.ts";
 
 /**
  * Provider-issued credentials have recognisable shapes. Matching the shape
@@ -142,7 +142,9 @@ const committedDotenv: Rule = {
         `\`${file.path}\` holds ${populated.length} configured value(s) and is tracked by git. ` +
         `Environment files are where passwords and API keys live, and this one will be ` +
         `pushed to GitHub with the rest of your code.`,
-      location: { path: file.path, line: populated[0]!.line, excerpt: redact(populated[0]!.text) },
+      // The name only: every value in a committed .env is presumed secret,
+      // whatever it is called.
+      location: { path: file.path, line: populated[0]!.line, excerpt: `${populated[0]!.match[1]}=[redacted]` },
       fix: {
         kind: "manual",
         description:

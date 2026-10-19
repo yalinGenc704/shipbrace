@@ -9,6 +9,8 @@ import { appJwt } from "./auth.ts";
  */
 
 const API = "https://api.github.com";
+// A GitHub call that has not answered by then is treated as failed, never waited on forever.
+const TIMEOUT_MS = 30_000;
 const HEADERS = {
   accept: "application/vnd.github+json",
   "x-github-api-version": "2022-11-28",
@@ -36,6 +38,7 @@ export function clientWithToken(token: string, fetchImpl: typeof fetch = fetch):
   const call = async <T>(method: string, path: string, body?: unknown): Promise<T> => {
     const response = await fetchImpl(`${API}${path}`, {
       method,
+      signal: AbortSignal.timeout(TIMEOUT_MS),
       headers: {
         ...HEADERS,
         authorization: `Bearer ${token}`,

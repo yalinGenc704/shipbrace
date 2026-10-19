@@ -42,13 +42,24 @@ export function scanLines(
  */
 export function redact(text: string): string {
   return text
+    // Private key blocks, whole (a file sent to the model can hold one).
+    .replace(/-----BEGIN ([A-Z ]*)PRIVATE KEY-----[\s\S]*?(?:-----END \1PRIVATE KEY-----|$)/g, "-----BEGIN $1PRIVATE KEY----- [redacted]")
     // Quoted values on a key that names a credential.
     .replace(
       /((?:secret|token|password|passwd|api[-_]?key|private[-_]?key|credential)\w*\s*[:=]\s*)(['"`])([^'"`]{4,})\2/gi,
       (_m, head: string, q: string) => `${head}${q}[redacted]${q}`,
     )
+    // Unquoted environment-file values on a name that sounds like a credential
+    // (`STRIPE_SECRET_KEY=sk_...`). Upper-case names only, at the start of a
+    // line, so ordinary code such as `const token = getToken()` stays readable.
+    .replace(
+      /^(\s*(?:export\s+)?[A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|PWD|KEY|CREDENTIAL|AUTH|DSN)[A-Z0-9_]*\s*=\s*)(?!['"`])(\S.*)$/gm,
+      "$1[redacted]",
+    )
+    // The password part of a connection string: postgres://user:[redacted]@host
+    .replace(/(\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@'"`]+:)[^\s@/'"`]+@/gi, "$1[redacted]@")
     // Bare provider-shaped tokens anywhere on the line.
-    .replace(/\b(sk-|ghp_|github_pat_|xox[baprs]-|AKIA)[A-Za-z0-9_-]{8,}/g, "$1[redacted]")
+    .replace(/\b(sk-|(?:sk|rk)_(?:live|test)_|gh[opsur]_|github_pat_|xox[baprs]-|AKIA|AIza)[A-Za-z0-9_-]{8,}/g, "$1[redacted]")
     // JWTs.
     .replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+/g, "[redacted-jwt]");
 }
