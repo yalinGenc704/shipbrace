@@ -872,10 +872,24 @@ function leaves(branch: Node | undefined): boolean {
  * check leaves when nobody is. A check further down may come after the
  * route has already done something, so it is not counted.
  */
-function signInCheckedFirst(handler: Node): string | undefined {
+function signInCheckedFirst(handler: Node, depth = 0): string | undefined {
   if (!/^(?:ArrowFunctionExpression|FunctionExpression)$/.test(handler.type)) return undefined;
   const body = handler.body as Node | undefined;
   if (body?.type !== "BlockStatement") return undefined;
+
+  // `void (async () => { ... })()` -- the whole handler wrapped in one
+  // function that runs at once: its first steps are the handler's first steps.
+  const only = (body.body ?? []) as Node[];
+  if (only.length === 1 && only[0]!.type === "ExpressionStatement" && depth < 2) {
+    let inner = only[0]!.expression as Node | undefined;
+    if (inner?.type === "UnaryExpression" && inner.operator === "void") inner = inner.argument as Node;
+    while (inner?.type === "ParenthesizedExpression") inner = inner.expression as Node;
+    if (inner?.type === "CallExpression" && ((inner.arguments ?? []) as Node[]).length === 0) {
+      let callee = inner.callee as Node | undefined;
+      while (callee?.type === "ParenthesizedExpression") callee = callee.expression as Node;
+      if (callee) return signInCheckedFirst(callee, depth + 1);
+    }
+  }
 
   const identities = new Set<string>();
   for (const statement of (body.body ?? []) as Node[]) {

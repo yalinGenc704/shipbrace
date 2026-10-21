@@ -504,3 +504,16 @@ test("XML is an operation only when outside references are switched on", () => {
   assert.deepEqual(kinds(", { noent: true }"), ["xml-entities"]);
   assert.deepEqual(kinds(", { dtdload: true }"), ["xml-entities"]);
 });
+
+test("a sign-in check inside a handler wrapped in an async function that runs at once counts", () => {
+  const doors = buildInventory(snap("server/routes.ts", [
+    "router.post('/', (req, res, next) => {",
+    "  void (async () => {",
+    "    const loggedInUser = security.authenticatedUsers.get(req.cookies.token)",
+    "    if (!loggedInUser) { next(new Error('Blocked')); return }",
+    "    await PrivacyRequestModel.create({ UserId: loggedInUser.data.id })",
+    "  })()",
+    "})",
+  ].join("\n"))).doors;
+  assert.ok((doors[0]?.guards.length ?? 0) > 0);
+});

@@ -379,6 +379,34 @@ const webhookSignatures: ProjectCheck = {
   },
 };
 
+// --- XML: only libxmljs is followed ------------------------------------------
+
+/** XML tools that can pull in outside files but whose settings this check cannot read. */
+const OTHER_XML = /^(?:libxml2-wasm|libxslt|libxml-xsd|xmllint|xmllint-wasm|node-libxml|libxmljs-mt)$/;
+
+/**
+ * The XML check follows libxmljs only. A project using another tool that can
+ * follow outside references gets the item handed back, so a real hole in a
+ * library the check cannot read never shows as a pass.
+ */
+const xmlLibraries: ProjectCheck = {
+  id: "taint:xml-entities",
+  itemId: "injection/xml-entities",
+
+  run(snapshot) {
+    const others = [...snapshot.manifests.values()].flatMap((m) =>
+      Object.keys({ ...(m.dependencies as object | undefined), ...(m.devDependencies as object | undefined) })
+        .filter((name) => OTHER_XML.test(name))
+    );
+    if (others.length === 0) return { status: "pass" };
+    return {
+      status: "not-applicable",
+      reason:
+        `This project uses ${[...new Set(others)].join(", ")}, which this check cannot follow. Confirm it is never given a visitor's XML with outside references (entity loading) switched on.`,
+    };
+  },
+};
+
 // --- AI features: only judged when a known AI library is used -----------------
 
 const AI_LIBRARY = /^(?:@anthropic-ai\/sdk|openai|ai|@ai-sdk\/[\w-]+|@google\/generative-ai|@google\/genai|langchain|@langchain\/[\w-]+)$/;
@@ -826,6 +854,7 @@ export const projectChecks: ProjectCheck[] = [
   webhookSignatures,
   ...fileChecks,
   aiLibraries,
+  xmlLibraries,
   passwordStorage,
   sessionExpiry,
   rateLimiting,

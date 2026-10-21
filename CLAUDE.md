@@ -74,7 +74,7 @@ everywhere:
 # PostgreSQL 18 (Homebrew, not started at login). Databases: shipbrace, shipbrace_test.
 LC_ALL=en_US.UTF-8 /opt/homebrew/opt/postgresql@18/bin/pg_ctl -D /opt/homebrew/var/postgresql@18 -l /opt/homebrew/var/log/postgresql@18.log start
 
-# all tests (expect 264 pass). Without TEST_DATABASE_URL the 6 database tests
+# all tests (expect 266 pass). Without TEST_DATABASE_URL the 6 database tests
 # are skipped and say so; it must name a database ending in _test (it is wiped).
 # CI (.github/workflows/ci.yml) runs typecheck, lint, tests and build on every push.
 TEST_DATABASE_URL=postgres:///shipbrace_test npm test
@@ -177,7 +177,8 @@ the server with the AI step, start it with an extra `--env-file` that sets
   `parseXml`/`parseXmlString`/`parseXmlAsync` call whose options object
   literally sets `noent` or `dtdload` is an `xml-entities` operation
   (checklist item `injection/xml-entities`, whose "checked" text names
-  libxmljs only). Not covered: options held in a variable, libxslt,
+  libxmljs only; a project depending on libxml2-wasm, libxslt, libxml-xsd
+  or xmllint gets the item handed back). Not covered: options held in a variable, libxslt,
   libxml-xsd, xmllint. xml2js, fast-xml-parser, xmldom and sax never fetch
   outside files.
 - **Mass assignment (2026-10-20, `analysis/schemas.ts`,
@@ -276,8 +277,19 @@ the server with the AI step, start it with an extra `--env-file` that sets
   command injection, insecure deserialisation, open redirect, missing headers).
   Templates added afterwards (DVNA reflected XSS now caught). Not detected yet: NoSQL injection,
   CSRF, a session secret left at a default. Sign-in checks written inside a
-  handler (Juice Shop `dataErasure`) are recognised since 2026-10-20, not
-  yet re-run on Juice Shop.
+  handler (Juice Shop `dataErasure`) are recognised since 2026-10-20.
+- **Practice apps re-run with the smarter checker (2026-10-21; DVNA 9ba473a,
+  NodeGoat c5cb68a, Juice Shop 399fba7).** Every new finding checked by hand
+  and real: DVNA's XML upload hole (XXE), node-serialize now under unsafe
+  decoding, DVNA's container running as root; Juice Shop's memories upload
+  with no size limit, its `token` cookie readable by scripts (2 places), and
+  leads on its chatbot (visitor text to a model with tools) and its full user
+  list. Juice Shop's two `dataErasure` open-route false alarms are gone.
+  Gaps: Juice Shop's XXE uses libxml2-wasm, which is not followed (the item
+  now says so instead of passing); no stored attack or mass assignment was
+  found in any of the three (NodeGoat's stored XSS goes through templates
+  with autoescape off, not followed). Totals: DVNA 17 -> 19 risks, NodeGoat
+  7 -> 7, Juice Shop 52 -> 53 risks and 5 -> 7 leads.
 - **Inputs recognised** (`inventory-ast.ts`): route params, query, body,
   headers, cookies, outbound responses, `req.file(s)` uploads, GitHub repository
   content (`getContent`/`getReadme`/`getBlob`/archives), and only the
@@ -502,8 +514,8 @@ repository with CI and a README screenshot, a dead-code cleanup, and the
 Claude Code setup above (2026-10-18).
 
 **The smarter checker (agreed 2026-10-18, widened and built 2026-10-20),**
-roadmap item 6 below. Steps 1-5 are committed; not yet pushed or deployed,
-and not yet tried on the practice apps.
+roadmap item 6 below. Steps 1-5 are committed and tried on the practice
+apps (see Current state); not yet pushed or deployed.
 Every new check gets benchmark cases (a real problem and a safe look-alike),
 keeps zero false alarms, is tried on the practice apps, and fills a checklist
 item only once it can actually run ("no false pass"). In order:

@@ -440,3 +440,8 @@ test("step 4 file checks follow stages, comments and dev files", () => {
     "pass",
   );
 });
+
+test("an XML library the check cannot follow hands the XML item back", () => {
+  assert.equal(itemStatus([manifest({ "libxml2-wasm": "0.5.0" })], "injection/xml-entities"), "not-applicable");
+  assert.equal(itemStatus([manifest({ libxmljs: "1.0.0" })], "injection/xml-entities"), "pass");
+});
