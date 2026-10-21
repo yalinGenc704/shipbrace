@@ -56,6 +56,18 @@ says.
 - Requests that change things check `Origin` against `PUBLIC_URL` and
   require JSON (the CSRF guard). Find any route that changes state without it.
 - No CORS header lets other websites call the API.
+- The server decides who someone is. Identity comes from the session, never
+  from an id in the body, query or address; an id from the browser is only a
+  lookup key that is then checked against the session.
+- Tenants stay apart: one person or installation can never read or change
+  another's rows, and each review starts in a fresh container with nothing
+  left from the previous one.
+- No mass assignment: handlers copy named fields from request bodies; no body
+  is spread into a database update or a stored object.
+- No internal pages are reachable on the live site: no admin, debug or test
+  routes, and the static files are only the built dashboard (no `.env`,
+  `.git`, source maps or config files; unknown paths fall back to the
+  dashboard page, which is fine).
 
 ### Sign-in and sessions
 - Session cookies stay `__Host-`, `HttpOnly`, `Secure`, `SameSite=Lax`, with
@@ -67,8 +79,13 @@ says.
   another site.
 - GitHub tokens are encrypted at rest (`SESSION_KEY`, AES-GCM) with a fresh
   IV each time.
-- There are no passwords and no password resets (GitHub sign-in only); say
-  so instead of checking for them.
+- The browser keeps no tokens or session values in `localStorage` or
+  `sessionStorage`; only the `HttpOnly` cookie carries the session.
+- OAuth: the redirect address is fixed from `PUBLIC_URL`, the GitHub App asks
+  for the narrowest access that works, and a refused or failed sign-in stores
+  nothing.
+- There are no passwords, password resets or "no such user" messages (GitHub
+  sign-in only); say so instead of checking for them.
 
 ### The GitHub webhook and queue
 - The signature (`x-hub-signature-256`) is checked over the raw body with a
@@ -92,6 +109,13 @@ says.
   the model says becomes a finding unless `verifyClaim` returns `valid`.
 - Code excerpts pass through `redact()` before they are stored, logged,
   shown or sent to the model.
+- Only allowed people and installations can make the AI step run, the
+  per-installation switch is enforced where the call is made, and its cost
+  is capped.
+- Commands run with a fixed program and an argument array, never a shell
+  string containing text from a repository, webhook or request.
+- Untrusted bytes are parsed only as JSON: no `v8.deserialize`, `eval` or
+  `new Function` on data from a repository, webhook or request.
 
 ### Data, database and secrets
 - Every query is parameterized (`prepare(...).bind(...)`, tagged templates).
@@ -104,6 +128,13 @@ says.
   that work. List the GitHub App permissions the code relies on.
 - Logs (`console.*`) and error messages never include tokens, keys, cookie
   values, code excerpts or the webhook body.
+- Encryption: GitHub tokens are encrypted by ShipBrace; D1 is encrypted at
+  rest by Cloudflare; every page and API answer is HTTPS-only (HSTS).
+- No secret was ever committed: search the whole git history, not just the
+  current files, and the built dashboard (`app/dist`) for key shapes. Test
+  fixtures with made-up keys are fine.
+- No debug mode in the live setup: no debug flags, verbose logging or local
+  development settings in `wrangler.jsonc`.
 - Kept reviews: deleted nightly after `KEEP_DAYS` (90) in `cloud/src/index.ts`,
   and when an installation is removed; D1 time travel (30 days) is the backup. Note anything that keeps data longer.
 
@@ -116,6 +147,16 @@ says.
   and whether `/api/*` has Cloudflare rate limiting yet (CLAUDE.md says not
   yet; report it as still open, not as new).
 - Calls to GitHub, OSV.dev and Anthropic have timeouts and fail plainly.
+- Runaway costs: Cloudflare has no dollar cut-off, so ShipBrace's own limits
+  are the real cap. No retry loops (queue `max_retries` 0, no fetch retried in
+  a loop); the daily and per-installation limits count reviews when they
+  start; nothing large can be downloaded over and over by bots.
+
+### Records and monitoring
+- An audit trail: sign-ins, setting changes, review starts and deletions
+  leave a record of who and when. List what is recorded and what is not.
+- What would tell Murat about an attack or a fault: logged limit hits,
+  refused webhook signatures, reviewer failures, the uptime monitor.
 
 ### The dashboard
 - No review content (file names, excerpts, explanations) is rendered as raw
@@ -129,8 +170,17 @@ says.
 
 ### Packages
 - All of ShipBrace's own manifests pin exact versions and the lockfile is
-  committed. List any package with an install script. You cannot run
-  `npm audit`; say that the main session should run it.
+  committed (`*` for ShipBrace's own workspace packages is fine). List any
+  package with an install script. You cannot run `npm audit`; say that the
+  main session should run it.
+- Malicious packages: flag any dependency that is new, little-known, named
+  like a popular package with a typo, or runs an install script; flag
+  packages nothing imports (unused code is extra attack surface).
+
+### Unreviewed code
+- CI (`.github/workflows/ci.yml`) runs typecheck, lint, tests and build on
+  every push. Note whether `master` is protected (needs GitHub access, so the
+  main session checks it).
 
 ### Things code cannot show (list them for Murat)
 - Two-factor sign-in on GitHub, Cloudflare, the domain registrar, the
@@ -138,6 +188,8 @@ says.
 - Billing alerts on Cloudflare; Anthropic credits prepaid with auto-reload off.
 - That a D1 time-travel restore has actually been tried.
 - Uptime monitoring and where errors are logged.
+- The GitHub App's permissions on its settings page.
+- Branch protection on `master` in the GitHub repository settings.
 
 ## Report
 
