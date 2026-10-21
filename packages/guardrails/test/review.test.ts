@@ -423,3 +423,74 @@ test("echoing the request back is not answering with fixed text", () => {
   const doors = buildInventory(snap("server/routes.js", 'app.post("/echo", (req, res) => res.json(req.body));')).doors;
   assert.equal(doors[0]?.answersOnlyFixed, undefined);
 });
+
+test("a sign-in check at the top of the handler protects the route", () => {
+  const doors = buildInventory(snap("server/src/a.ts", [
+    'app.post("/api/notes", async (c) => {',
+    '  const user = c.get("user");',
+    '  if (!user) return c.json({ error: "Sign in first" }, 401);',
+    "  return c.json(await saveNote(user, await c.req.json()));",
+    "});",
+    'app.post("/erase", async (req, res, next) => {',
+    "  const loggedInUser = security.authenticatedUsers.get(req.cookies.token);",
+    "  if (!loggedInUser) { next(new Error('Blocked')); return; }",
+    "  res.json(await erase(loggedInUser));",
+    "});",
+    'app.post("/late", async (c) => {',
+    "  await deleteEverything();",
+    '  const user = c.get("user");',
+    "  if (!user) return c.text('no', 401);",
+    "});",
+    'app.post("/noexit", async (c) => {',
+    '  const user = c.get("user");',
+    "  if (!user) console.warn('anonymous');",
+    "  return c.json(await deleteEverything());",
+    "});",
+  ].join("\n"))).doors;
+  const guarded = (path: string) => (doors.find((d) => d.path === path)?.guards.length ?? 0) > 0;
+  assert.ok(guarded("/api/notes"));
+  assert.ok(guarded("/erase"));
+  assert.ok(!guarded("/late"), "a check after the work does not protect it");
+  assert.ok(!guarded("/noexit"), "a check that does not stop the request does not protect it");
+  const lookups = buildInventory(snap("server/src/b.ts", [
+    'app.get("/authors/:id", async (c) => {',
+    "  const author = await getAuthor(c.req.param(\"id\"));",
+    "  if (!author) return c.notFound();",
+    "  return c.json(author);",
+    "});",
+    'app.get("/users/:id", async (c) => {',
+    '  const user = await getUser(c.req.param("id"));',
+    "  if (!user) return c.notFound();",
+    "  return c.json(user);",
+    "});",
+  ].join("\n"))).doors;
+  assert.deepEqual(lookups.map((d) => d.guards), [[], []], "a record that exists is not a signed-in person");
+});
+
+test("a postgres.js transaction tag is as safe as sql", () => {
+  const paths = analyseTaint(buildInventory(snap("server/src/a.ts", [
+    'app.post("/move/:id", async (c) => {',
+    '  const id = c.req.param("id");',
+    "  await sql.begin(async (tx) => {",
+    "    await tx`UPDATE items SET moved = true WHERE id = ${id}`;",
+    "  });",
+    "});",
+  ].join("\n"))));
+  assert.deepEqual(paths.filter((p) => p.verdict === "exploitable"), []);
+});
+
+test("a query mentioned in documentation text is not a query", () => {
+  const inventory = buildInventory(snap("server/src/readme.ts", [
+    "export const readme = (name) => `# ${name}",
+    "",
+    "Use \\`\\` query\\`SELECT ... \\${value}\\` \\`\\` from server/src/mysql.ts.`;",
+  ].join("\n")));
+  assert.deepEqual(inventory.sinks.filter((s) => s.kind === "sql"), []);
+});
+
+test("a query that opens with a comment or EXPLAIN is still a query", () => {
+  for (const start of ["/* list */ SELECT", "-- list\nSELECT", "EXPLAIN SELECT"]) {
+    const inventory = buildInventory(snap("server/src/a.ts", `db.query(\`${start} * FROM t WHERE id = \${id}\`);`));
+    assert.equal(inventory.sinks.filter((s) => s.kind === "sql").length, 1, start);
+  }
+});

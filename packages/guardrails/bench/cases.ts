@@ -1069,6 +1069,60 @@ export const CASES: BenchCase[] = [
     ],
   },
 
+  {
+    id: "sql-transaction-tag",
+    tests: "postgres.js: inside a transaction the query tag is called tx, and it keeps values separate just like sql.",
+    files: [
+      file("server/src/index.ts", [
+        ...HEAD,
+        'app.post("/items/:id/move", async (c) => {',
+        '  const id = c.req.param("id");',
+        "  await sql.begin(async (tx) => {",
+        "    await tx`UPDATE items SET moved = true WHERE id = ${id}`; // [A]",
+        "  });",
+        "  return c.json({ ok: true });",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/items/:id/move",
+        parameter: "id",
+        sink: "sql",
+        real: false,
+        why: "The transaction's tag sends the id separately from the query, so it cannot change the query.",
+      },
+    ],
+  },
+
+  {
+    id: "sql-transaction-unsafe",
+    tests: "postgres.js: inside a transaction, tx.unsafe runs text as-is, with the id pasted in.",
+    files: [
+      file("server/src/index.ts", [
+        ...HEAD,
+        'app.post("/items/:id/move", async (c) => {',
+        '  const id = c.req.param("id");',
+        "  await sql.begin(async (tx) => {",
+        "    await tx.unsafe(`UPDATE items SET moved = true WHERE id = ${id}`); // [A]",
+        "  });",
+        "  return c.json({ ok: true });",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/items/:id/move",
+        parameter: "id",
+        sink: "sql",
+        real: true,
+        why: "unsafe() sends the text exactly as written, so the id can rewrite the query.",
+      },
+    ],
+  },
+
   // --- redirects -----------------------------------------------------------
   {
     id: "redirect-open",

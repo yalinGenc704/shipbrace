@@ -74,7 +74,7 @@ everywhere:
 # PostgreSQL 18 (Homebrew, not started at login). Databases: shipbrace, shipbrace_test.
 LC_ALL=en_US.UTF-8 /opt/homebrew/opt/postgresql@18/bin/pg_ctl -D /opt/homebrew/var/postgresql@18 -l /opt/homebrew/var/log/postgresql@18.log start
 
-# all tests (expect 232 pass). Without TEST_DATABASE_URL the 6 database tests
+# all tests (expect 236 pass). Without TEST_DATABASE_URL the 6 database tests
 # are skipped and say so; it must name a database ending in _test (it is wiped).
 # CI (.github/workflows/ci.yml) runs typecheck, lint, tests and build on every push.
 TEST_DATABASE_URL=postgres:///shipbrace_test npm test
@@ -138,8 +138,8 @@ the server with the AI step, start it with an extra `--env-file` that sets
 
 ## Current state and known gaps
 
-- **Benchmark (67 apps, 35 real problems, 33 safe decoys), 2026-10-20:** rules
-  alone prove 31; a perfect suggester proves 34; zero false alarms. Only
+- **Benchmark (69 apps, 36 real problems, 34 safe decoys), 2026-10-20:** rules
+  alone prove 32; a perfect suggester proves 35; zero false alarms. Only
   miss: a React component pasting a `body` prop as raw HTML, with nothing
   showing where the prop comes from (stays "worth a look").
 - **Stored attacks (2026-10-20).** A table column a visitor's unchecked
@@ -160,7 +160,19 @@ the server with the AI step, start it with an extra `--env-file` that sets
 - **Fixed-answer routes are not "unlocked" (2026-10-20,
   `Door.answersOnlyFixed`).** An inline handler with no middleware whose code
   only calls answer methods on its own parameters (`c.notFound()`,
-  `res.status(404).send("No")`) has nothing to protect. The starter kit is held to its
+  `res.status(404).send("No")`) has nothing to protect.
+- **Sign-in checked inside the handler (2026-10-20, `signInCheckedFirst`).**
+  A route counts as guarded when its inline handler's first real step reads
+  who is signed in (`c.get("user")`, `req.user`, `getServerSession(c)`,
+  `authenticatedUsers.get(token)`) and an `if (!x)` / `x == null` branch
+  returns or throws. Only declarations may come before it; a lookup fed by
+  route, query or body values (`getAuthor(id)`) is never a sign-in check.
+- **Transactions and documentation (2026-10-20).** A tag that is the
+  parameter of a function passed to `sql.begin`/`transaction`/`savepoint`/
+  `reserve` is parameterised like `sql` (`tx.unsafe(...)` is not). A
+  template or `+` counts as a query only when its text starts with a
+  statement keyword (after any leading SQL comments), so prose mentioning a
+  query is not one. The starter kit is held to its
   own review (`packages/scaffold/test/self-review.test.ts`): no warnings
   except the lockfile a fresh app gets on first install.
 - **"Checked" says what was checked** (`ActionItem.covers`). Error pages hand
@@ -198,8 +210,9 @@ the server with the AI step, start it with an extra `--env-file` that sets
   86 -> 18). DVNA: 5 of its 19 documented holes found automatically (SQL and
   command injection, insecure deserialisation, open redirect, missing headers).
   Templates added afterwards (DVNA reflected XSS now caught). Not detected yet: XXE, NoSQL injection,
-  CSRF, a session secret left at a default, and sign-in checks written inside
-  a handler (Juice Shop `dataErasure`, 2 remaining false alarms).
+  CSRF, a session secret left at a default. Sign-in checks written inside a
+  handler (Juice Shop `dataErasure`) are recognised since 2026-10-20, not
+  yet re-run on Juice Shop.
 - **Inputs recognised** (`inventory-ast.ts`): route params, query, body,
   headers, cookies, outbound responses, `req.file(s)` uploads, GitHub repository
   content (`getContent`/`getReadme`/`getBlob`/archives), and only the
@@ -275,8 +288,9 @@ the server with the AI step, start it with an extra `--env-file` that sets
   obvious placeholders (`looksMadeUp`: placeholder words in one case, six
   repeated or consecutive characters); measured on 1M random realistic keys,
   about 1 in 100,000 is wrongly skipped. Test fixtures that must look real
-  assemble their keys at runtime. One false lead remains: a README sample in
-  `scaffold/src/modules/base.ts` shows a SQL example (step 8).
+  assemble their keys at runtime. The README sample in
+  `scaffold/src/modules/base.ts` that mentions a SQL example is no longer read
+  as a query (2026-10-20).
 - **Live on Cloudflare since 2026-10-10** at https://app.shipbrace.com (chosen over a
   rented server). Workers Paid plan. A push: the
   Worker checks the signature and queues it; the queue job (no retries)
@@ -328,9 +342,7 @@ the server with the AI step, start it with an extra `--env-file` that sets
   here.** They are kept in Claude's private memory for this project and
   listed when Murat asks what is left to fix.
 - **The query check trusts tagged templates by name** (`SAFE_TAG`: `sql`, `db`,
-  `query`). postgres.js transactions are usually written `` tx`...` ``, which
-  gets a false "worth a look"; `history.ts` names its transaction `sql` to
-  avoid it. Users' apps would hit this (step 8).
+  `query`), plus transaction tags (see above, 2026-10-20).
 
 ## Claude Code setup for this project (2026-10-18)
 
@@ -434,9 +446,9 @@ item only once it can actually run ("no false pass"). In order:
    regex inventory and matcher removed.
 2. **The agreed gaps.** Done 2026-10-20: stored attacks; matching each
    sanitizer to the kinds of operation it protects; not flagging routes that
-   only return constants. Still to do: sign-in checks written inside a handler;
+   only return constants; sign-in checks written inside a handler;
    transactions written `` tx`...` ``; SQL-looking text in documentation
-   templates; XXE.
+   templates. Still to do: XXE.
 3. **New proven checks** (input traced to the problem, so they are risks):
    mass assignment (a request body saved whole, e.g. `User.create(req.body)`,
    so a visitor can set `role` or `owner_id`); unsafe decoding of input
@@ -481,9 +493,6 @@ App permission).
    Cloudflare account, or ShipBrace's.
 5. **Starting structure for new apps:** `packages/scaffold` exists and passes
    its own review, but nothing lets a user reach it yet.
-6. **More detection:** browser-side code, the XML upload attack (XXE), sign-in checks written
-   inside a handler (Juice Shop `dataErasure`), transactions written
-   `` tx`...` `` (see above), and SQL-looking text in documentation
-   templates.
+6. **More detection:** browser-side code, the XML upload attack (XXE).
 
 See `docs/architecture.md` for the reasoning behind these decisions.

@@ -133,6 +133,37 @@ function quasiText(template: Node): string {
 const SQL_STATEMENT =
   /\b(?:SELECT\b[\s\S]*?\bFROM|INSERT\s+INTO\b[\s\S]*?\bVALUES|UPDATE\b[\s\S]*?\bSET|DELETE\s+FROM)\b/i;
 
+/**
+ * `sql.begin(async (tx) => { await tx\`...${id}\` })`: postgres.js hands a
+ * transaction a tag that parameterises exactly like `sql`. Recognised when the
+ * tag is a parameter of a function passed to `begin`, `transaction`,
+ * `savepoint` or `reserve` on a query client.
+ */
+function isTransactionTag(tag: string, parents: Node[]): boolean {
+  if (!/^\w+$/.test(tag)) return false;
+  for (let i = 0; i < parents.length; i++) {
+    const fn = parents[i]!;
+    if (!/^(?:ArrowFunctionExpression|FunctionExpression)$/.test(fn.type)) continue;
+    const params = ((fn.params ?? []) as Node[]).map((p) => (p.type === "Identifier" ? String(p.name) : ""));
+    if (!params.includes(tag)) continue;
+    const call = parents[i + 1];
+    const callee = call?.type === "CallExpression" ? dottedName(call.callee) ?? "" : "";
+    const [owner, method] = [callee.split(".").slice(0, -1).join("."), callee.split(".").pop() ?? ""];
+    return /^(?:begin|transaction|savepoint|reserve)$/.test(method) && (SAFE_TAG.test(owner) || isTransactionTag(owner, parents.slice(i + 1)));
+  }
+  return false;
+}
+
+/**
+ * A query's text starts with its statement. Documentation that mentions one
+ * mid-paragraph -- a README template saying "use query`SELECT ... ${value}`
+ * from server/src/mysql.ts" -- is prose, not a query.
+ */
+const STATEMENT_START = /^\s*\(?\s*(?:SELECT|INSERT|UPDATE|DELETE|WITH|REPLACE|EXPLAIN|SET|BEGIN|MERGE|CALL)\b/i;
+/** Leading SQL comments (`/* ... *\/`, `-- ...`) before the statement itself. */
+const LEADING_COMMENTS = /^(?:\s*(?:\/\*[\s\S]*?\*\/|--[^\n]*(?:\n|$)))+/;
+const startsAQuery = (text: string): boolean => STATEMENT_START.test(text.replace(LEADING_COMMENTS, ""));
+
 /** Tags that parameterise their interpolations, making the template safe by construction. */
 const SAFE_TAG = /(?:^|\.)(?:sql|db|query)$/i;
 
@@ -555,6 +586,9 @@ function findDoors(parsed: ParsedFile): Door[] {
       }
     }
 
+    const inline = signInCheckedFirst(handler);
+    if (inline) guards.add(inline);
+
     const named = handler.type === "Identifier" || handler.type === "MemberExpression"
       ? dottedName(handler)?.split(".").pop()
       : undefined;
@@ -572,6 +606,102 @@ function findDoors(parsed: ParsedFile): Door[] {
       ...(middleware.length === 0 && answersOnlyFixed(handler) ? { answersOnlyFixed: true } : {}),
     };
   });
+}
+
+/** Unwraps `await x` to `x`. */
+const awaited = (node: Node | undefined): Node | undefined =>
+  node?.type === "AwaitExpression" ? (node.argument as Node | undefined) : node;
+
+/** Calls whose name says they establish who is signed in. Not `getUser(id)`: that looks a record up. */
+const SIGNED_IN_CALL =
+  /^(?:isAuthenticated|isLoggedIn|isSignedIn|isAuthorized|authenticate|getSession|getServerSession|getCurrentUser|currentUser|requireUser|getAuth|auth|verifyToken|verifyJwt)$/;
+/** Request inputs that pick a record; a lookup fed by one is not a sign-in check. */
+const PICKS_A_RECORD = /(?:^|\.)(?:params?|query|queries|body)(?:\.|$)|(?:^|\.)req\.(?:param|query|json|parseBody)$/;
+
+/**
+ * True when an expression asks who is signed in: a read of the signed-in
+ * user (`c.get("user")`, `req.user`), or a call whose name says it is a
+ * sign-in check, or a lookup in a table of signed-in people
+ * (`authenticatedUsers.get(token)`). A call fed by route, query or body
+ * values looks a record up instead (`getAuthor(id)`), so it never counts.
+ */
+function asksWhoIsSignedIn(expression: Node): boolean {
+  let asks = false;
+  let picksRecord = false;
+  walk(expression, (node) => {
+    const name = node.type === "CallExpression" ? dottedName(node.callee) ?? "" : dottedName(node) ?? "";
+    if (PICKS_A_RECORD.test(name)) picksRecord = true;
+    if (isIdentityRead(node)) asks = true;
+    else if (node.type === "CallExpression" && (SIGNED_IN_CALL.test(name.split(".").pop() ?? "") || /authenticated/i.test(name))) {
+      asks = true;
+    }
+  });
+  return asks && !picksRecord;
+}
+
+/** A branch that ends the request: `return ...`, `throw ...`, or a block ending in one. */
+function leaves(branch: Node | undefined): boolean {
+  if (!branch) return false;
+  if (branch.type === "ReturnStatement" || branch.type === "ThrowStatement") return true;
+  if (branch.type !== "BlockStatement") return false;
+  const last = ((branch.body ?? []) as Node[]).at(-1);
+  return last?.type === "ReturnStatement" || last?.type === "ThrowStatement";
+}
+
+/**
+ * A sign-in check written at the top of the handler itself:
+ *
+ *   const user = c.get("user");
+ *   if (!user) return c.json({ error: "Sign in" }, 401);
+ *
+ * Counted only when it is the handler's first real step -- before it, only
+ * declarations that read the request or ask who is signed in -- and the
+ * check leaves when nobody is. A check further down may come after the
+ * route has already done something, so it is not counted.
+ */
+function signInCheckedFirst(handler: Node): string | undefined {
+  if (!/^(?:ArrowFunctionExpression|FunctionExpression)$/.test(handler.type)) return undefined;
+  const body = handler.body as Node | undefined;
+  if (body?.type !== "BlockStatement") return undefined;
+
+  const identities = new Set<string>();
+  for (const statement of (body.body ?? []) as Node[]) {
+    if (statement.type === "VariableDeclaration") {
+      for (const declarator of (statement.declarations ?? []) as Node[]) {
+        const init = awaited(declarator.init as Node | undefined);
+        if (!init) continue;
+        if (asksWhoIsSignedIn(init)) {
+          for (const name of identifiersIn(declarator.id as Node)) identities.add(name);
+          continue;
+        }
+        // Anything else that calls out may already do work; stop looking.
+        let calls = false;
+        walk(init, (n) => { if (n.type === "CallExpression") calls = true; });
+        if (calls) return undefined;
+      }
+      continue;
+    }
+    if (statement.type !== "IfStatement" || !leaves(statement.consequent as Node)) return undefined;
+
+    const test = statement.test as Node;
+    const negated = test.type === "UnaryExpression" && test.operator === "!" ? (test.argument as Node) : undefined;
+    // `if (user == null)`, `if (user === undefined)`
+    const isNothing = (n: Node): boolean =>
+      n.type === "NullLiteral" || (n.type === "Literal" && n.value === null) ||
+      (n.type === "Identifier" && n.name === "undefined");
+    const compared = test.type === "BinaryExpression" && (test.operator === "==" || test.operator === "===")
+      ? [test.left as Node, test.right as Node]
+      : [];
+    const empty = compared.some(isNothing) ? compared.find((n) => !isNothing(n)) : undefined;
+    const subject = negated ?? empty;
+    if (!subject) return undefined;
+
+    const root = identifiersIn(subject)[0];
+    if (root && identities.has(root)) return root;
+    if (asksWhoIsSignedIn(subject)) return dottedName(subject.type === "CallExpression" ? subject.callee : subject) ?? "signed-in check";
+    return undefined;
+  }
+  return undefined;
 }
 
 /** Ways a handler can answer without reading or doing anything else. */
@@ -1199,11 +1329,12 @@ function sinkFor(
   if (node.type === "TemplateLiteral") {
     const expressions = (node.expressions ?? []) as Node[];
     if (expressions.length === 0) return undefined;
-    if (!SQL_STATEMENT.test(quasiText(node))) return undefined;
+    if (!SQL_STATEMENT.test(quasiText(node)) || !startsAQuery(quasiText(node))) return undefined;
 
     const parent = parents[0];
     const tagged = parent?.type === "TaggedTemplateExpression" && parent.quasi === node;
-    const safe = tagged && SAFE_TAG.test(dottedName(parent.tag) ?? "");
+    const tag = tagged ? dottedName(parent.tag) ?? "" : "";
+    const safe = tagged && (SAFE_TAG.test(tag) || isTransactionTag(tag, parents));
 
     return make("sql", expressions.flatMap((e) => identifiersIn(e)), safe);
   }
@@ -1228,7 +1359,7 @@ function sinkFor(
 
     const fixed = parts.filter((p) => isStringLiteral(p)).map((p) => String(p.value)).join("");
     const moving = parts.filter((p) => !isStringLiteral(p));
-    if (moving.length === 0 || !SQL_STATEMENT.test(fixed)) return undefined;
+    if (moving.length === 0 || !SQL_STATEMENT.test(fixed) || !startsAQuery(fixed)) return undefined;
     return make("sql", moving.flatMap((p) => identifiersIn(p)));
   }
 
