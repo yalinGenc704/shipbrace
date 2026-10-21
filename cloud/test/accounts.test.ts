@@ -318,7 +318,12 @@ test("links are read the way people paste them", () => {
 test("an encrypted token cannot be altered or opened with another key", async () => {
   const sealed = await encrypt(KEY, "secret-token");
   assert.equal(await decrypt(KEY, sealed), "secret-token");
-  const tampered = sealed.slice(0, -2) + (sealed.endsWith("A") ? "B" : "A") + sealed.slice(-1);
+  // Change the second-to-last character to a different one. (It used to pick
+  // the replacement by looking at the last character, so about one run in 64
+  // "changed" an A into an A and the untouched token rightly opened.)
+  const at = sealed.length - 2;
+  const tampered = sealed.slice(0, at) + (sealed[at] === "A" ? "B" : "A") + sealed.slice(at + 1);
+  assert.notEqual(tampered, sealed);
   await assert.rejects(decrypt(KEY, tampered));
   const otherKey = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
   await assert.rejects(decrypt(otherKey, sealed));

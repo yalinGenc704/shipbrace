@@ -38,12 +38,14 @@ test("the AI step is answered from outside, and waiting for it is not counted as
     name: "slow-model",
     propose: async (context) => {
       asked.push(context);
-      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      await new Promise((resolve) => setTimeout(resolve, 5_000));
       return [];
     },
   };
-  // A one-second work limit, and an AI that takes a second and a half.
-  const review = await createSandbox({ ...DEFAULT_SANDBOX_LIMITS, workMs: 1_000 }, undefined, quiet)(VULNERABLE, { proposer });
+  // A four-second work limit, and an AI that takes five. The limit leaves
+  // room for the review's own work on a busy machine: at one second, starting
+  // the sealed process and running every check sometimes used it all up.
+  const review = await createSandbox({ ...DEFAULT_SANDBOX_LIMITS, workMs: 4_000 }, undefined, quiet)(VULNERABLE, { proposer });
 
   assert.equal(asked.length, 1);
   assert.equal(review.stats.model.status, "used");
