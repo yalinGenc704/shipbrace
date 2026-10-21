@@ -5,6 +5,7 @@ import type {
   Inventory,
   Sanitizer,
   Sink,
+  SinkKind,
   SourceKind,
   StoreAccess,
   TaintSource,
@@ -178,13 +179,24 @@ function checkOnArrival(source: TaintSource, scope: Scope): Sanitizer | undefine
   );
 }
 
+/** True when this check makes a value safe for this kind of operation. */
+export function guardsAgainst(sanitizer: Sanitizer, kind: SinkKind): boolean {
+  return !sanitizer.protects || sanitizer.protects.includes(kind);
+}
+
+/** The inventory as seen by one kind of operation: only checks that protect it. */
+export function checksFor(inventory: Inventory, kind: SinkKind): Inventory {
+  return { ...inventory, sanitizers: inventory.sanitizers.filter((s) => guardsAgainst(s, kind)) };
+}
+
 export function analyseTaint(inventory: Inventory): TaintPath[] {
   const paths: TaintPath[] = [];
 
-  for (const scope of scopesFor(inventory)) {
-    for (const sink of scope.sinks) {
+  for (const whole of scopesFor(inventory)) {
+    for (const sink of whole.sinks) {
       // Safe by construction -- a tagged sql template parameterises everything.
       if (sink.inherentlySafe) continue;
+      const scope = { ...whole, sanitizers: whole.sanitizers.filter((s) => guardsAgainst(s, sink.kind)) };
 
       const sinkAt = positionOf(sink.id);
 

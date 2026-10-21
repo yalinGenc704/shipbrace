@@ -218,7 +218,7 @@ test("an unguarded write route is an access-control risk; public ones are not", 
     snap(
       "server/src/a.ts",
       [
-        'app.post("/api/admin/delete-everything", (c) => c.json({}));',
+        'app.post("/api/admin/delete-everything", async (c) => c.json(await deleteEverything()));',
         'app.get("/api/health", (c) => c.json({ ok: true }));',
         'app.post("/api/auth/login", (c) => c.json({}));',
       ].join("\n"),
@@ -366,4 +366,60 @@ test("webhooks and sign-in callbacks are public by design, not open doors", asyn
     .risks.map((r) => r.what);
   assert.equal(open.length, 1);
   assert.match(open[0]!, /\/api\/orders/, "an ordinary route without sign-in is still reported");
+});
+
+test("a route that only answers with fixed text is not reported as unlocked", async () => {
+  const result = await runSecurityReview(
+    snap("server/src/a.ts", [
+      'app.get("/gone", (c) => c.notFound());',
+      'app.get("/teapot", (req, res) => res.status(418).send("No"));',
+      'app.get("/echo/:id", (c) => c.text(c.req.param("id")));',
+      'app.get("/stats", (c) => c.json(stats));',
+    ].join("\n")),
+  );
+  const open = result.modules
+    .flatMap((m) => m.items)
+    .find((i) => i.id === "access-control/unguarded-routes")!
+    .risks.map((r) => r.what);
+  assert.ok(!open.some((w) => w.includes("/gone") || w.includes("/teapot")), open.join("\n"));
+  assert.ok(open.some((w) => w.includes("/echo/:id")) && open.some((w) => w.includes("/stats")), open.join("\n"));
+});
+
+test("a check for one kind of danger does not clear another", () => {
+  const ping = (step: string) =>
+    analyseTaint(buildInventory(snap("server/src/a.ts", [
+      'import { quote } from "shell-quote";',
+      'app.get("/ping", (c) => {',
+      '  const host = c.req.query("host");',
+      `  const safe = ${step}(host);`,
+      "  execSync(`ping ${safe}`);",
+      "});",
+    ].join("\n")))).filter((p) => p.sink.kind === "shell")[0]?.verdict;
+  assert.equal(ping("escapeHtml"), "exploitable");
+  assert.equal(ping("quote"), "sanitized");
+  assert.equal(ping("sanitizeInput"), "sanitized", "a name that does not say which danger is credited");
+});
+
+test("a quote helper is trusted only when it says what it is for", () => {
+  const verdict = (lines: string[], kind: string) =>
+    analyseTaint(buildInventory(snap("server/src/a.ts", lines.join("\n")))).find((p) => p.sink.kind === kind)?.verdict;
+  const route = (prelude: string[], step: string, use: string) => [
+    ...prelude,
+    'app.get("/x", (c) => {',
+    '  const v = c.req.query("v");',
+    `  const safe = ${step}(v);`,
+    `  ${use}`,
+    "});",
+  ];
+  const query = "db.query(`SELECT * FROM t WHERE name = '${safe}'`);";
+  assert.equal(verdict(route([], "escapeSqlQuotes", query), "sql"), "sanitized");
+  assert.equal(verdict(route([], "escapeQuotes", query), "sql"), "sanitized");
+  const ping = "execSync(`ping ${safe}`);";
+  assert.equal(verdict(route(['import { quote } from "shell-quote";'], "quote", ping), "shell"), "sanitized");
+  assert.equal(verdict(route(["const quote = (s) => `\"${s}\"`;"], "quote", ping), "shell"), "exploitable");
+});
+
+test("echoing the request back is not answering with fixed text", () => {
+  const doors = buildInventory(snap("server/routes.js", 'app.post("/echo", (req, res) => res.json(req.body));')).doors;
+  assert.equal(doors[0]?.answersOnlyFixed, undefined);
 });

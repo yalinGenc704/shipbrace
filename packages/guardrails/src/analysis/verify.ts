@@ -1,4 +1,5 @@
 import type { CodeLocation } from "../types.ts";
+import { checksFor } from "./oracle.ts";
 import type {
   Door,
   FunctionDef,
@@ -468,9 +469,12 @@ function eachDoor(
     .sort((a, b) => VERDICT_STRENGTH[a.verdict] - VERDICT_STRENGTH[b.verdict])[0];
 }
 
-export function verifyClaim(claim: Claim, inventory: Inventory): VerifiedClaim {
-  const several = eachDoor(claim.door, inventory, (door) => verifyClaim({ ...claim, door }, inventory));
+export function verifyClaim(claim: Claim, whole: Inventory): VerifiedClaim {
+  const several = eachDoor(claim.door, whole, (door) => verifyClaim({ ...claim, door }, whole));
   if (several) return several;
+
+  // Only checks that protect this kind of operation count as checks here.
+  const inventory = checksFor(whole, claim.sink);
 
   const door = claim.door ? doorsNamed(claim.door, inventory)[0] : undefined;
 

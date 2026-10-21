@@ -74,7 +74,7 @@ everywhere:
 # PostgreSQL 18 (Homebrew, not started at login). Databases: shipbrace, shipbrace_test.
 LC_ALL=en_US.UTF-8 /opt/homebrew/opt/postgresql@18/bin/pg_ctl -D /opt/homebrew/var/postgresql@18 -l /opt/homebrew/var/log/postgresql@18.log start
 
-# all tests (expect 228 pass). Without TEST_DATABASE_URL the 6 database tests
+# all tests (expect 232 pass). Without TEST_DATABASE_URL the 6 database tests
 # are skipped and say so; it must name a database ending in _test (it is wiped).
 # CI (.github/workflows/ci.yml) runs typecheck, lint, tests and build on every push.
 TEST_DATABASE_URL=postgres:///shipbrace_test npm test
@@ -138,8 +138,8 @@ the server with the AI step, start it with an extra `--env-file` that sets
 
 ## Current state and known gaps
 
-- **Benchmark (64 apps, 33 real problems, 32 safe decoys), 2026-10-20:** rules
-  alone prove 29; a perfect suggester proves 32; zero false alarms. Only
+- **Benchmark (67 apps, 35 real problems, 33 safe decoys), 2026-10-20:** rules
+  alone prove 31; a perfect suggester proves 34; zero false alarms. Only
   miss: a React component pasting a `body` prop as raw HTML, with nothing
   showing where the prop comes from (stays "worth a look").
 - **Stored attacks (2026-10-20).** A table column a visitor's unchecked
@@ -149,7 +149,18 @@ the server with the AI step, start it with an extra `--env-file` that sets
   everything it returns that could be text is visitor-written (ids and
   timestamps aside); a read mixing in app-written columns stays silent,
   because the result is followed as one value. Stored data is left out of
-  ownership claims. The starter kit is held to its
+  ownership claims.
+- **Checks count only against what they protect (2026-10-20,
+  `Sanitizer.protects`, `checksFor`).** Read from the name: HTML escaping and
+  DOMPurify protect pages; SQL escaping queries; `shell`-named steps and
+  shell-quote's `quote` (only when imported from it) commands; `basename`,
+  `normalize`, `resolve` file paths; `escapeRegExp` nothing. Numbers, schema
+  checks, allowlists and names that do not say (`sanitizeInput`) count
+  everywhere. Applied in `analyseTaint` and `verifyClaim`.
+- **Fixed-answer routes are not "unlocked" (2026-10-20,
+  `Door.answersOnlyFixed`).** An inline handler with no middleware whose code
+  only calls answer methods on its own parameters (`c.notFound()`,
+  `res.status(404).send("No")`) has nothing to protect. The starter kit is held to its
   own review (`packages/scaffold/test/self-review.test.ts`): no warnings
   except the lockfile a fresh app gets on first install.
 - **"Checked" says what was checked** (`ActionItem.covers`). Error pages hand
@@ -421,9 +432,9 @@ item only once it can actually run ("no false pass"). In order:
 
 1. **Groundwork (done 2026-10-20).** `conventions-reviewer` added; legacy
    regex inventory and matcher removed.
-2. **The agreed gaps.** Stored attacks (done 2026-10-20); matching
-   each sanitizer to the kinds of operation it protects; not flagging routes
-   that only return constants; sign-in checks written inside a handler;
+2. **The agreed gaps.** Done 2026-10-20: stored attacks; matching each
+   sanitizer to the kinds of operation it protects; not flagging routes that
+   only return constants. Still to do: sign-in checks written inside a handler;
    transactions written `` tx`...` ``; SQL-looking text in documentation
    templates; XXE.
 3. **New proven checks** (input traced to the problem, so they are risks):
@@ -473,7 +484,6 @@ App permission).
 6. **More detection:** browser-side code, the XML upload attack (XXE), sign-in checks written
    inside a handler (Juice Shop `dataErasure`), transactions written
    `` tx`...` `` (see above), and SQL-looking text in documentation
-   templates; routes whose handler returns only constants (nothing to
-   protect).
+   templates.
 
 See `docs/architecture.md` for the reasoning behind these decisions.

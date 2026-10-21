@@ -988,6 +988,87 @@ export const CASES: BenchCase[] = [
     ],
   },
 
+  // --- a check for the wrong kind of danger ---------------------------------
+  {
+    id: "escape-html-before-shell",
+    tests: "A host name is HTML-escaped, then pasted into a shell command; HTML escaping leaves `;` alone.",
+    files: [
+      file("server/src/index.ts", [
+        'import { execSync } from "node:child_process";',
+        'import { escapeHtml } from "./util";',
+        ...HEAD,
+        'app.get("/ping", (c) => {',
+        '  const host = c.req.query("host");',
+        "  const safe = escapeHtml(host);",
+        "  return c.text(execSync(`ping -c 1 ${safe}`).toString()); // [A]",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/ping",
+        parameter: "host",
+        sink: "shell",
+        real: true,
+        why: "Escaping for a web page does nothing to `; rm -rf /`, so the visitor can still run any command.",
+      },
+    ],
+  },
+
+  {
+    id: "escape-shell-before-shell",
+    tests: "The same command, with the host quoted for the shell first.",
+    files: [
+      file("server/src/index.ts", [
+        'import { execSync } from "node:child_process";',
+        'import { quote } from "shell-quote";',
+        ...HEAD,
+        'app.get("/ping", (c) => {',
+        '  const host = c.req.query("host");',
+        "  const safe = quote([host]);",
+        "  return c.text(execSync(`ping -c 1 ${safe}`).toString()); // [A]",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/ping",
+        parameter: "host",
+        sink: "shell",
+        real: false,
+        why: "Quoting for the shell makes the whole value one harmless argument.",
+      },
+    ],
+  },
+
+  {
+    id: "escape-html-before-redirect",
+    tests: "A next-page address is HTML-escaped and then followed; escaping does not stop a link to another site.",
+    files: [
+      file("server/src/index.ts", [
+        'import { escapeHtml } from "./util";',
+        ...HEAD,
+        'app.get("/after-login", (c) => {',
+        '  const next = c.req.query("next");',
+        "  const clean = escapeHtml(next);",
+        "  return c.redirect(clean); // [A]",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/after-login",
+        parameter: "next",
+        sink: "redirect",
+        real: true,
+        why: "https://evil.example contains nothing HTML escaping changes, so visitors can still be sent anywhere.",
+      },
+    ],
+  },
+
   // --- redirects -----------------------------------------------------------
   {
     id: "redirect-open",

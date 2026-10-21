@@ -845,7 +845,7 @@ export function buildReview(input: ReviewInput): SecurityReview {
   // taint analysis cannot express -- there is no dangerous sink, the problem is
   // that the door has no lock at all.
   for (const door of input.inventory.doors) {
-    if (door.guards.length > 0 || isPublicByDesign(door.path)) continue;
+    if (door.guards.length > 0 || isPublicByDesign(door.path) || door.answersOnlyFixed) continue;
 
     attach("access-control/unguarded-routes", {
       id: riskId("access-control/unguarded", door.location),

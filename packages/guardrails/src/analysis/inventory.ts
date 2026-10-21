@@ -72,6 +72,12 @@ export interface Door {
    */
   handlerRef?: string;
   handlerAt?: { path: string; range: [number, number] };
+  /**
+   * True when the handler, written inline, only ever answers with fixed
+   * text -- `(c) => c.notFound()`, `(req, res) => res.status(404).send("No")`.
+   * It reads nothing and does nothing, so there is nothing behind it to lock.
+   */
+  answersOnlyFixed?: boolean;
 }
 
 export interface TaintSource {
@@ -104,6 +110,12 @@ export interface Sink {
 export interface Sanitizer {
   id: string;
   kind: SanitizerKind;
+  /**
+   * The kinds of operation this check makes safe, when its name says so:
+   * `escapeHtml` protects a page, not a query or a command. Absent means the
+   * name does not say, and it is credited everywhere (errs to silence).
+   */
+  protects?: SinkKind[];
   /** Identifiers this sanitizer produces or validates. */
   guards: string[];
   location: CodeLocation;

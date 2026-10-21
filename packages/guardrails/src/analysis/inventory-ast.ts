@@ -567,8 +567,50 @@ function findDoors(parsed: ParsedFile): Door[] {
       guards: [...guards],
       bodyRange: [handler.start, handler.end],
       ...(named ? { handlerRef: named } : {}),
+      // Steps named before the handler (an upload, a body parser) do work of
+      // their own, so such a route is never treated as answering only.
+      ...(middleware.length === 0 && answersOnlyFixed(handler) ? { answersOnlyFixed: true } : {}),
     };
   });
+}
+
+/** Ways a handler can answer without reading or doing anything else. */
+const ANSWER = /^(?:json|text|html|body|notFound|status|send|sendStatus|end|type)$/;
+
+/**
+ * True for an inline handler whose only uses of its own parameters are
+ * called answer methods (`c.json`, `res.status(...).send`) and whose code names
+ * nothing else -- no variables, no other calls, no `c.req`, no `next()`.
+ * Anything it cannot read that plainly is false, so the route is still
+ * reported.
+ */
+function answersOnlyFixed(handler: Node): boolean {
+  if (!/^(?:ArrowFunctionExpression|FunctionExpression)$/.test(handler.type)) return false;
+  const params = ((handler.params ?? []) as Node[]).map((p) => (p.type === "Identifier" ? String(p.name) : ""));
+  if (params.some((p) => p === "")) return false;
+  const body = handler.body as Node | undefined;
+  if (!body) return false;
+
+  let fixed = true;
+  walk(body, (node, parents) => {
+    if (!fixed) return;
+    const parent = parents[0];
+    if (/^(?:MemberExpression|StaticMemberExpression|ComputedMemberExpression)$/.test(node.type)) {
+      // Only called answer methods: `c.json(...)`, not a read like `req.body`.
+      const property = node.property as Node | undefined;
+      const called = parent?.type === "CallExpression" && parent.callee === node;
+      if (node.computed || !called || property?.type !== "Identifier" || !ANSWER.test(String(property.name))) fixed = false;
+      return;
+    }
+    if (node.type !== "Identifier") return;
+    // A property name or object key is not a reference to anything.
+    if (parent && parent.type.endsWith("MemberExpression") && parent.property === node) return;
+    if (parent && (parent.type === "Property" || parent.type === "ObjectProperty") && parent.key === node && !parent.computed) return;
+    // A parameter may only be the thing an answer method is called on.
+    const isObjectOfMember = parent && parent.type.endsWith("MemberExpression") && parent.object === node;
+    if (!params.includes(String(node.name)) || !isObjectOfMember) fixed = false;
+  });
+  return fixed;
 }
 
 function collect(
@@ -627,9 +669,11 @@ function collect(
 
         const kind = sanitizerKindOf(init, parsed);
         if (kind) {
+          const protects = protectsOf(init);
           into.sanitizers.push({
             id: `${parsed.path}:san:${node.start}`,
             kind,
+            ...(protects ? { protects } : {}),
             guards: [String(id.name ?? ""), ...identifiersIn(init)],
             location: locationOf(parsed, node),
             ...doorId,
@@ -657,9 +701,11 @@ function collect(
         });
         const kind = sanitizerKindOf(right, parsed);
         if (kind) {
+          const protects = protectsOf(right);
           into.sanitizers.push({
             id: `${parsed.path}:san:${node.start}`,
             kind,
+            ...(protects ? { protects } : {}),
             guards: [target, ...identifiersIn(right)],
             location: locationOf(parsed, node),
             ...doorId,
@@ -868,6 +914,59 @@ function schemaAcceptsAnyText(parsed: ParsedFile, name: string): boolean {
   return kinds.length > 0 && kinds.every((k) => FREE_TEXT.has(k));
 }
 
+/**
+ * What an escaping or path step protects, read from its name. Each only makes
+ * a value safe for one kind of place: HTML escaping leaves `; rm -rf` and
+ * `../` untouched, and a shell quote does nothing for a page. Names that do
+ * not say which (`sanitize`, `escapeInput`) are credited everywhere.
+ */
+function protectsOf(init: Node): SinkKind[] | undefined {
+  const call = init.type === "AwaitExpression" ? (init.argument as Node) : init;
+  if (call?.type !== "CallExpression") return undefined;
+  const name = dottedName(call.callee) ?? "";
+  // Numbers and schema checks make a value safe everywhere.
+  if (/^(?:Number|parseInt|parseFloat)$/.test(name) || /\.(?:safeParse|parse)$/.test(name)) return undefined;
+  return protectsFor(name);
+}
+
+function protectsFor(name: string): SinkKind[] | undefined {
+  const last = name.split(".").pop() ?? "";
+  if (/^(?:escapeRegExp|escapeRegex|escapeStringRegexp)$/i.test(last)) return [];
+  if (/sql|^escapeLiteral$|^escapeIdentifier$|^escapeId$/i.test(last) || /^(?:mysql|connection|pool|conn|db|SqlString)\.escape$/.test(name)) {
+    return ["sql"];
+  }
+  // Only names that say "shell", and shell-quote's own `quote`; `escapeQuotes`
+  // could be for anything, so it stays unlabelled.
+  if (/shell/i.test(last) || last === "quote") return ["shell"];
+  if (/filename|filenamify/i.test(last) || last === "basename") return ["filesystem"];
+  if (/^(?:normalize|resolve)$/.test(last)) return ["filesystem"];
+  if (
+    /html|xss/i.test(last) || /^(?:DOMPurify|purify)\.sanitize$/.test(name) ||
+    /^(?:_|lodash|validator|he|entities)\.(?:escape|encode)$/.test(name)
+  ) {
+    return ["html"];
+  }
+  return undefined;
+}
+
+/** True when `local` is bound by an import or require of `module` in this file. */
+function importedFrom(parsed: ParsedFile, local: string, module: string): boolean {
+  let found = false;
+  walk(parsed.program, (node) => {
+    if (found) return;
+    if (node.type === "ImportDeclaration" && (node.source as Node | undefined)?.value === module) {
+      found = ((node.specifiers ?? []) as Node[]).some((s) => (s.local as Node | undefined)?.name === local);
+    }
+    if (node.type === "VariableDeclarator") {
+      const init = node.init as Node | undefined;
+      const requires = init?.type === "CallExpression" && dottedName(init.callee) === "require" &&
+        ((init.arguments ?? []) as Node[])[0]?.value === module;
+      if (requires) found = identifiersIn(node.id as Node).includes(local);
+    }
+  });
+  return found;
+}
+
 function sanitizerKindOf(init: Node, parsed: ParsedFile): Sanitizer["kind"] | undefined {
   if (init.type !== "CallExpression" && init.type !== "AwaitExpression") return undefined;
 
@@ -883,6 +982,11 @@ function sanitizerKindOf(init: Node, parsed: ParsedFile): Sanitizer["kind"] | un
   }
   if (/(?:^|\.)(?:normalize|resolve|basename)$/.test(name)) return "path-normalization";
   if (/(?:^|\.)(?:escape\w*|sanitize\w*)$/i.test(name)) return "escaping";
+  // Shell quoting, safe for a command only (see protectsFor). A bare `quote`
+  // counts only when it comes from shell-quote: a home-made one that wraps a
+  // value in double quotes does not stop `$(...)`.
+  if (/(?:^|\.)(?:shellQuote|shell[Ee]scape\w*|escapeShell\w*)$/.test(name)) return "escaping";
+  if (/(?:^|\.)quote$/.test(name) && importedFrom(parsed, name.split(".")[0]!, "shell-quote")) return "escaping";
   return undefined;
 }
 
