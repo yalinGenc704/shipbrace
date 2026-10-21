@@ -379,6 +379,34 @@ const webhookSignatures: ProjectCheck = {
   },
 };
 
+// --- AI features: only judged when a known AI library is used -----------------
+
+const AI_LIBRARY = /^(?:@anthropic-ai\/sdk|openai|ai|@ai-sdk\/[\w-]+|@google\/generative-ai|@google\/genai|langchain|@langchain\/[\w-]+)$/;
+
+/**
+ * The prompt-to-action rule recognises a handful of AI libraries. A project
+ * that uses none of them has nothing it can judge, so the item goes back to
+ * the user rather than passing.
+ */
+const aiLibraries: ProjectCheck = {
+  id: "rules:prompt-to-action",
+  itemId: "injection/ai-instructions",
+
+  run(snapshot) {
+    const uses = [...snapshot.manifests.values()].some((m) =>
+      Object.keys({ ...(m.dependencies as object | undefined), ...(m.devDependencies as object | undefined) })
+        .some((name) => AI_LIBRARY.test(name))
+    );
+    return uses
+      ? { status: "pass" }
+      : {
+        status: "not-applicable",
+        reason:
+          "No AI library this check recognises (Anthropic, OpenAI, Gemini, Vercel AI SDK, LangChain) is listed in package.json. If the app sends visitors' text to an AI model, confirm the model's answer is checked before it is used to do anything.",
+      };
+  },
+};
+
 // --- A03: a lockfile must exist ----------------------------------------------
 
 const lockfilePresent: ProjectCheck = {
@@ -797,6 +825,7 @@ export const projectChecks: ProjectCheck[] = [
   massAssignmentTables,
   webhookSignatures,
   ...fileChecks,
+  aiLibraries,
   passwordStorage,
   sessionExpiry,
   rateLimiting,

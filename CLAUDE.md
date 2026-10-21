@@ -74,7 +74,7 @@ everywhere:
 # PostgreSQL 18 (Homebrew, not started at login). Databases: shipbrace, shipbrace_test.
 LC_ALL=en_US.UTF-8 /opt/homebrew/opt/postgresql@18/bin/pg_ctl -D /opt/homebrew/var/postgresql@18 -l /opt/homebrew/var/log/postgresql@18.log start
 
-# all tests (expect 257 pass). Without TEST_DATABASE_URL the 6 database tests
+# all tests (expect 264 pass). Without TEST_DATABASE_URL the 6 database tests
 # are skipped and say so; it must name a database ending in _test (it is wiped).
 # CI (.github/workflows/ci.yml) runs typecheck, lint, tests and build on every push.
 TEST_DATABASE_URL=postgres:///shipbrace_test npm test
@@ -226,7 +226,18 @@ the server with the AI step, start it with an extra `--env-file` that sets
   `auth/cookie-readable-by-scripts`: `res.cookie`/`reply.setCookie`/Hono
   `setCookie` of a login cookie without `httpOnly` (not csrf/xsrf cookies,
   clearing on sign-out, spread options, SvelteKit or Koa). Missing `Secure`
-  is not reported. The starter kit is held to its
+  is not reported.
+- **Two lead-only rules (2026-10-20, `rules/leads.ts`, in
+  `UNPROVEN_RULES`).** `ai/prompt-to-action` (item
+  `injection/ai-instructions`): within one function, visitor input is read,
+  an Anthropic/OpenAI/Gemini/Vercel AI SDK/LangChain model is called, and its
+  answer goes to a query, command, `fetch`, delete, file write, redirect or
+  email, or the model is given tools; showing or saving the answer is not
+  flagged; with no known AI library in package.json the item is handed back.
+  `design/unbounded-list` (item `design/unbounded-lists`): a route sends back
+  a model read with no filter or a plain-text SQL `SELECT` with no
+  WHERE/LIMIT; admin-guarded routes are skipped. Both items' "checked" text
+  names exactly what was covered. The starter kit is held to its
   own review (`packages/scaffold/test/self-review.test.ts`): no warnings
   except the lockfile a fresh app gets on first install.
 - **"Checked" says what was checked** (`ActionItem.covers`). Error pages hand
@@ -300,7 +311,7 @@ the server with the AI step, start it with an extra `--env-file` that sets
   across files. It does not follow method calls (`obj.fn(x)`), and a helper
   name defined twice, unknown code, or destructured parameters make the
   claim `undecidable` (never `no-path`).
-- 16 of 47 checklist items have no detector and are left to the user (counted 2026-10-20). The
+- 16 of 49 checklist items have no detector and are left to the user (counted 2026-10-20). The
   checklist follows OWASP Top 10:2025; the four items added for its new
   categories (A03 supply chain, A10 exceptional conditions) have no detector yet.
 - **GitHub App works end to end (first live run 2026-10-01):** App ID 5157570
@@ -490,8 +501,9 @@ per-installation switches (2026-10-10), the name ShipBrace, a public
 repository with CI and a README screenshot, a dead-code cleanup, and the
 Claude Code setup above (2026-10-18).
 
-**Recommended next (agreed 2026-10-18, widened 2026-10-20; plan shown to
-Murat, waiting for the go-ahead): the smarter checker**, roadmap item 6 below.
+**The smarter checker (agreed 2026-10-18, widened and built 2026-10-20),**
+roadmap item 6 below. Steps 1-5 are committed; not yet pushed or deployed,
+and not yet tried on the practice apps.
 Every new check gets benchmark cases (a real problem and a safe look-alike),
 keeps zero false alarms, is tried on the practice apps, and fills a checklist
 item only once it can actually run ("no false pass"). In order:
@@ -518,7 +530,7 @@ item only once it can actually run ("no false pass"). In order:
    limit; packages nothing imports, names one typo away from a popular
    package (fixed list in the code, no network), and packages with install
    scripts (from the lockfile).
-5. **Leads only ("worth a look", never risks):** AI features where visitor
+5. **Leads only ("worth a look", never risks; done 2026-10-20):** AI features where visitor
    input reaches a model prompt and the model's answer reaches a database,
    command or tool (prompt injection); routes that send whole tables back
    without a limit.

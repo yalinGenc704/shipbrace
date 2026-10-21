@@ -1,9 +1,10 @@
+import { leadRules } from "./rules/leads.ts";
 import { authRules } from "./rules/auth.ts";
 import { injectionRules } from "./rules/injection.ts";
 import { secretsRules } from "./rules/secrets.ts";
 import type { Finding, RepoSnapshot, Rule, Severity } from "./types.ts";
 
-export const allRules: Rule[] = [...secretsRules, ...injectionRules, ...authRules];
+export const allRules: Rule[] = [...secretsRules, ...injectionRules, ...authRules, ...leadRules];
 
 const SEVERITY_ORDER: Record<Severity, number> = {
   critical: 0,

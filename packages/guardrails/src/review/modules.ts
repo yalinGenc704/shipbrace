@@ -511,6 +511,13 @@ const MODULES: ModuleShape[] = [
         detector: "taint:html",
       },
       {
+        id: "injection/ai-instructions",
+        covers:
+          "within each route function, no visitor's text goes to an Anthropic, OpenAI, Gemini, Vercel AI SDK or LangChain call whose answer then runs a query, command, request or email, or that is given tools; model calls in helper functions and other AI libraries were not followed",
+        title: "A visitor's text cannot steer what an AI feature does",
+        detector: "rules:prompt-to-action",
+      },
+      {
         id: "injection/xml-entities",
         covers:
           "no visitor input was traced into libxmljs with outside references switched on; other XML tools and options set elsewhere were not checked",
@@ -541,6 +548,13 @@ const MODULES: ModuleShape[] = [
         question:
           "Anything that costs you money, sends a message, or checks a password should refuse to run thousands of times a minute from one source. Confirm which of your actions have a limit.",
         detector: "server:rate-limiting-present",
+      },
+      {
+        id: "design/unbounded-lists",
+        covers:
+          "no Express or Hono route sends back every row from Mongoose, Sequelize, Prisma or plain-text SQL with no filter or limit; Drizzle, Next.js route handlers and SQL built with values were not checked",
+        title: "Lists sent to visitors have a maximum size",
+        detector: "rules:unbounded-list",
       },
       {
         id: "design/upload-limits",
@@ -816,6 +830,8 @@ const ITEM_FOR_RULE: Record<string, string> = {
   "injection/shell-string-building": "injection/system-commands",
   "injection/unescaped-html": "injection/page-content",
   "integrity/unsafe-decoding": "integrity/unsafe-decoding",
+  "ai/prompt-to-action": "injection/ai-instructions",
+  "design/unbounded-list": "design/unbounded-lists",
   "auth/permissive-cors": "config/cors",
   "auth/token-in-localstorage": "auth/session-storage",
   "auth/cookie-readable-by-scripts": "auth/session-storage",
@@ -847,6 +863,8 @@ const UNPROVEN_RULES = new Set([
   "injection/shell-string-building",
   "injection/unescaped-html",
   "integrity/unsafe-decoding",
+  "ai/prompt-to-action",
+  "design/unbounded-list",
 ]);
 
 function unprovenFromFinding(finding: Finding): Unproven {
