@@ -1179,6 +1179,258 @@ export const CASES: BenchCase[] = [
     ],
   },
 
+  // --- mass assignment: saving everything the visitor sent -------------------
+  {
+    id: "mass-assign-signup",
+    tests: "Sign-up saves the whole form into users, whose table has a role field.",
+    files: [
+      file("server/models.js", [
+        'const mongoose = require("mongoose");',
+        "const userSchema = new mongoose.Schema({ name: String, email: String, role: { type: String, default: \"member\" } });",
+        'module.exports.User = mongoose.model("User", userSchema);',
+      ]),
+      file("server/routes.js", [
+        'const express = require("express");',
+        "const app = express();",
+        'app.post("/signup", async (req, res) => {',
+        "  const user = await User.create(req.body); // [A]",
+        "  res.json({ id: user.id });",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/signup",
+        parameter: "body",
+        sink: "mass-assignment",
+        real: true,
+        why: "Anyone signing up can add role: admin to the form and become an administrator.",
+      },
+    ],
+  },
+
+  {
+    id: "mass-assign-prisma-update",
+    tests: "Prisma: a profile update saves whatever the visitor sent into a model that has an isAdmin field.",
+    files: [
+      file("prisma/schema.prisma", [
+        "model User {",
+        "  id      Int     @id @default(autoincrement())",
+        "  name    String",
+        "  isAdmin Boolean @default(false)",
+        "}",
+      ]),
+      file("server/src/index.ts", [
+        ...SIGNED_IN,
+        'app.post("/api/profile", async (c) => {',
+        "  const changes = await c.req.json();",
+        '  await prisma.user.update({ where: { id: c.get("userId") }, data: changes }); // [A]',
+        "  return c.json({ ok: true });",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/api/profile",
+        parameter: "changes",
+        sink: "mass-assignment",
+        real: true,
+        why: "A signed-in user can send isAdmin: true with their profile and it is saved.",
+      },
+    ],
+  },
+
+  {
+    id: "mass-assign-named-fields",
+    tests: "Sign-up copies only name and email by name; the role field is never taken from the form.",
+    files: [
+      file("server/models.js", [
+        'const mongoose = require("mongoose");',
+        "const userSchema = new mongoose.Schema({ name: String, email: String, role: { type: String, default: \"member\" } });",
+        'module.exports.User = mongoose.model("User", userSchema);',
+      ]),
+      file("server/routes.js", [
+        'const express = require("express");',
+        "const app = express();",
+        'app.post("/signup", async (req, res) => {',
+        "  const user = await User.create({ name: req.body.name, email: req.body.email }); // [A]",
+        "  res.json({ id: user.id });",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/signup",
+        parameter: "body",
+        sink: "mass-assignment",
+        real: false,
+        why: "Only the two named fields are saved, so extra fields in the form are ignored.",
+      },
+    ],
+  },
+
+  {
+    id: "mass-assign-role-overridden",
+    tests: "Sign-up spreads the form but sets role itself afterwards, which wins.",
+    files: [
+      file("server/models.js", [
+        'const mongoose = require("mongoose");',
+        "const userSchema = new mongoose.Schema({ name: String, email: String, role: { type: String, default: \"member\" } });",
+        'module.exports.User = mongoose.model("User", userSchema);',
+      ]),
+      file("server/routes.js", [
+        'const express = require("express");',
+        "const app = express();",
+        'app.post("/signup", async (req, res) => {',
+        "  const form = req.body;",
+        '  const user = await User.create({ ...form, role: "member" }); // [A]',
+        "  res.json({ id: user.id });",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/signup",
+        parameter: "form",
+        sink: "mass-assignment",
+        real: false,
+        why: "The role written after the spread replaces anything the visitor sent, and the table has no other sensitive field.",
+      },
+    ],
+  },
+
+  {
+    id: "mass-assign-zod-parsed",
+    tests: "Sign-up checks the form against a schema that keeps only name and email, then saves the result.",
+    files: [
+      file("server/models.js", [
+        'const mongoose = require("mongoose");',
+        "const userSchema = new mongoose.Schema({ name: String, email: String, role: { type: String, default: \"member\" } });",
+        'module.exports.User = mongoose.model("User", userSchema);',
+      ]),
+      file("server/routes.js", [
+        'const { z } = require("zod");',
+        'const express = require("express");',
+        "const app = express();",
+        "const Signup = z.object({ name: z.string().max(80), email: z.string().email() });",
+        'app.post("/signup", async (req, res) => {',
+        "  const data = Signup.parse(req.body);",
+        "  const user = await User.create(data); // [A]",
+        "  res.json({ id: user.id });",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/signup",
+        parameter: "body",
+        sink: "mass-assignment",
+        real: false,
+        why: "The schema drops every field it does not list, so role never reaches the save.",
+      },
+    ],
+  },
+
+  {
+    id: "mass-assign-rebuilt",
+    tests: "Sign-up takes two fields out of the form and builds a new object from them before saving.",
+    files: [
+      file("server/models.js", [
+        'const mongoose = require("mongoose");',
+        "const userSchema = new mongoose.Schema({ name: String, email: String, role: { type: String, default: \"member\" } });",
+        'module.exports.User = mongoose.model("User", userSchema);',
+      ]),
+      file("server/routes.js", [
+        'const express = require("express");',
+        "const app = express();",
+        'app.post("/signup", async (req, res) => {',
+        "  const { name, email } = req.body;",
+        "  const data = { name, email };",
+        "  const user = await User.create(data); // [A]",
+        "  res.json({ id: user.id });",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/signup",
+        parameter: "body",
+        sink: "mass-assignment",
+        real: false,
+        why: "Only name and email are copied into the new object; anything else the visitor sent is left behind.",
+      },
+    ],
+  },
+
+  {
+    id: "mass-assign-checked-first",
+    tests: "Sign-up rejects any form with fields outside a strict schema, then saves the form.",
+    files: [
+      file("server/models.js", [
+        'const mongoose = require("mongoose");',
+        "const userSchema = new mongoose.Schema({ name: String, email: String, role: { type: String, default: \"member\" } });",
+        'module.exports.User = mongoose.model("User", userSchema);',
+      ]),
+      file("server/routes.js", [
+        'const { z } = require("zod");',
+        'const express = require("express");',
+        "const app = express();",
+        "const Signup = z.object({ name: z.string(), email: z.string().email() }).strict();",
+        'app.post("/signup", async (req, res) => {',
+        "  const checked = Signup.safeParse(req.body);",
+        "  if (!checked.success) return res.sendStatus(400);",
+        "  const user = await User.create(req.body); // [A]",
+        "  res.json({ id: user.id });",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/signup",
+        parameter: "body",
+        sink: "mass-assignment",
+        real: false,
+        why: "A strict schema turns away any form carrying a field it does not list, such as role.",
+      },
+    ],
+  },
+
+  {
+    id: "mass-assign-harmless-table",
+    tests: "A feedback form is saved whole, but its table has only text fields nobody needs to protect.",
+    files: [
+      file("server/models.js", [
+        'const mongoose = require("mongoose");',
+        'module.exports.Feedback = mongoose.model("Feedback", new mongoose.Schema({ message: String, page: String }));',
+      ]),
+      file("server/routes.js", [
+        'const express = require("express");',
+        "const app = express();",
+        'app.post("/feedback", async (req, res) => {',
+        "  await Feedback.create(req.body); // [A]",
+        "  res.json({ ok: true });",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/feedback",
+        parameter: "body",
+        sink: "mass-assignment",
+        real: false,
+        why: "Extra fields have nowhere to go: the table only holds a message and a page name.",
+      },
+    ],
+  },
+
   // --- redirects -----------------------------------------------------------
   {
     id: "redirect-open",

@@ -51,7 +51,12 @@ export type SinkKind =
    * the document can name a file on the server or an internal address and
    * have its contents pulled in (XXE).
    */
-  | "xml-entities";
+  | "xml-entities"
+  /**
+   * A record saved from a whole object (`User.create(req.body)`) into a
+   * table with fields a visitor must not choose, such as a role or an owner.
+   */
+  | "mass-assignment";
 
 export type SanitizerKind =
   | "schema-validation"
@@ -111,6 +116,8 @@ export interface Sink {
    * a tagged `sql` template parameterises everything interpolated into it.
    */
   inherentlySafe: boolean;
+  /** For mass assignment: the fields a visitor could set that they must not. */
+  fields?: string[];
 }
 
 export interface Sanitizer {
@@ -138,6 +145,10 @@ export interface Assignment {
   target: string;
   /** Identifiers on the right-hand side. */
   from: string[];
+  /** The right-hand side is just another name (`const data = body`): an exact copy. */
+  copyOf?: string;
+  /** The right-hand side is the visitor's whole request (`req.body`, `await c.req.json()`). */
+  wholeRequest?: boolean;
   location: CodeLocation;
   doorId?: string;
 }
@@ -206,6 +217,14 @@ export interface Inventory {
   identities?: IdentityRead[];
   /** Reads and writes of named tables and collections, for stored data. */
   stores?: StoreAccess[];
+  /**
+   * Places that check or trim a visitor's whole request (or a plain copy of
+   * it) before it is used: `schema.parse(form)`, `validate(req.body)`,
+   * `delete form.role`. Mass assignment stays silent after one.
+   */
+  requestChecks?: Array<{ subject: string; at: number; path: string; doorId?: string }>;
+  /** True when the project replaces `req.body` itself (validation middleware). */
+  requestBodyReplaced?: boolean;
 }
 
 /**
@@ -221,7 +240,18 @@ export interface StoreAccess {
    * For a write: each value saved, with its column ("*" when the column is
    * not named). Values that only choose which row changes are not listed.
    */
-  written?: Array<{ column: string; names: string[]; range: [number, number] }>;
+  written?: Array<{
+    column: string;
+    names: string[];
+    range: [number, number];
+    overridden?: string[];
+    /** The value is a plain name (`data`), so where it came from can be looked up. */
+    copyOf?: string;
+    /** The value is the visitor's whole request itself. */
+    wholeRequest?: boolean;
+  }>;
+  /** True for a model method (`User.create`) rather than SQL text. */
+  model?: boolean;
   /** For a write: every column it sets, whoever's value goes in ("*" when unnamed). */
   touches?: string[];
   /** For a read: the columns returned, or "*" for all of them. */

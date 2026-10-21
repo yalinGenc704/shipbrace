@@ -74,7 +74,7 @@ everywhere:
 # PostgreSQL 18 (Homebrew, not started at login). Databases: shipbrace, shipbrace_test.
 LC_ALL=en_US.UTF-8 /opt/homebrew/opt/postgresql@18/bin/pg_ctl -D /opt/homebrew/var/postgresql@18 -l /opt/homebrew/var/log/postgresql@18.log start
 
-# all tests (expect 237 pass). Without TEST_DATABASE_URL the 6 database tests
+# all tests (expect 245 pass). Without TEST_DATABASE_URL the 6 database tests
 # are skipped and say so; it must name a database ending in _test (it is wiped).
 # CI (.github/workflows/ci.yml) runs typecheck, lint, tests and build on every push.
 TEST_DATABASE_URL=postgres:///shipbrace_test npm test
@@ -138,8 +138,8 @@ the server with the AI step, start it with an extra `--env-file` that sets
 
 ## Current state and known gaps
 
-- **Benchmark (71 apps, 37 real problems, 35 safe decoys), 2026-10-20:** rules
-  alone prove 33; a perfect suggester proves 36; zero false alarms. Only
+- **Benchmark (79 apps, 39 real problems, 41 safe decoys), 2026-10-20:** rules
+  alone prove 35; a perfect suggester proves 38; zero false alarms. Only
   miss: a React component pasting a `body` prop as raw HTML, with nothing
   showing where the prop comes from (stays "worth a look").
 - **Stored attacks (2026-10-20).** A table column a visitor's unchecked
@@ -179,7 +179,21 @@ the server with the AI step, start it with an extra `--env-file` that sets
   (checklist item `injection/xml-entities`, whose "checked" text names
   libxmljs only). Not covered: options held in a variable, libxslt,
   libxml-xsd, xmllint. xml2js, fast-xml-parser, xmldom and sax never fetch
-  outside files. The starter kit is held to its
+  outside files.
+- **Mass assignment (2026-10-20, `analysis/schemas.ts`,
+  `addMassAssignment`).** Table fields are read from Prisma, SQL `CREATE
+  TABLE`, Mongoose, Sequelize and Drizzle definitions (reviews now read
+  `.prisma` files; they are never sent to the AI step). A model write that
+  saves the visitor's whole request untouched (`req.body`, `await
+  c.req.json()`, or plain copies of it, or a spread of it) into a table with a
+  sensitive field (role, admin flag, balance, plan, owner/user id...) that is
+  not set after the spread is a `mass-assignment` operation, item
+  `access-control/mass-assignment`. Silent when: the table's fields are
+  unknown; the request passes through any call, rebuild or destructuring; a
+  check or trim of it (`parse`, `validate*`, `pick`, `delete x.role`...)
+  comes first in the handler; any code replaces `req.body`; the route is
+  guarded by an admin check. With no table definitions at all, the item is
+  handed back as not checked. The starter kit is held to its
   own review (`packages/scaffold/test/self-review.test.ts`): no warnings
   except the lockfile a fresh app gets on first install.
 - **"Checked" says what was checked** (`ActionItem.covers`). Error pages hand
@@ -253,7 +267,7 @@ the server with the AI step, start it with an extra `--env-file` that sets
   across files. It does not follow method calls (`obj.fn(x)`), and a helper
   name defined twice, unknown code, or destructured parameters make the
   claim `undecidable` (never `no-path`).
-- 16 of 39 checklist items have no detector and are left to the user (counted 2026-10-20). The
+- 16 of 40 checklist items have no detector and are left to the user (counted 2026-10-20). The
   checklist follows OWASP Top 10:2025; the four items added for its new
   categories (A03 supply chain, A10 exceptional conditions) have no detector yet.
 - **GitHub App works end to end (first live run 2026-10-01):** App ID 5157570
@@ -456,7 +470,7 @@ item only once it can actually run ("no false pass"). In order:
    only return constants; sign-in checks written inside a handler;
    transactions written `` tx`...` ``; SQL-looking text in documentation
    templates; XXE.
-3. **New proven checks** (input traced to the problem, so they are risks):
+3. **New proven checks** (mass assignment done 2026-10-20) (input traced to the problem, so they are risks):
    mass assignment (a request body saved whole, e.g. `User.create(req.body)`,
    so a visitor can set `role` or `owner_id`); unsafe decoding of input
    (extend the existing `unserialize` detection to unsafe YAML loading and

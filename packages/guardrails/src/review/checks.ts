@@ -1,5 +1,6 @@
 import { dottedName, locationOf, parseFile, walk, type Node } from "../analysis/ast.ts";
 import type { Inventory } from "../analysis/inventory.ts";
+import { modelFields } from "../analysis/schemas.ts";
 import type { CodeLocation, RepoSnapshot, SourceFile } from "../types.ts";
 import { isSource, isTestPath, redact } from "../util.ts";
 import type { Grade, Risk } from "./modules.ts";
@@ -276,6 +277,29 @@ const pinnedVersions: ProjectCheck = {
       );
     }
     return risks.length > 0 ? { status: "risks", risks } : { status: "pass" };
+  },
+};
+
+// --- A01: mass assignment needs to know what fields tables have --------------
+
+/**
+ * Mass assignment is judged against the fields each table has. With no
+ * table definitions in the project there is nothing to judge it against, so
+ * the item goes back to the user instead of showing a pass.
+ */
+const massAssignmentTables: ProjectCheck = {
+  id: "schemas:model-fields",
+  itemId: "access-control/mass-assignment",
+
+  run(snapshot) {
+    if (modelFields(snapshot).size === 0) {
+      return {
+        status: "not-applicable",
+        reason:
+          "No table definitions were found (Prisma, SQL, Mongoose, Sequelize or Drizzle), so whether saving a whole form lets visitors set fields like a role could not be judged.",
+      };
+    }
+    return { status: "pass" };
   },
 };
 
@@ -694,6 +718,7 @@ export const projectChecks: ProjectCheck[] = [
   errorDetail,
   pinnedVersions,
   lockfilePresent,
+  massAssignmentTables,
   passwordStorage,
   sessionExpiry,
   rateLimiting,

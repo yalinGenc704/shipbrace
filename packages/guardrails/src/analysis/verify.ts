@@ -1,5 +1,5 @@
 import type { CodeLocation } from "../types.ts";
-import { checksFor } from "./oracle.ts";
+import { canFeed, checksFor } from "./oracle.ts";
 import type {
   Door,
   FunctionDef,
@@ -509,6 +509,7 @@ export function verifyClaim(claim: Claim, whole: Inventory): VerifiedClaim {
 
   const candidateSources = inventory.sources.filter((s) => {
     if (door && !belongsTo(door, s)) return false;
+    if (!canFeed(s, claim.sink)) return false;
     if (!claim.parameter) return true;
     return mentions(s.expression, claim.parameter) || mentions(claim.parameter, s.binding ?? "");
   });

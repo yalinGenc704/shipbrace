@@ -179,6 +179,23 @@ function checkOnArrival(source: TaintSource, scope: Scope): Sanitizer | undefine
   );
 }
 
+/**
+ * True when a source is a visitor's whole request -- `req.body`,
+ * `await c.req.json()` -- rather than one field of it. Only a whole request
+ * can carry fields the app never asked for, which is what mass assignment is.
+ */
+export function wholeRequest(source: TaintSource): boolean {
+  return source.kind === "request-body" || source.kind === "query-string"
+    ? /(?:^|\.)(?:body|query|json\(\)|parseBody\(\)|query\(\))$/.test(source.expression.replace(/^await\s+/, "").trim())
+    : false;
+}
+
+/** True when this source can feed this operation at all. */
+export function canFeed(source: TaintSource, sink: Sink | SinkKind): boolean {
+  const kind = typeof sink === "string" ? sink : sink.kind;
+  return kind !== "mass-assignment" || wholeRequest(source);
+}
+
 /** True when this check makes a value safe for this kind of operation. */
 export function guardsAgainst(sanitizer: Sanitizer, kind: SinkKind): boolean {
   return !sanitizer.protects || sanitizer.protects.includes(kind);
@@ -203,7 +220,7 @@ export function analyseTaint(inventory: Inventory): TaintPath[] {
       for (const source of scope.sources) {
         const sourceAt = positionOf(source.id);
         // A source that appears after the sink cannot have fed it.
-        if (sourceAt >= sinkAt) continue;
+        if (sourceAt >= sinkAt || !canFeed(source, sink)) continue;
 
         const binding = source.binding;
         const tainted = binding ? aliasesOf(binding, scope, sourceAt) : new Set<string>();
@@ -255,7 +272,9 @@ const VISITOR_KINDS: ReadonlySet<SourceKind> = new Set([
  * assignments first. A check in between leaves that column out -- this errs
  * towards silence.
  */
-export function visitorInputChecker(inventory: Inventory): (write: StoreAccess) => string[] {
+export function visitorInputChecker(
+  inventory: Inventory,
+): (write: StoreAccess) => Array<{ column: string; except: string[] }> {
   const byKey = new Map(scopesFor(inventory).map((scope) => [scope.key, scope]));
 
   return (write) => {
@@ -274,7 +293,7 @@ export function visitorInputChecker(inventory: Inventory): (write: StoreAccess) 
         if (!value.names.some((name) => tainted.has(name))) return false;
         return !(checkOnArrival(source, scope) ?? interveningSanitizer(tainted, scope, at, statementAt));
       })
-    ).map((value) => value.column);
+    ).map((value) => ({ column: value.column, except: value.overridden ?? [] }));
   };
 }
 

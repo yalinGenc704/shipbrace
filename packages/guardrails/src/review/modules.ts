@@ -149,6 +149,7 @@ const SINK_GRADE: Record<string, Grade> = {
   redirect: "low",
   nosql: "high",
   "xml-entities": "high",
+  "mass-assignment": "high",
 };
 
 /**
@@ -173,6 +174,13 @@ const SINK_COPY: Record<string, { operation: string; impact: string; fix: string
       "Someone could run their own commands on the machine hosting your site, which usually means full control of it.",
     fix:
       "Pass the command and its arguments as a separate array rather than building one string, so the shell never interprets characters inside the value. Better still, use a library that does the job directly instead of running a command at all.",
+  },
+  "mass-assignment": {
+    operation: "saving everything the visitor sent as a whole record",
+    impact:
+      "The visitor can add fields your form never shows -- for example making themselves an administrator, or saving something under someone else's account -- because every field they send is saved.",
+    fix:
+      "Copy only the fields the form is meant to change, by name (`{ name: body.name, email: body.email }`), or check the request against a schema that rejects anything else. Set fields like role or owner on the server.",
   },
   "xml-entities": {
     operation: "reading an XML document with outside references switched on",
@@ -291,6 +299,13 @@ const MODULES: ModuleShape[] = [
         covers: "no visitor input was traced to a file path",
         title: "File access cannot be steered outside its intended folder",
         detector: "taint:filesystem",
+      },
+      {
+        id: "access-control/mass-assignment",
+        covers:
+          "no visitor's whole request was traced into saving a record whose table has fields like role, admin or owner; tables whose fields could not be found were not checked",
+        title: "Visitors cannot set fields they should not, like their own role",
+        detector: "taint:mass-assignment",
       },
       {
         id: "access-control/admin-only",
@@ -763,6 +778,7 @@ const ITEM_FOR_SINK: Record<string, string> = {
   nosql: "injection/database",
   "outbound-request": "ssrf/url-allowlist",
   "xml-entities": "injection/xml-entities",
+  "mass-assignment": "access-control/mass-assignment",
 };
 
 /**

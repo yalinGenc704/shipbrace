@@ -22,6 +22,7 @@ import type {
   StoreAccess,
 } from "./inventory.ts";
 import { visitorInputChecker } from "./oracle.ts";
+import { modelFields } from "./schemas.ts";
 
 /**
  * The attack-surface inventory, built from parsed syntax rather than matched
@@ -215,7 +216,89 @@ export function buildInventoryFromAst(snapshot: RepoSnapshot): Inventory {
     if (matches.length === 1) door.handlerAt = { path: matches[0]!.path, range: matches[0]!.bodyRange };
   }
   addStoredSources(inventory);
+  addMassAssignment(inventory, snapshot);
   return inventory;
+}
+
+/**
+ * Mass assignment: a model write that saves a whole object (`User.create(x)`,
+ * `{ ...x }`) into a table that has a field a visitor must not choose -- a
+ * role, an admin flag, an owner. Recorded as an operation whose value is the
+ * whole object; the oracle then decides whether the visitor's whole request
+ * reaches it. A table whose fields cannot be found gets nothing: whether it
+ * matters depends on fields nobody can see.
+ */
+const position = (id: string): number => Number(id.split(":").pop()) || 0;
+
+function addMassAssignment(inventory: Inventory, snapshot: RepoSnapshot): void {
+  const writes = (inventory.stores ?? []).filter(
+    (s) => s.mode === "write" && s.model && s.written?.some((w) => w.column === "*"),
+  );
+  if (writes.length === 0) return;
+  const models = modelFields(snapshot);
+
+  const assignments = inventory.assignments;
+  /** Follows plain copies back from `name`, in the write's own scope, to the whole request. */
+  /**
+   * Follows plain copies back from `name`, in the write's own scope, to the
+   * whole request. Returns the names on the way (with "request" last), or
+   * undefined when the chain ends anywhere else.
+   */
+  const copiesOfRequest = (
+    name: string,
+    before: number,
+    doorId: string | undefined,
+    path: string,
+    depth = 0,
+  ): string[] | undefined => {
+    if (depth > 8) return undefined;
+    const last = assignments
+      .filter((a) => a.target === name && a.doorId === doorId && a.location.path === path && position(a.id) < before)
+      .sort((a, b) => position(b.id) - position(a.id))[0];
+    if (!last) return undefined;
+    if (last.wholeRequest) return [name, "request"];
+    const rest = last.copyOf ? copiesOfRequest(last.copyOf, position(last.id), doorId, path, depth + 1) : undefined;
+    return rest ? [name, ...rest] : undefined;
+  };
+  const doors = new Map(inventory.doors.map((d) => [d.id, d]));
+
+  for (const write of writes) {
+    const sensitive = models.get(write.store)?.sensitive ?? [];
+    for (const value of write.written!) {
+      if (value.column !== "*") continue;
+      const at = position(write.id);
+      const chain = value.wholeRequest
+        ? ["request"]
+        : value.copyOf !== undefined
+        ? copiesOfRequest(value.copyOf, at, write.doorId, write.location.path)
+        : undefined;
+      if (!chain) continue;
+      // Checked or trimmed on the way -- by a schema, a validator, `delete
+      // form.role`, or middleware that replaces req.body -- so the fields that
+      // arrive may be only the allowed ones. Errs to silence.
+      if (inventory.requestBodyReplaced) continue;
+      const checkedFirst = (inventory.requestChecks ?? []).some((c) =>
+        chain.includes(c.subject) && c.path === write.location.path && c.doorId === write.doorId && c.at < at
+      );
+      if (checkedFirst) continue;
+      // An administrator's own form often sets a role on purpose.
+      const door = write.doorId ? doors.get(write.doorId) : undefined;
+      if (door?.guards.some((g) => /admin/i.test(g))) continue;
+      const open = sensitive.filter((field) => !(value.overridden ?? []).includes(field));
+      if (open.length === 0) continue;
+      inventory.sinks.push({
+        id: write.id.replace(":store:", ":sink:"),
+        kind: "mass-assignment",
+        expression: write.expression,
+        operands: value.names,
+        location: write.location,
+        inherentlySafe: false,
+        ...(write.doorId ? { doorId: write.doorId } : {}),
+        fields: open,
+      });
+      break;
+    }
+  }
 }
 
 /**
@@ -231,24 +314,33 @@ function addStoredSources(inventory: Inventory): void {
   if (!stores.some((s) => s.mode === "write")) return;
 
   const savedByVisitor = visitorInputChecker(inventory);
-  const visitor = new Map<string, Set<string>>();
-  const known = new Map<string, Set<string>>();
-  const add = (map: Map<string, Set<string>>, store: string, column: string): void => {
-    const columns = map.get(store) ?? new Set<string>();
-    columns.add(column);
-    map.set(store, columns);
+  const tables = new Map<string, VisitorColumns>();
+  const table = (store: string): VisitorColumns => {
+    let t = tables.get(store);
+    if (!t) tables.set(store, (t = { named: new Set(), whole: false, appSets: undefined, known: new Set() }));
+    return t;
   };
   for (const write of stores) {
     if (write.mode !== "write") continue;
-    for (const column of write.touches ?? []) add(known, write.store, column);
-    for (const column of savedByVisitor(write)) add(visitor, write.store, column);
+    const t = table(write.store);
+    for (const column of write.touches ?? []) t.known.add(column);
+    for (const { column, except } of savedByVisitor(write)) {
+      if (column !== "*") {
+        t.named.add(column);
+        continue;
+      }
+      // A spread of the request saves every field except those set after it.
+      // Across several such writes, only fields the app sets in all of them
+      // are safe from the visitor.
+      t.whole = true;
+      t.appSets = t.appSets ? new Set(except.filter((c) => t.appSets!.has(c))) : new Set(except);
+    }
   }
-  if (visitor.size === 0) return;
 
   for (const read of stores) {
-    const fromVisitor = visitor.get(read.store);
-    if (read.mode !== "read" || !read.binding || !fromVisitor) continue;
-    if (!readsOnlyVisitorText(read.columns ?? ["*"], fromVisitor, known.get(read.store) ?? new Set())) continue;
+    const t = tables.get(read.store);
+    if (read.mode !== "read" || !read.binding || !t || (!t.whole && t.named.size === 0)) continue;
+    if (!readsOnlyVisitorText(read.columns ?? ["*"], t)) continue;
     inventory.sources.push({
       id: read.id.replace(":store:", ":src:"),
       kind: "stored-data",
@@ -260,6 +352,17 @@ function addStoredSources(inventory: Inventory): void {
   }
 }
 
+interface VisitorColumns {
+  /** Columns a visitor's value is saved into by name. */
+  named: Set<string>;
+  /** True when a whole request is saved into the table. */
+  whole: boolean;
+  /** With `whole`: columns the app always sets itself after the spread. */
+  appSets: Set<string> | undefined;
+  /** Every column any write names. */
+  known: Set<string>;
+}
+
 /** Ids, foreign keys and timestamps: set by the database or the app, never text worth showing. */
 const BOOKKEEPING = /^(?:id|created|updated|\w+_at|\w+At|created_on|updated_on)$/;
 
@@ -269,12 +372,16 @@ const BOOKKEEPING = /^(?:id|created|updated|\w+_at|\w+At|created_on|updated_on)$
  * columns only the app writes cannot say which of them reaches the page;
  * that case stays silent rather than guessing.
  */
-function readsOnlyVisitorText(selected: string[], fromVisitor: Set<string>, known: Set<string>): boolean {
-  if (fromVisitor.has("*")) return true;
-  const returned = selected.includes("*") ? [...known].filter((c) => c !== "*") : selected;
-  if (selected.includes("*") && known.has("*")) return false;
-  const visitorColumns = returned.filter((c) => fromVisitor.has(c));
-  const others = returned.filter((c) => !fromVisitor.has(c) && !BOOKKEEPING.test(c));
+function readsOnlyVisitorText(selected: string[], t: VisitorColumns): boolean {
+  const fromVisitor = (c: string): boolean => t.named.has(c) || (t.whole && !(t.appSets?.has(c) ?? false));
+  const all = selected.includes("*");
+  // Everything, from a table the whole request goes into, with nothing set by
+  // the app: all of it is visitor text.
+  if (all && t.whole && (t.appSets?.size ?? 0) === 0) return true;
+  if (all && t.known.has("*")) return false;
+  const returned = all ? [...t.known] : selected;
+  const visitorColumns = returned.filter(fromVisitor);
+  const others = returned.filter((c) => !fromVisitor(c) && !BOOKKEEPING.test(c));
   return visitorColumns.length > 0 && others.length === 0;
 }
 
@@ -401,7 +508,19 @@ function documentValues(doc: Node | undefined): StoreValue[] {
   if (!doc) return [];
   const props = propertiesOf(doc);
   if (doc.type === "ObjectExpression") {
-    return [...props.entries()].map(([column, node]) => ({ column, node }));
+    const all = (doc.properties ?? []) as Node[];
+    // `{ ...req.body, role: "member" }`: the spread saves whatever it holds,
+    // except the keys written after it, which replace what it brought.
+    const spreads = all.flatMap((prop, i): StoreValue[] =>
+      prop.type === "SpreadElement"
+        ? [{
+          column: "*",
+          node: prop.argument as Node,
+          overridden: keysAfter(all.slice(i + 1)),
+        }]
+        : []
+    );
+    return [...[...props.entries()].map(([column, node]) => ({ column, node })), ...spreads];
   }
   if (doc.type === "ArrayExpression") {
     return ((doc.elements ?? []) as Node[]).flatMap((e) => documentValues(e));
@@ -428,6 +547,12 @@ function modelWrittenValues(method: string, args: Node[]): StoreValue[] {
 interface StoreValue {
   column: string;
   node: Node;
+  /** For a spread: keys set after it in the same object, which it cannot supply. */
+  overridden?: string[];
+}
+
+function keysAfter(props: Node[]): string[] {
+  return [...propertiesOf({ type: "ObjectExpression", properties: props, start: 0, end: 0 } as Node).keys()];
 }
 
 /**
@@ -462,10 +587,12 @@ function storeAccessFor(parsed: ParsedFile, node: Node, parents: Node[]): StoreA
     };
   };
   const toWritten = (values: StoreValue[]): NonNullable<StoreAccess["written"]> =>
-    values.map(({ column, node: value }) => ({
+    values.map(({ column, node: value, overridden }) => ({
       column,
       names: identifiersIn(value),
       range: [value.start, value.end] as [number, number],
+      ...(overridden ? { overridden } : {}),
+      ...copyShape(value),
     }));
 
   if (text !== undefined) {
@@ -516,7 +643,7 @@ function storeAccessFor(parsed: ParsedFile, node: Node, parents: Node[]): StoreA
   const args = (node.arguments ?? []) as Node[];
   if (MODEL_CREATE.test(method) || MODEL_UPDATE.test(method)) {
     const values = modelWrittenValues(method, args);
-    return make(model, "write", { written: toWritten(values), touches: values.map((v) => v.column) });
+    return make(model, "write", { written: toWritten(values), touches: values.map((v) => v.column), model: true });
   }
   if (MODEL_READ.test(method)) return make(model, "read", { columns: ["*"] });
   return undefined;
@@ -623,6 +750,58 @@ function findDoors(parsed: ParsedFile): Door[] {
       ...(middleware.length === 0 && answersOnlyFixed(handler) ? { answersOnlyFixed: true } : {}),
     };
   });
+}
+
+/** The visitor's whole request: `req.body`, `req.query`... */
+const WHOLE_REQUEST_READ = /^(?:req|request)\.(?:body|query)$/;
+/** ...or a call with no arguments that returns it: `c.req.json()`, `request.formData()`. */
+const WHOLE_REQUEST_CALL = /^(?:(?:c|ctx|context)\.req\.(?:json|parseBody|query)|(?:req|request)\.(?:json|formData))$/;
+
+/**
+ * Whether an expression is an exact copy of something: a plain name, or the
+ * visitor's whole request. Anything else -- a call such as `schema.parse(x)`
+ * or `pick(x, [...])`, a rebuilt object, a destructured field -- may have
+ * dropped fields, so it is neither.
+ */
+function copyShape(expression: Node): { copyOf?: string; wholeRequest?: true } {
+  const node = awaited(expression);
+  if (!node) return {};
+  if (node.type === "Identifier") return { copyOf: String(node.name) };
+  if (node.type.endsWith("MemberExpression") && WHOLE_REQUEST_READ.test(dottedName(node) ?? "")) {
+    return { wholeRequest: true };
+  }
+  const bare = node.type === "CallExpression" && ((node.arguments ?? []) as Node[]).length === 0;
+  if (bare && WHOLE_REQUEST_CALL.test(dottedName(node.callee) ?? "")) return { wholeRequest: true };
+  return {};
+}
+
+/** Calls that check or trim what they are given. */
+const CHECKING_CALL = /(?:^|\.)(?:parse|safeParse|parseAsync|safeParseAsync|validate\w*|assert\w*|check\w*|sanitize\w*|strip\w*|clean\w*|filter\w*|omit|pick|is[A-Z]\w*)$/;
+
+/**
+ * What a check is about: "request" for the whole request itself, a name for
+ * a plain variable, or nothing. `S.parse(req.body)`, `validate(form)`,
+ * `delete form.role` all count.
+ */
+function requestCheckOf(node: Node): string | undefined {
+  const subject = (arg: Node | undefined): string | undefined => {
+    const shape = arg ? copyShape(arg) : {};
+    return shape.wholeRequest ? "request" : shape.copyOf;
+  };
+  if (node.type === "CallExpression" && CHECKING_CALL.test(dottedName(node.callee) ?? "")) {
+    for (const arg of (node.arguments ?? []) as Node[]) {
+      const found = subject(arg);
+      if (found) return found;
+    }
+  }
+  if (node.type === "UnaryExpression" && node.operator === "delete") {
+    const target = node.argument as Node | undefined;
+    if (target?.type.endsWith("MemberExpression")) {
+      const object = target.object as Node;
+      return WHOLE_REQUEST_READ.test(dottedName(object) ?? "") ? "request" : subject(object);
+    }
+  }
+  return undefined;
 }
 
 /** Unwraps `await x` to `x`. */
@@ -810,6 +989,7 @@ function collect(
           id: `${parsed.path}:asg:${node.start}`,
           target: String(id.name ?? ""),
           from: identifiersIn(init),
+          ...copyShape(init),
           location: locationOf(parsed, node),
           ...doorId,
         });
@@ -843,6 +1023,7 @@ function collect(
           id: `${parsed.path}:asg:${node.start}`,
           target,
           from: identifiersIn(right),
+          ...copyShape(right),
           location: locationOf(parsed, node),
           ...doorId,
         });
@@ -912,6 +1093,15 @@ function collect(
         bodyRange: [body.start, body.end],
         path: parsed.path,
       });
+    }
+
+    // --- checks of a whole request, for mass assignment -------------------
+    const checked = requestCheckOf(node);
+    if (checked) {
+      (into.requestChecks ??= []).push({ subject: checked, at: node.start, path: parsed.path, ...doorId });
+    }
+    if (node.type === "AssignmentExpression" && WHOLE_REQUEST_READ.test(dottedName(node.left) ?? "")) {
+      into.requestBodyReplaced = true;
     }
 
     // --- tables and collections, for stored data -------------------------
