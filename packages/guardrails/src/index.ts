@@ -6,11 +6,6 @@ export { redact } from "./util.ts";
 
 // Phase 1: attack-surface inventory.
 export {
-  buildInventory,
-  findDoors,
-  findSanitizers,
-  findSinks,
-  findSources,
   type Door,
   type Inventory,
   type Sanitizer,
@@ -23,8 +18,6 @@ export {
 // Phase 2: deterministic oracle.
 export {
   analyseTaint,
-  confirmAll,
-  confirmProposal,
   type AttackProposal,
   type ConfirmedAttack,
   type TaintPath,

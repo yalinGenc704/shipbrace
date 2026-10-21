@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildInventory } from "../src/analysis/inventory.ts";
+import { buildInventoryFromAst as buildInventory } from "../src/analysis/inventory-ast.ts";
 import { runProjectChecks, type CheckOutcome } from "../src/review/checks.ts";
 import { runSecurityReview } from "../src/review/pipeline.ts";
 import { snapshotFromFiles } from "../src/snapshot.ts";

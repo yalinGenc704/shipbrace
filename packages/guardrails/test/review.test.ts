@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildInventory, findDoors } from "../src/analysis/inventory.ts";
-import { analyseTaint, confirmAll, confirmProposal } from "../src/analysis/oracle.ts";
-import type { AttackProposal } from "../src/analysis/oracle.ts";
+import { buildInventoryFromAst as buildInventory } from "../src/analysis/inventory-ast.ts";
+import { analyseTaint } from "../src/analysis/oracle.ts";
 import { parseProposals } from "../src/analysis/proposer.ts";
 import { buildReview, moduleSkeleton } from "../src/review/modules.ts";
 import { runSecurityReview } from "../src/review/pipeline.ts";
@@ -36,21 +35,23 @@ const VALIDATED = [
 // --- Phase 1: identification -------------------------------------------------
 
 test("finds doors with method and path", () => {
-  const doors = findDoors({ path: "server/src/a.ts", content: VULNERABLE });
+  const doors = buildInventory(snap("server/src/a.ts", VULNERABLE)).doors;
   assert.equal(doors.length, 1);
   assert.equal(doors[0]?.method, "GET");
   assert.equal(doors[0]?.path, "/api/reports/:id");
 });
 
 test("detects middleware guarding a route prefix", () => {
-  const doors = findDoors({
-    path: "server/src/a.ts",
-    content: [
-      'app.use("/api/admin/*", requireUser);',
-      'app.get("/api/admin/users", (c) => c.json([]));',
-      'app.get("/api/public/stats", (c) => c.json([]));',
-    ].join("\n"),
-  });
+  const doors = buildInventory(
+    snap(
+      "server/src/a.ts",
+      [
+        'app.use("/api/admin/*", requireUser);',
+        'app.get("/api/admin/users", (c) => c.json([]));',
+        'app.get("/api/public/stats", (c) => c.json([]));',
+      ].join("\n"),
+    ),
+  ).doors;
   assert.deepEqual(doors.find((d) => d.path === "/api/admin/users")?.guards, ["requireUser"]);
   assert.deepEqual(doors.find((d) => d.path === "/api/public/stats")?.guards, []);
 });
@@ -120,59 +121,6 @@ test("taint follows a value through an intermediate assignment", () => {
     paths.some((p) => p.sink.kind === "shell" && p.verdict === "exploitable"),
     "alias should stay tainted",
   );
-});
-
-// --- The LLM boundary --------------------------------------------------------
-
-test("a hallucinated proposal is never confirmed", () => {
-  const paths = analyseTaint(buildInventory(snap("server/src/a.ts", VALIDATED)));
-  const invented: AttackProposal = {
-    door: "/api/does-not-exist",
-    parameter: "id",
-    payload: "1 OR 1=1",
-    expectedSink: "sql",
-    rationale: "Invented by a model.",
-  };
-  assert.notEqual(confirmProposal(invented, paths).verdict, "exploitable");
-});
-
-test("a grounded proposal is confirmed and carries the oracle's path", () => {
-  const paths = analyseTaint(buildInventory(snap("server/src/a.ts", VULNERABLE)));
-  const real: AttackProposal = {
-    door: "/api/reports/:id",
-    parameter: "id",
-    payload: "1 OR 1=1",
-    expectedSink: "sql",
-    rationale: "Route parameter is interpolated into the query.",
-  };
-  const result = confirmProposal(real, paths);
-  assert.equal(result.verdict, "exploitable");
-  assert.equal(result.path?.sink.kind, "sql");
-});
-
-test("confirmAll splits proposals into confirmed and unverified", () => {
-  const paths = analyseTaint(buildInventory(snap("server/src/a.ts", VULNERABLE)));
-  const { confirmed, unverified } = confirmAll(
-    [
-      {
-        door: "/api/reports/:id",
-        parameter: "id",
-        payload: "x",
-        expectedSink: "sql",
-        rationale: "real",
-      },
-      {
-        door: "/api/ghost",
-        parameter: "q",
-        payload: "x",
-        expectedSink: "shell",
-        rationale: "invented",
-      },
-    ],
-    paths,
-  );
-  assert.equal(confirmed.length, 1);
-  assert.equal(unverified.length, 1);
 });
 
 test("malformed model output yields no proposals rather than throwing", () => {

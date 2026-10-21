@@ -12,8 +12,9 @@ import type { Assignment, Door, Inventory, Sanitizer, Sink, TaintSource } from "
  * hypothesis generator. It is good at imagining attacks and bad at being sure.
  * A product whose users cannot themselves tell a real vulnerability from an
  * invented one must never show them an unverified claim, so every proposal --
- * whoever made it -- is admitted only if this file can reproduce it from the
- * code. See `confirmProposal`.
+ * whoever made it -- is admitted only if rules can reproduce it from the
+ * code. Proposals are decided by `verifyClaim` in `verify.ts`; this file is
+ * the enumerating pass that runs before any model.
  *
  * Known limits, stated because a scanner that hides them is worse than one that
  * misses things:
@@ -251,46 +252,4 @@ export interface ConfirmedAttack {
   verdict: Verdict;
   /** Present only when the oracle reproduced the path from the code. */
   path?: TaintPath;
-}
-
-/**
- * The gate between imagination and reporting.
- *
- * A proposal is admitted only when an independently-derived taint path matches
- * it. Everything else is returned with its verdict so it can be shown in an
- * "unverified" section, or dropped -- but it never becomes a risk the user is
- * told they have.
- */
-export function confirmProposal(
-  proposal: AttackProposal,
-  paths: TaintPath[],
-): ConfirmedAttack {
-  const match = paths.find((path) => {
-    if (path.verdict !== "exploitable") return false;
-
-    const sameDoor = !path.door || path.door.path === proposal.door ||
-      path.door.id.endsWith(proposal.door);
-    const sameSink = path.sink.kind === proposal.expectedSink;
-
-    return sameDoor && sameSink;
-  });
-
-  if (match) return { proposal, verdict: "exploitable", path: match };
-
-  // The proposer may still have been right about something the oracle cannot
-  // see (a cross-file path). Say "indeterminate", never "safe".
-  const related = paths.find((path) => path.sink.kind === proposal.expectedSink);
-  return { proposal, verdict: related ? related.verdict : "indeterminate" };
-}
-
-export function confirmAll(
-  proposals: AttackProposal[],
-  paths: TaintPath[],
-): { confirmed: ConfirmedAttack[]; unverified: ConfirmedAttack[] } {
-  const results = proposals.map((proposal) => confirmProposal(proposal, paths));
-
-  return {
-    confirmed: results.filter((r) => r.verdict === "exploitable"),
-    unverified: results.filter((r) => r.verdict !== "exploitable"),
-  };
 }

@@ -55,14 +55,14 @@ review     → ten OWASP Top 10:2025 modules for the user
 | `README.md` | Plain-language overview for anyone: the vision, how a review decides, the rules, honest numbers, what is built |
 | `scripts/bench.ts` | Prints the benchmark scores: rules alone, perfect suggester, optionally a real model |
 
-### Do not use these — they are legacy and still exported
+### Removed legacy (2026-10-20)
 
-- `buildInventory` / `findDoors` etc. from `analysis/inventory.ts` — the old
-  regex inventory. It reads code inside string literals as real code. Only its
-  **types** are current. Use `buildInventoryFromAst`.
-- `confirmProposal` / `confirmAll` from `analysis/oracle.ts` — the old matcher.
-  It only recognises paths the enumerating pass already found, so a proposal can
-  never contribute. Use `verifyClaim`.
+The old regex inventory (`buildInventory`, `findDoors`, `findAssignments`...)
+and the old matcher (`confirmProposal`, `confirmAll`) are gone: the regex
+version read code inside string literals as real code, and the matcher could
+never let a proposal contribute. `analysis/inventory.ts` now holds only the
+shared types; build an inventory with `buildInventoryFromAst` and decide
+claims with `verifyClaim`.
 
 ## Running things
 
@@ -74,7 +74,7 @@ everywhere:
 # PostgreSQL 18 (Homebrew, not started at login). Databases: shipbrace, shipbrace_test.
 LC_ALL=en_US.UTF-8 /opt/homebrew/opt/postgresql@18/bin/pg_ctl -D /opt/homebrew/var/postgresql@18 -l /opt/homebrew/var/log/postgresql@18.log start
 
-# all tests (expect 222 pass). Without TEST_DATABASE_URL the 6 database tests
+# all tests (expect 219 pass). Without TEST_DATABASE_URL the 6 database tests
 # are skipped and say so; it must name a database ending in _test (it is wiped).
 # CI (.github/workflows/ci.yml) runs typecheck, lint, tests and build on every push.
 TEST_DATABASE_URL=postgres:///shipbrace_test npm test
@@ -332,17 +332,19 @@ the server with the AI step, start it with an extra `--env-file` that sets
   opening up, or after changes to those areas; its findings are leads that
   the main session verifies. It cannot run `npm audit`, so the main session
   does. First run 2026-10-18.
-- **Planned:** a `conventions-reviewer` sub-agent (`.claude/agents/`) that
-  checks finished work against the load-bearing conventions above and runs
-  tests and benchmark, to be added with the smarter-checker work; the
-  Cloudflare Observability MCP server, when live debugging is needed.
+- **Sub-agent** `conventions-reviewer` (`.claude/agents/`, added 2026-10-20):
+  checks a finished change against the load-bearing conventions above and
+  runs typecheck, lint, tests and the benchmark (never with `--model`). It
+  reads and runs checks only; use it before committing checker changes.
+- **Planned:** the Cloudflare Observability MCP server, when live debugging
+  is needed.
 
 **Tools evaluated (2026-10-18), for reference.** *Claude Code Setup*
 (Anthropic, official) is installed; its read-only scan recommended the hooks,
 `/ship` and the planned reviewer above. *Fallow* (MIT, fallow-rs) is run on
 demand with `npx fallow@3.34.1`, not installed: its first scan found a circular
-import and an unlisted dependency (both fixed) plus `findAssignments` (left for
-the smarter-checker work); its other findings are false positives (the
+import and an unlisted dependency (both fixed) plus `findAssignments` (removed
+2026-10-20 with the other legacy code); its other findings are false positives (the
 separate redirect and wall-check Workers, scripts run by hand, test fixtures
 loaded by path, and `Reviewer.claim`, which is called over Cloudflare's RPC and
 enforces "each outside step once" -- never remove it), so never use its
@@ -402,12 +404,44 @@ per-installation switches (2026-10-10), the name ShipBrace, a public
 repository with CI and a README screenshot, a dead-code cleanup, and the
 Claude Code setup above (2026-10-18).
 
-**Recommended next (agreed 2026-10-18; waiting for the go-ahead): the smarter
-checker**, roadmap item 6 below: stored attacks (the only benchmark miss),
-matching each sanitizer to the kinds of operation it protects, not flagging
-routes that only return constants, XXE and the other practice-app gaps, and
-removing `findAssignments` with the rest of the legacy exports. Add the
-`conventions-reviewer` sub-agent at its start.
+**Recommended next (agreed 2026-10-18, widened 2026-10-20; plan shown to
+Murat, waiting for the go-ahead): the smarter checker**, roadmap item 6 below.
+Every new check gets benchmark cases (a real problem and a safe look-alike),
+keeps zero false alarms, is tried on the practice apps, and fills a checklist
+item only once it can actually run ("no false pass"). In order:
+
+1. **Groundwork (done 2026-10-20).** `conventions-reviewer` added; legacy
+   regex inventory and matcher removed.
+2. **The agreed gaps.** Stored attacks (the only benchmark miss); matching
+   each sanitizer to the kinds of operation it protects; not flagging routes
+   that only return constants; sign-in checks written inside a handler;
+   transactions written `` tx`...` ``; SQL-looking text in documentation
+   templates; XXE.
+3. **New proven checks** (input traced to the problem, so they are risks):
+   mass assignment (a request body saved whole, e.g. `User.create(req.body)`,
+   so a visitor can set `role` or `owner_id`); unsafe decoding of input
+   (extend the existing `unserialize` detection to unsafe YAML loading and
+   similar, and give `integrity/untrusted-deserialization` its detector);
+   webhooks acted on without checking their signature.
+4. **New project checks** (read from files, no tracing): secret keys in code
+   that runs in the browser (`NEXT_PUBLIC_`/`VITE_` names holding secrets, a
+   Supabase service-role key in client code); Supabase tables without row
+   level security and public storage buckets, from SQL migrations; session
+   cookies missing `HttpOnly`/`Secure`/`SameSite`; debug mode left on in
+   production settings; a Dockerfile that runs as root; uploads with no size
+   limit; packages nothing imports, names one typo away from a popular
+   package (fixed list in the code, no network), and packages with install
+   scripts (from the lockfile).
+5. **Leads only ("worth a look", never risks):** AI features where visitor
+   input reaches a model prompt and the model's answer reaches a database,
+   command or tool (prompt injection); routes that send whole tables back
+   without a limit.
+
+Not in this plan (each needs a product decision first): checking a user's
+live site (exposed files, headers, speed, search-engine basics; the
+reviewer's internet is off on purpose), secrets in git history (reviews get
+a snapshot without history), and branch protection (needs a wider GitHub
+App permission).
 
 ### Before anyone else uses it
 
@@ -432,6 +466,6 @@ removing `findAssignments` with the rest of the legacy exports. Add the
    inside a handler (Juice Shop `dataErasure`), transactions written
    `` tx`...` `` (see above), and SQL-looking text in documentation
    templates; routes whose handler returns only constants (nothing to
-   protect). Also remove the legacy exports listed above.
+   protect).
 
 See `docs/architecture.md` for the reasoning behind these decisions.
