@@ -110,12 +110,29 @@ const MONGO_METHOD =
 const SHELL = /^(?:execSync|exec|execFile|execFileSync|spawn|spawnSync)$/;
 const FILESYSTEM =
   /(?:^|\.)(?:readFile|readFileSync|writeFile|writeFileSync|appendFile|unlink|rm|rmSync|createReadStream|createWriteStream|open)$/;
+/** Turning text into running code. */
+const DYNAMIC_CODE = /^(?:eval|vm\.runIn(?:New|This)?Context|vm\.compileFunction)$/;
+
 /**
- * Turning text into running code. `unserialize` is node-serialize's: it
- * rebuilds functions from the text it is given, so whoever wrote the text
- * chooses what runs.
+ * Decoders that rebuild running code from the text they are given, so whoever
+ * wrote the text chooses what runs: node-serialize's `unserialize` (only when
+ * imported from node-serialize -- PHP-format `unserialize` libraries build
+ * plain values), js-yaml's `unsafeLoad`, funcster's `deepDeserialize`.
+ * js-yaml's `load` counts only with a full schema written in. In js-yaml 3 a
+ * plain `load` was already unsafe; that version is not told apart here, so
+ * it is missed rather than guessed.
  */
-const DYNAMIC_CODE = /^(?:eval|vm\.runIn(?:New|This)?Context|vm\.compileFunction)$|(?:^|\.)unserialize$/;
+const UNSAFE_DECODER = /(?:^|\.)(?:unsafeLoad|deepDeserialize)$/;
+const UNSERIALIZE = /(?:^|\.)unserialize$/;
+const YAML_LOAD = /(?:^|\.)(?:load|loadAll)$/;
+
+function fullSchema(options: Node | undefined): boolean {
+  if (options?.type !== "ObjectExpression") return false;
+  return ((options.properties ?? []) as Node[]).some((prop) => {
+    const key = (prop.key as Node | undefined)?.name;
+    return key === "schema" && (dottedName(prop.value as Node) ?? "").endsWith("FULL_SCHEMA");
+  });
+}
 
 /**
  * libxmljs (and libxmljs2) parse calls. They leave outside references alone
@@ -1591,6 +1608,10 @@ function sinkFor(
     return make("xml-entities", args[0] ? identifiersIn(args[0]) : []);
   }
   if (DYNAMIC_CODE.test(name)) return make("dynamic-code", operands);
+  const fromNodeSerialize = UNSERIALIZE.test(name) && importedFrom(parsed, name.split(".")[0]!, "node-serialize");
+  if (fromNodeSerialize || UNSAFE_DECODER.test(name) || (YAML_LOAD.test(name) && fullSchema(args[1]))) {
+    return make("unsafe-decoding", args[0] ? identifiersIn(args[0]) : []);
+  }
 
   {
     const parts = name.split(".");

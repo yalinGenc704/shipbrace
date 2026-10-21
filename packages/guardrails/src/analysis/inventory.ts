@@ -56,7 +56,12 @@ export type SinkKind =
    * A record saved from a whole object (`User.create(req.body)`) into a
    * table with fields a visitor must not choose, such as a role or an owner.
    */
-  | "mass-assignment";
+  | "mass-assignment"
+  /**
+   * Decoding a format that can rebuild running code from text: node-serialize
+   * `unserialize`, js-yaml `unsafeLoad` or a full-schema `load`, funcster.
+   */
+  | "unsafe-decoding";
 
 export type SanitizerKind =
   | "schema-validation"

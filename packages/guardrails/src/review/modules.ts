@@ -150,6 +150,7 @@ const SINK_GRADE: Record<string, Grade> = {
   nosql: "high",
   "xml-entities": "high",
   "mass-assignment": "high",
+  "unsafe-decoding": "high",
 };
 
 /**
@@ -174,6 +175,13 @@ const SINK_COPY: Record<string, { operation: string; impact: string; fix: string
       "Someone could run their own commands on the machine hosting your site, which usually means full control of it.",
     fix:
       "Pass the command and its arguments as a separate array rather than building one string, so the shell never interprets characters inside the value. Better still, use a library that does the job directly instead of running a command at all.",
+  },
+  "unsafe-decoding": {
+    operation: "decoding data in a way that can rebuild running code",
+    impact:
+      "Someone could send data that, once decoded, runs their own instructions on your server -- usually full control of it.",
+    fix:
+      "Decode with plain JSON.parse, or js-yaml 4's `load` (`safeLoad` in js-yaml 3), which only build plain values. node-serialize and funcster should never see outside data.",
   },
   "mass-assignment": {
     operation: "saving everything the visitor sent as a whole record",
@@ -573,6 +581,19 @@ const MODULES: ModuleShape[] = [
         detector: null,
       },
       {
+        id: "integrity/unsafe-decoding",
+        covers:
+          "no visitor input was traced into node-serialize, funcster, or js-yaml's unsafe loading; other decoders were not checked",
+        title: "Data from outside is never decoded in a way that can run code",
+        detector: "taint:unsafe-decoding",
+      },
+      {
+        id: "integrity/webhook-signatures",
+        covers: "every webhook route that reads what it is sent sits in a file that checks message signatures",
+        title: "Messages from other services are checked to be genuine",
+        detector: "webhooks:signature-checked",
+      },
+      {
         id: "integrity/third-party-scripts",
         title: "Scripts loaded from other websites cannot be swapped without you noticing",
         question:
@@ -764,6 +785,7 @@ const ITEM_FOR_RULE: Record<string, string> = {
   "injection/sql-string-building": "injection/database",
   "injection/shell-string-building": "injection/system-commands",
   "injection/unescaped-html": "injection/page-content",
+  "integrity/unsafe-decoding": "integrity/unsafe-decoding",
   "auth/permissive-cors": "config/cors",
   "auth/token-in-localstorage": "auth/session-storage",
 };
@@ -779,6 +801,7 @@ const ITEM_FOR_SINK: Record<string, string> = {
   "outbound-request": "ssrf/url-allowlist",
   "xml-entities": "injection/xml-entities",
   "mass-assignment": "access-control/mass-assignment",
+  "unsafe-decoding": "integrity/unsafe-decoding",
 };
 
 /**
@@ -792,6 +815,7 @@ const UNPROVEN_RULES = new Set([
   "injection/sql-string-building",
   "injection/shell-string-building",
   "injection/unescaped-html",
+  "integrity/unsafe-decoding",
 ]);
 
 function unprovenFromFinding(finding: Finding): Unproven {

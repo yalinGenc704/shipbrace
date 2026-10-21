@@ -1431,6 +1431,59 @@ export const CASES: BenchCase[] = [
     ],
   },
 
+  // --- decoders that can rebuild code ----------------------------------------
+  {
+    id: "yaml-unsafe-load",
+    tests: "An imported settings file in YAML is read with js-yaml's unsafeLoad.",
+    files: [
+      file("server/src/index.ts", [
+        'import yaml from "js-yaml";',
+        ...HEAD,
+        'app.post("/settings/import", async (c) => {',
+        "  const text = await c.req.text();",
+        "  const settings = yaml.unsafeLoad(text); // [A]",
+        "  return c.json({ keys: Object.keys(settings) });",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/settings/import",
+        parameter: "text",
+        sink: "unsafe-decoding",
+        real: true,
+        why: "unsafeLoad can build working functions from the YAML a visitor sends.",
+      },
+    ],
+  },
+
+  {
+    id: "yaml-default-load",
+    tests: "The same import, read with js-yaml's default load, which only builds plain values.",
+    files: [
+      file("server/src/index.ts", [
+        'import yaml from "js-yaml";',
+        ...HEAD,
+        'app.post("/settings/import", async (c) => {',
+        "  const text = await c.req.text();",
+        "  const settings = yaml.load(text); // [A]",
+        "  return c.json({ keys: Object.keys(settings) });",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/settings/import",
+        parameter: "text",
+        sink: "unsafe-decoding",
+        real: false,
+        why: "The default schema turns YAML into plain text, numbers and lists; nothing in it can run.",
+      },
+    ],
+  },
+
   // --- redirects -----------------------------------------------------------
   {
     id: "redirect-open",
@@ -1811,7 +1864,7 @@ export const CASES: BenchCase[] = [
         marker: "A",
         door: "/products/import",
         parameter: "files",
-        sink: "dynamic-code",
+        sink: "unsafe-decoding",
         real: true,
         why: "The file can contain a function that runs on your server as it is read.",
       },

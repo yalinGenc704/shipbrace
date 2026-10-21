@@ -75,6 +75,18 @@ const COPY: Partial<Record<SinkKind, SinkCopy>> = {
       "way can be expressed without turning data into instructions.",
     learnMore: "/explain/dynamic-code",
   },
+  "unsafe-decoding": {
+    ruleId: "integrity/unsafe-decoding",
+    severity: "critical",
+    confidence: "likely",
+    title: "Data is decoded in a way that can rebuild running code",
+    why:
+      "This decoder can turn the text it is given back into working functions. If that text " +
+      "ever comes from outside, whoever wrote it chooses what your application runs.",
+    fix:
+      "Use plain JSON.parse for data, or js-yaml 4's load (safeLoad in js-yaml 3), which only build plain values.",
+    learnMore: "/explain/unsafe-decoding",
+  },
   html: {
     ruleId: "injection/unescaped-html",
     severity: "high",

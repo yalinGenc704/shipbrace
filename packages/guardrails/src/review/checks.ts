@@ -303,6 +303,80 @@ const massAssignmentTables: ProjectCheck = {
   },
 };
 
+// --- A08: messages from other services must be checked as genuine -----------
+
+/** Routes another service posts to. */
+const WEBHOOK_PATH = /(?:^|\/)(?:webhooks?|hooks?)(?:\/|$)/i;
+
+/**
+ * Signs that a message's signature is checked: Stripe's `constructEvent`, an
+ * HMAC compared in constant time, a webhook library's own check (Octokit,
+ * Svix, Shopify, Paddle, Razorpay, Twilio), or a signature header being read.
+ * A bare `.verify(` is not enough: `jwt.verify` in a login route proves
+ * nothing about the webhook.
+ */
+const VERIFIES =
+  /constructEvent|createHmac|timingSafeEqual|(?:webhooks?|wh|svix|Webhook)\.(?:verify|validate|unmarshal)\s*\(|verifyAndReceive|verify\w*Signature|validate\w*Signature|verifyWebhook|validateRequest|twilio\.webhook|subtle\.verify|x-hub-signature|stripe-signature|svix-signature|x-\w+-signature|x-signature/i;
+
+/**
+ * A shared secret sent in a header and compared (`authorization !== `Bearer
+ * ${SECRET}``) is also a check, but text cannot show how good one is.
+ */
+const SHARED_SECRET =
+  /header\(\s*["'`](?:authorization|x-[\w-]*(?:secret|token|key))["'`]|headers(?:\.|\[\s*["'`])(?:authorization|x-[\w-]*(?:secret|token|key))/i;
+
+/**
+ * A webhook route acts on what another service says happened -- a payment
+ * went through, a push arrived. Without checking the message's signature,
+ * anyone who finds the address can send a fake one.
+ *
+ * Reported only when nothing anywhere in the project checks a signature: a
+ * check can live in middleware or another file, and guessing that it is
+ * missing would be a warning on correct code. When some files check and the
+ * webhook's own file does not, the item goes back to the user.
+ */
+const webhookSignatures: ProjectCheck = {
+  id: "webhooks:signature-checked",
+  itemId: "integrity/webhook-signatures",
+
+  run(snapshot, inventory) {
+    const hooks = inventory.doors.filter(
+      (door) =>
+        door.method === "POST" && WEBHOOK_PATH.test(door.path) &&
+        inventory.sources.some((s) => s.doorId === door.id && s.kind === "request-body"),
+    );
+    if (hooks.length === 0) {
+      return { status: "not-applicable", reason: "No webhook route that reads what it is sent was found." };
+    }
+
+    const files = sourceFiles(snapshot);
+    const fileOf = (path: string): SourceFile | undefined => files.find((f) => f.path === path);
+    const unchecked = hooks.filter((door) => !VERIFIES.test(fileOf(door.location.path)?.content ?? ""));
+    if (unchecked.length === 0) return { status: "pass" };
+    if (anyMatch(files, VERIFIES) || anyMatch(files, SHARED_SECRET)) {
+      return {
+        status: "not-applicable",
+        reason:
+          "Some code checks message signatures or a shared secret, but not plainly in the same file as every webhook route, so whether each one is checked could not be confirmed.",
+      };
+    }
+
+    return {
+      status: "risks",
+      risks: unchecked.map((door) =>
+        risk(
+          "integrity/webhook-unsigned",
+          "high",
+          `${door.method} ${door.path} (${door.location.path} line ${door.location.line}) acts on what it is sent, and nothing in this project checks that a message really came from the service that is meant to send it.`,
+          "Anyone who finds this address can send a made-up message -- a payment that never happened, an order marked paid -- and the app will act on it.",
+          "Check the signature the service sends with every message before doing anything: for Stripe, `stripe.webhooks.constructEvent(rawBody, signature, secret)`; for GitHub, an HMAC of the raw body compared with `crypto.timingSafeEqual`. Refuse the message if it does not match.",
+          door.location,
+        )
+      ),
+    };
+  },
+};
+
 // --- A03: a lockfile must exist ----------------------------------------------
 
 const lockfilePresent: ProjectCheck = {
@@ -719,6 +793,7 @@ export const projectChecks: ProjectCheck[] = [
   pinnedVersions,
   lockfilePresent,
   massAssignmentTables,
+  webhookSignatures,
   passwordStorage,
   sessionExpiry,
   rateLimiting,

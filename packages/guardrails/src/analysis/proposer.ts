@@ -64,7 +64,7 @@ export const PROPOSAL_SCHEMA = {
             type: "string",
             enum: [
               "sql", "shell", "filesystem", "html", "redirect", "outbound-request", "dynamic-code",
-              "ownership", "nosql", "xml-entities", "mass-assignment",
+              "ownership", "nosql", "xml-entities", "mass-assignment", "unsafe-decoding",
             ],
           },
           rationale: { type: "string", description: "One sentence: why this reaches the sink." },

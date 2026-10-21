@@ -302,3 +302,38 @@ test("leaving the password out of the lookup passes", async () => {
   }], "crypto/no-password-hashes-sent");
   assert.equal(item.status, "pass");
 });
+
+test("a webhook nobody checks the signature of is reported; a checked one passes", () => {
+  const hook = 'app.post("/api/webhooks/stripe", async (c) => { const event = await c.req.json(); await markPaid(event); return c.json({ ok: true }); });';
+  const open = outcomes([{ path: "server/src/index.ts", content: hook }]).get("integrity/webhook-signatures");
+  assert.equal(open?.status, "risks");
+  const checked = outcomes([{
+    path: "server/src/index.ts",
+    content: `const sig = c.req.header("stripe-signature"); stripe.webhooks.constructEvent(raw, sig, secret);\n${hook}`,
+  }]).get("integrity/webhook-signatures");
+  assert.equal(checked?.status, "pass");
+  const elsewhere = outcomes([
+    { path: "server/src/index.ts", content: hook },
+    { path: "server/src/verify.ts", content: "export const ok = (raw, sig) => crypto.timingSafeEqual(createHmac('sha256', k).update(raw).digest(), sig);" },
+  ]).get("integrity/webhook-signatures");
+  assert.equal(elsewhere?.status, "not-applicable");
+  const none = outcomes([{ path: "server/src/index.ts", content: 'app.get("/x", (c) => c.json({}));' }]).get("integrity/webhook-signatures");
+  assert.equal(none?.status, "not-applicable");
+});
+
+test("a login's jwt.verify does not pass a webhook, and other real checks are not risks", () => {
+  const hook = 'app.post("/api/webhooks/orders", async (c) => { const event = await c.req.json(); await markPaid(event); return c.json({ ok: true }); });';
+  const status = (extra: string) =>
+    outcomes([{ path: "server/src/index.ts", content: `${extra}\n${hook}` }]).get("integrity/webhook-signatures")?.status;
+  assert.equal(status('app.post("/login", async (c) => { jwt.verify(token, key); });'), "risks");
+  assert.equal(status("const ok = await shopify.webhooks.validate({ rawBody, rawRequest });"), "pass");
+  assert.equal(status("razorpay.validateWebhookSignature(body, signature, secret);"), "pass");
+  assert.equal(status('if (c.req.header("authorization") !== `Bearer ${env.HOOK_SECRET}`) return c.text("no", 401);'), "not-applicable");
+});
+
+test("unserialize counts only when it comes from node-serialize", () => {
+  const kinds = (prelude: string) =>
+    buildInventory(snapshotFromFiles([{ path: "server/a.js", content: `${prelude}\nconst v = serialize.unserialize(text);` }])).sinks.map((s) => s.kind);
+  assert.deepEqual(kinds('const serialize = require("node-serialize");'), ["unsafe-decoding"]);
+  assert.deepEqual(kinds('const serialize = require("php-serialize");'), []);
+});
