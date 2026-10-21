@@ -157,10 +157,30 @@ const committedDotenv: Rule = {
 };
 
 /**
- * Vite inlines every VITE_-prefixed variable into the browser bundle at build
- * time. Putting a server-side secret behind that prefix ships it to every
- * visitor -- and it reads as "correct" because the app works.
+ * Build tools copy variables with a "public" prefix into the JavaScript sent
+ * to every visitor: Vite's `VITE_`, Next's `NEXT_PUBLIC_`, Create React App's
+ * `REACT_APP_`, Expo's `EXPO_PUBLIC_`, SvelteKit's `PUBLIC_`. A secret behind
+ * one of those prefixes ships to the world -- and reads as "correct" because
+ * the app works. Supabase's service-role key in browser code is the same
+ * mistake: it bypasses every row rule.
+ *
+ * Server-side files (under `api/` or `server/`, route handlers, `.server.`)
+ * can read such names without exposing them, so they are left out.
  */
+const PUBLIC_SECRET =
+  /(?:import\.meta\.env|process\.env)\.((?:VITE_|NEXT_PUBLIC_|REACT_APP_|EXPO_PUBLIC_|NUXT_PUBLIC_|PUBLIC_)(\w*(?:SECRET|TOKEN|KEY|PASSWORD|CREDENTIAL|SERVICE_ROLE)\w*))/i;
+const SERVER_SIDE = /(?:^|\/)(?:api|server|functions|supabase\/functions)\/|(?:^|\/)route\.[cm]?[jt]sx?$|\.server\.[cm]?[jt]sx?$/;
+/**
+ * Keys that are public by design: the provider expects them in the browser
+ * and limits what they can do (by domain, by read-only access, by rules).
+ */
+const PUBLIC_BY_DESIGN =
+  /PUBLIC|PUBLISHABLE|ANON|SITE_KEY|FIREBASE_\w*KEY|MAPBOX|MAPS|POSTHOG|ALGOLIA_SEARCH|SEARCH_ONLY|SENTRY|CLIENT_ID|MEASUREMENT_ID|AMPLITUDE|SEGMENT|MIXPANEL|PLAUSIBLE|TURNSTILE|HCAPTCHA|RECAPTCHA|PUSHER_KEY|INTERCOM|CRISP/i;
+/** Files that clearly run in the browser; the service-role check runs only there. */
+const BROWSER_CODE = /^\s*["']use client["']/m;
+const BROWSER_PATH = /(?:^|\/)(?:client|frontend|web)\/src\/|(?:^|\/)src\/(?:components|hooks)\//;
+const SERVICE_ROLE = /createClient\s*\([^;]{0,400}?(?:SERVICE_ROLE|service_role|serviceRole)/;
+
 const secretInClientBundle: Rule = {
   id: "secrets/client-exposed-env",
   category: "secrets",
@@ -168,12 +188,13 @@ const secretInClientBundle: Rule = {
   appliesTo: (p) => isSource(p) && !isTestPath(p),
 
   check(file) {
-    const re = /import\.meta\.env\.(VITE_\w*(?:SECRET|TOKEN|KEY|PASSWORD|CREDENTIAL)\w*)/i;
+    if (SERVER_SIDE.test(file.path) && !/^\s*["']use client["']/m.test(file.content)) return [];
 
-    return scanLines(file, re).flatMap((hit): Finding[] => {
+    const exposed = scanLines(file, PUBLIC_SECRET).flatMap((hit): Finding[] => {
       const name = hit.match[1]!;
       // Publishable keys are deliberately client-side; flagging them is noise.
-      if (/PUBLIC|PUBLISHABLE|ANON/i.test(name)) return [];
+      // Judged on the part after the prefix: NEXT_PUBLIC_ itself says PUBLIC.
+      if (PUBLIC_BY_DESIGN.test(hit.match[2]!)) return [];
 
       return [{
         ruleId: secretInClientBundle.id,
@@ -182,19 +203,43 @@ const secretInClientBundle: Rule = {
         confidence: "likely",
         title: `\`${name}\` is bundled into code that runs in the browser`,
         why:
-          `Anything named \`VITE_*\` is copied into the JavaScript sent to every visitor, ` +
+          `Variables with this prefix are copied into the JavaScript sent to every visitor, ` +
           `so \`${name}\` is readable by anyone who opens developer tools. Values that ` +
           `grant access must be used on the server, where the browser cannot see them.`,
         location: locate(file, hit),
         fix: {
           kind: "manual",
           description:
-            `Move the call that uses \`${name}\` into a server route, and have the browser ` +
-            `call that route instead of the third-party service directly.`,
+            `Rename it without the public prefix, move the call that uses it into a server ` +
+            `route, and have the browser call that route instead of the service directly.`,
         },
         learnMore: "/explain/client-exposed-env",
       }];
     });
+
+    // Only in code that is plainly browser code: the same call in a server
+    // file, an admin helper or a seed script is how the key is meant to be used.
+    const inBrowser = BROWSER_CODE.test(file.content) || (BROWSER_PATH.test(file.path) && !SERVER_SIDE.test(file.path));
+    const role = inBrowser ? SERVICE_ROLE.exec(file.content) : null;
+    const serviceRole = !role ? [] : [{ line: file.content.slice(0, role.index).split("\n").length }].map((hit): Finding => ({
+      ruleId: secretInClientBundle.id,
+      category: "secrets",
+      severity: "critical",
+      confidence: "likely",
+      title: "Supabase's service-role key is used in code that runs in the browser",
+      why:
+        "The service-role key ignores every row rule in your database. In browser code anyone " +
+        "can copy it and read or change every row of every table.",
+      location: { path: file.path, line: hit.line },
+      fix: {
+        kind: "manual",
+        description:
+          "Use the anon key in the browser, with row level security on every table. Keep the " +
+          "service-role key on the server only, and rotate it now in the Supabase dashboard.",
+      },
+      learnMore: "/explain/client-exposed-env",
+    }));
+    return [...exposed, ...serviceRole];
   },
 };
 

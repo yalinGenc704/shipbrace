@@ -1,6 +1,7 @@
 import { dottedName, locationOf, parseFile, walk, type Node } from "../analysis/ast.ts";
 import type { Inventory } from "../analysis/inventory.ts";
 import { modelFields } from "../analysis/schemas.ts";
+import { fileChecks } from "./project-files.ts";
 import type { CodeLocation, RepoSnapshot, SourceFile } from "../types.ts";
 import { isSource, isTestPath, redact } from "../util.ts";
 import type { Grade, Risk } from "./modules.ts";
@@ -22,10 +23,11 @@ import type { Grade, Risk } from "./modules.ts";
  * and the item goes back to the user with an explanation.
  */
 
+/** `notice`: something worth knowing that is not a problem (shown on the item). */
 export type CheckOutcome =
-  | { status: "pass" }
-  | { status: "risks"; risks: Risk[] }
-  | { status: "not-applicable"; reason: string };
+  | { status: "pass"; notice?: string }
+  | { status: "risks"; risks: Risk[]; notice?: string }
+  | { status: "not-applicable"; reason: string; notice?: string };
 
 export interface ProjectCheck {
   /** Stable name, shown as the detector on a passing item. */
@@ -794,6 +796,7 @@ export const projectChecks: ProjectCheck[] = [
   lockfilePresent,
   massAssignmentTables,
   webhookSignatures,
+  ...fileChecks,
   passwordStorage,
   sessionExpiry,
   rateLimiting,

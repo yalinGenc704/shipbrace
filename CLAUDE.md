@@ -74,7 +74,7 @@ everywhere:
 # PostgreSQL 18 (Homebrew, not started at login). Databases: shipbrace, shipbrace_test.
 LC_ALL=en_US.UTF-8 /opt/homebrew/opt/postgresql@18/bin/pg_ctl -D /opt/homebrew/var/postgresql@18 -l /opt/homebrew/var/log/postgresql@18.log start
 
-# all tests (expect 248 pass). Without TEST_DATABASE_URL the 6 database tests
+# all tests (expect 257 pass). Without TEST_DATABASE_URL the 6 database tests
 # are skipped and say so; it must name a database ending in _test (it is wiped).
 # CI (.github/workflows/ci.yml) runs typecheck, lint, tests and build on every push.
 TEST_DATABASE_URL=postgres:///shipbrace_test npm test
@@ -208,7 +208,25 @@ the server with the AI step, start it with an extra `--env-file` that sets
   `timingSafeEqual`, a webhook library's verify/validate, a signature header);
   a risk only when nothing in the project checks signatures or a shared-secret
   header; otherwise handed back. A bare `.verify(` (such as `jwt.verify`)
-  does not count. The starter kit is held to its
+  does not count.
+- **Project file checks (2026-10-20, `review/project-files.ts`).** Supabase
+  tables (from SQL migrations, comments and `$$` bodies ignored) without
+  row level security (`access-control/database-rules`; public buckets are a
+  notice); the final Dockerfile stage running as root, following `FROM
+  <stage>` (`config/container-user`); `NODE_ENV=development`/`DEBUG` in the
+  final Dockerfile stage or a compose file not named dev/local/test/override
+  (`config/debug-off`); multer without `limits` (`design/upload-limits`);
+  packages one edit from ~100 popular names, handed back rather than called
+  risks, with install scripts and unused dependencies as a notice
+  (`components/suspicious-packages`). Rules: secrets behind `NEXT_PUBLIC_`/
+  `REACT_APP_`/`EXPO_PUBLIC_`/`NUXT_PUBLIC_`/`PUBLIC_` as well as `VITE_`
+  (keys public by design such as Firebase, Maps, reCAPTCHA, PostHog are
+  skipped), and Supabase's service-role key in plainly browser code
+  (`"use client"`, `client|frontend|web/src/`, `src/components|hooks/`);
+  `auth/cookie-readable-by-scripts`: `res.cookie`/`reply.setCookie`/Hono
+  `setCookie` of a login cookie without `httpOnly` (not csrf/xsrf cookies,
+  clearing on sign-out, spread options, SvelteKit or Koa). Missing `Secure`
+  is not reported. The starter kit is held to its
   own review (`packages/scaffold/test/self-review.test.ts`): no warnings
   except the lockfile a fresh app gets on first install.
 - **"Checked" says what was checked** (`ActionItem.covers`). Error pages hand
@@ -282,7 +300,7 @@ the server with the AI step, start it with an extra `--env-file` that sets
   across files. It does not follow method calls (`obj.fn(x)`), and a helper
   name defined twice, unknown code, or destructured parameters make the
   claim `undecidable` (never `no-path`).
-- 16 of 42 checklist items have no detector and are left to the user (counted 2026-10-20). The
+- 16 of 47 checklist items have no detector and are left to the user (counted 2026-10-20). The
   checklist follows OWASP Top 10:2025; the four items added for its new
   categories (A03 supply chain, A10 exceptional conditions) have no detector yet.
 - **GitHub App works end to end (first live run 2026-10-01):** App ID 5157570
@@ -491,7 +509,7 @@ item only once it can actually run ("no false pass"). In order:
    (extend the existing `unserialize` detection to unsafe YAML loading and
    similar, and give `integrity/untrusted-deserialization` its detector);
    webhooks acted on without checking their signature.
-4. **New project checks** (read from files, no tracing): secret keys in code
+4. **New project checks** (done 2026-10-20; read from files, no tracing): secret keys in code
    that runs in the browser (`NEXT_PUBLIC_`/`VITE_` names holding secrets, a
    Supabase service-role key in client code); Supabase tables without row
    level security and public storage buckets, from SQL migrations; session

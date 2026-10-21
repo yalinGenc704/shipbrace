@@ -337,3 +337,106 @@ test("unserialize counts only when it comes from node-serialize", () => {
   assert.deepEqual(kinds('const serialize = require("node-serialize");'), ["unsafe-decoding"]);
   assert.deepEqual(kinds('const serialize = require("php-serialize");'), []);
 });
+
+const itemStatus = (files: File[], item: string) => outcomes(files).get(item)?.status;
+const manifest = (deps: Record<string, string>) => ({ path: "package.json", content: JSON.stringify({ name: "app", dependencies: deps }) });
+
+test("Supabase tables without row rules are reported; secured ones pass", () => {
+  const files = (sql: string) => [{ path: "supabase/config.toml", content: "" }, { path: "supabase/migrations/1.sql", content: sql }];
+  assert.equal(itemStatus(files("create table public.notes (id int, body text);"), "access-control/database-rules"), "risks");
+  assert.equal(
+    itemStatus(files("create table public.notes (id int);\nalter table public.notes enable row level security;"), "access-control/database-rules"),
+    "pass",
+  );
+  assert.equal(itemStatus(files("create table private.audit (id int);"), "access-control/database-rules"), "pass");
+  assert.equal(itemStatus([{ path: "db/1.sql", content: "create table notes (id int);" }], "access-control/database-rules"), "not-applicable");
+});
+
+test("a container that runs as root is reported; USER or a nonroot image passes", () => {
+  const docker = (content: string) => [{ path: "Dockerfile", content }];
+  assert.equal(itemStatus(docker("FROM node:22\nCOPY . .\nCMD node server.js"), "config/container-user"), "risks");
+  assert.equal(itemStatus(docker("FROM node:22 AS build\nUSER node\nFROM node:22\nCMD node s.js"), "config/container-user"), "risks");
+  assert.equal(itemStatus(docker("FROM node:22\nUSER node\nCMD node s.js"), "config/container-user"), "pass");
+  assert.equal(itemStatus(docker("FROM gcr.io/distroless/nodejs22-debian12:nonroot\nCMD [\"s.js\"]"), "config/container-user"), "pass");
+  assert.equal(itemStatus([], "config/container-user"), "not-applicable");
+});
+
+test("development mode in what gets deployed is reported", () => {
+  assert.equal(itemStatus([{ path: "Dockerfile", content: "FROM node:22\nENV NODE_ENV=development\nUSER node" }], "config/debug-off"), "risks");
+  assert.equal(itemStatus([{ path: "Dockerfile", content: "FROM node:22\nENV NODE_ENV=production\nUSER node" }], "config/debug-off"), "pass");
+  assert.equal(itemStatus([{ path: "compose.dev.yaml", content: "environment:\n  NODE_ENV: development" }], "config/debug-off"), "not-applicable");
+});
+
+test("multer without a size limit is reported", () => {
+  const code = (opts: string) => [{ path: "server/up.js", content: `const multer = require("multer");\nconst upload = multer(${opts});` }];
+  assert.equal(itemStatus(code('{ dest: "uploads/" }'), "design/upload-limits"), "risks");
+  assert.equal(itemStatus(code('{ dest: "uploads/", limits: { fileSize: 1e6 } }'), "design/upload-limits"), "pass");
+  assert.equal(itemStatus(code("options"), "design/upload-limits"), "pass");
+});
+
+test("a package one letter from a popular one is handed back; real names pass", () => {
+  assert.equal(itemStatus([manifest({ expres: "1.0.0" })], "components/suspicious-packages"), "not-applicable");
+  assert.equal(itemStatus([manifest({ lodahs: "1.0.0" })], "components/suspicious-packages"), "not-applicable");
+  assert.equal(itemStatus([manifest({ express: "5.1.0", preact: "10.0.0", redux: "5.0.0" })], "components/suspicious-packages"), "pass");
+});
+
+test("public-prefixed secrets and the Supabase service key in browser code are risks", async () => {
+  const { scan } = await import("../src/engine.ts");
+  const ids = (path: string, content: string) =>
+    scan(snapshotFromFiles([{ path, content }])).findings.map((f) => f.ruleId);
+  assert.ok(ids("app/page.tsx", "const k = process.env.NEXT_PUBLIC_STRIPE_SECRET_KEY;").includes("secrets/client-exposed-env"));
+  assert.deepEqual(ids("app/page.tsx", "const k = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;"), []);
+  assert.deepEqual(ids("app/api/pay/route.ts", "const k = process.env.NEXT_PUBLIC_STRIPE_SECRET_KEY;"), []);
+  assert.ok(ids("web/src/components/Admin.tsx", "export const db = createClient(url, process.env.SUPABASE_SERVICE_ROLE_KEY);").includes("secrets/client-exposed-env"));
+});
+
+test("a login cookie set without httpOnly is a risk", async () => {
+  const { scan } = await import("../src/engine.ts");
+  const ids = (content: string) => scan(snapshotFromFiles([{ path: "server/a.js", content }])).findings.map((f) => f.ruleId);
+  assert.ok(ids('res.cookie("session", id);').includes("auth/cookie-readable-by-scripts"));
+  assert.ok(ids('setCookie(c, "auth_token", t, { secure: true });').includes("auth/cookie-readable-by-scripts"));
+  assert.deepEqual(ids('res.cookie("session", id, { httpOnly: true, secure: true });'), []);
+  assert.deepEqual(ids('res.cookie("theme", "dark");'), []);
+  assert.deepEqual(ids('res.cookie("session", id, cookieOptions);'), []);
+});
+
+test("step 4 checks stay quiet on the reviewer's correct-code examples", async () => {
+  const { scan } = await import("../src/engine.ts");
+  const ids = (path: string, content: string) => scan(snapshotFromFiles([{ path, content }])).findings.map((f) => f.ruleId);
+  // Server-side uses of the service-role key, and keys that are public by design.
+  for (const path of ["lib/supabaseAdmin.ts", "scripts/seed.ts", "app/actions.ts", "src/db.ts"]) {
+    assert.deepEqual(ids(path, "export const admin = createClient(url, process.env.SUPABASE_SERVICE_ROLE_KEY);"), [], path);
+  }
+  assert.ok(ids("app/admin.tsx", '"use client";\nconst db = createClient(url,\n  process.env.SUPABASE_SERVICE_ROLE_KEY);').includes("secrets/client-exposed-env"));
+  for (const name of ["NEXT_PUBLIC_RECAPTCHA_SITE_KEY", "NEXT_PUBLIC_MAPBOX_TOKEN", "NEXT_PUBLIC_FIREBASE_API_KEY", "NEXT_PUBLIC_POSTHOG_KEY"]) {
+    assert.deepEqual(ids("app/page.tsx", `const k = process.env.${name};`), [], name);
+  }
+  // Cookies: defaults that already protect, cookies meant for scripts, sign-out, spreads.
+  const cookie = (code: string) => ids("server/a.js", code).filter((r) => r === "auth/cookie-readable-by-scripts");
+  assert.deepEqual(cookie('cookies.set("session", id, { path: "/" });'), []);
+  assert.deepEqual(cookie('ctx.cookies.set("session", id);'), []);
+  assert.deepEqual(cookie('res.cookie("XSRF-TOKEN", t);'), []);
+  assert.deepEqual(cookie('res.cookie("session", "", { maxAge: 0 });'), []);
+  assert.deepEqual(cookie('res.cookie("session", id, { ...COOKIE_OPTS, maxAge });'), []);
+  assert.deepEqual(cookie('res.cookie("session_expires_at", t);'), []);
+  assert.equal(cookie('setCookie(c, "session", token);').length, 1, "Hono with no options sets no httpOnly");
+});
+
+test("step 4 file checks follow stages, comments and dev files", () => {
+  const docker = (content: string, path = "Dockerfile") => itemStatus([{ path, content }], "config/container-user");
+  assert.equal(docker("FROM node:22 AS base\nUSER node\nFROM base\nCMD node s.js"), "pass");
+  assert.equal(docker("FROM --platform=linux/amd64 gcr.io/distroless/nodejs22:nonroot\nCMD [\"s.js\"]"), "pass");
+  assert.equal(docker("FROM node:22\nCMD node s.js", "Dockerfile.dev"), "not-applicable");
+  const debug = (content: string) => itemStatus([{ path: "Dockerfile", content }], "config/debug-off");
+  assert.equal(debug("FROM node:22 AS build\nENV NODE_ENV=development\nRUN npm ci\nFROM node:22\nENV NODE_ENV=production\nUSER node"), "pass");
+  assert.equal(debug("FROM node:22\n# NODE_ENV=development for local\nARG NODE_ENV=development\nUSER node"), "pass");
+  const rls = (sql: string) =>
+    itemStatus([{ path: "supabase/config.toml", content: "" }, { path: "supabase/migrations/1.sql", content: sql }], "access-control/database-rules");
+  assert.equal(rls("-- create table public.old (id int);\ncreate function f() returns void as $$ begin create table tmp (id int); end $$ language plpgsql;"), "pass");
+  assert.equal(rls("create table public.n (id int);\nalter table private.n enable row level security;"), "risks");
+  assert.equal(itemStatus([manifest({ colord: "2.9.3", sqlite: "5.1.1" })], "components/suspicious-packages"), "pass");
+  assert.equal(
+    itemStatus([{ path: "server/up.js", content: 'const multer = require("multer");\nconst upload = multer({ ...base });' }], "design/upload-limits"),
+    "pass",
+  );
+});

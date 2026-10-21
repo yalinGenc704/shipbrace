@@ -316,6 +316,12 @@ const MODULES: ModuleShape[] = [
         detector: "taint:mass-assignment",
       },
       {
+        id: "access-control/database-rules",
+        covers: "every table created in this project's Supabase SQL migrations has row level security; tables made in the dashboard were not checked",
+        title: "Database rows the browser can reach are locked by row rules",
+        detector: "supabase:row-level-security",
+      },
+      {
         id: "access-control/admin-only",
         covers: "every page with admin in its address checks the visitor's role on the server",
         title: "Admin pages check that the visitor is an administrator",
@@ -354,6 +360,18 @@ const MODULES: ModuleShape[] = [
     summary:
       "The code can be correct while the settings around it are not -- an overly permissive sharing rule, a debug mode left on, a default password never changed.",
     items: [
+      {
+        id: "config/container-user",
+        covers: "the last stage of each Dockerfile runs as a user other than root",
+        title: "The app's container does not run as the all-powerful root user",
+        detector: "docker:non-root-user",
+      },
+      {
+        id: "config/debug-off",
+        covers: "the Dockerfile and compose files used to run the app do not turn on development or debug mode; settings in a hosting dashboard were not checked",
+        title: "Debug mode is off where the app runs for real",
+        detector: "deploy:debug-off",
+      },
       { id: "config/cors", covers: "your API does not accept calls from every website", title: "Only your own sites can call your API", detector: "rules:cors" },
       {
         id: "config/security-headers",
@@ -388,6 +406,12 @@ const MODULES: ModuleShape[] = [
         question:
           "If this could not be checked automatically, run your package manager's audit command (for example npm audit) and review what it reports.",
         detector: "osv:known-vulnerabilities",
+      },
+      {
+        id: "components/suspicious-packages",
+        covers: "no package is named one letter away from one of about 100 popular packages",
+        title: "No package looks like a misspelled copy of a popular one",
+        detector: "manifest:package-names",
       },
       {
         id: "components/abandoned",
@@ -517,6 +541,12 @@ const MODULES: ModuleShape[] = [
         question:
           "Anything that costs you money, sends a message, or checks a password should refuse to run thousands of times a minute from one source. Confirm which of your actions have a limit.",
         detector: "server:rate-limiting-present",
+      },
+      {
+        id: "design/upload-limits",
+        covers: "every multer upload handler sets a size limit; other upload libraries were not checked",
+        title: "Uploads have a size limit",
+        detector: "uploads:size-limit",
       },
       {
         id: "design/business-rules",
@@ -788,6 +818,7 @@ const ITEM_FOR_RULE: Record<string, string> = {
   "integrity/unsafe-decoding": "integrity/unsafe-decoding",
   "auth/permissive-cors": "config/cors",
   "auth/token-in-localstorage": "auth/session-storage",
+  "auth/cookie-readable-by-scripts": "auth/session-storage",
 };
 
 const ITEM_FOR_SINK: Record<string, string> = {
