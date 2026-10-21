@@ -664,8 +664,11 @@ export function verifyOwnership(claim: OwnershipClaim, inventory: Inventory): Ve
     };
   }
 
+  // Saved data picks a record only indirectly; ownership is about what the
+  // visitor sends now, so stored values are left out (errs to silence).
   const sources = inventory.sources.filter(
     (s) =>
+      s.kind !== "stored-data" &&
       belongsTo(door, s) &&
       (mentions(s.expression, claim.parameter) || mentions(claim.parameter, s.binding ?? "")),
   );

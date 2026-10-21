@@ -28,7 +28,13 @@ export type SourceKind =
   | "external-response"
   | "uploaded-file"
   | "repo-content"
-  | "environment";
+  | "environment"
+  /**
+   * Read back from a table or collection that a visitor's input is saved
+   * into elsewhere in the app: a comment, a profile, a message. Whoever wrote
+   * it controls it, for every later reader ("stored" attacks).
+   */
+  | "stored-data";
 
 export type SinkKind =
   | "sql"
@@ -180,4 +186,33 @@ export interface Inventory {
   functions?: FunctionDef[];
   calls?: CallSite[];
   identities?: IdentityRead[];
+  /** Reads and writes of named tables and collections, for stored data. */
+  stores?: StoreAccess[];
+}
+
+/**
+ * One read or write of a named table or collection: a SQL statement naming
+ * it, or a model method (`Comment.create`, `prisma.comment.findMany`).
+ */
+export interface StoreAccess {
+  id: string;
+  /** Table, model or collection name, lower case with a trailing "s" removed. */
+  store: string;
+  mode: "read" | "write";
+  /**
+   * For a write: each value saved, with its column ("*" when the column is
+   * not named). Values that only choose which row changes are not listed.
+   */
+  written?: Array<{ column: string; names: string[]; range: [number, number] }>;
+  /** For a write: every column it sets, whoever's value goes in ("*" when unnamed). */
+  touches?: string[];
+  /** For a read: the columns returned, or "*" for all of them. */
+  columns?: string[];
+  /** For a read: the variable the result was put in, when there is one. */
+  binding?: string;
+  expression: string;
+  /** Character range of the whole statement. */
+  range: [number, number];
+  location: CodeLocation;
+  doorId?: string;
 }

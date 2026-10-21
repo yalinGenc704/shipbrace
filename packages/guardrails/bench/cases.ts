@@ -745,6 +745,249 @@ export const CASES: BenchCase[] = [
     ],
   },
 
+  // --- stored attacks: saved by one visitor, shown to the next ----------------
+  {
+    id: "stored-comment-raw",
+    tests: "A comment form saves what visitors type; the comments page pastes it into the page as-is.",
+    files: [
+      file("server/src/index.ts", [
+        ...HEAD,
+        'app.post("/comments", async (c) => {',
+        "  const body = await c.req.json();",
+        '  await c.env.DB.prepare("INSERT INTO comments (author, text) VALUES (?, ?)").bind(body.author, body.text).run();',
+        "  return c.json({ ok: true });",
+        "});",
+        "",
+        'app.get("/comments", async (c) => {',
+        '  const { results } = await c.env.DB.prepare("SELECT author, text FROM comments").all();',
+        '  const items = results.map((r) => `<li>${r.author}: ${r.text}</li>`).join("");',
+        "  return c.html(`<ul>${items}</ul>`); // [A]",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/comments",
+        parameter: "text",
+        sink: "html",
+        real: true,
+        why: "Anyone can post a comment containing a script, and it runs for every later reader.",
+      },
+    ],
+  },
+
+  {
+    id: "stored-mongoose-raw",
+    tests: "An Express app saves a guestbook entry whole and sends the entries back as raw markup.",
+    files: [
+      file("server/routes.js", [
+        'const express = require("express");',
+        "const app = express();",
+        'app.post("/guestbook", async (req, res) => {',
+        "  await Entry.create(req.body);",
+        "  res.redirect('/guestbook');",
+        "});",
+        'app.get("/guestbook", async (req, res) => {',
+        "  const entries = await Entry.find();",
+        "  res.send(`<div>${entries.map((e) => e.message).join('<br>')}</div>`); // [A]",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/guestbook",
+        parameter: "message",
+        sink: "html",
+        real: true,
+        why: "A guestbook message can carry a script that runs for everyone who opens the page.",
+      },
+    ],
+  },
+
+  {
+    id: "stored-comment-escaped",
+    tests: "The same comments page, built with Hono's html helper, which escapes what visitors saved.",
+    files: [
+      file("server/src/index.ts", [
+        'import { html } from "hono/html";',
+        ...HEAD,
+        'app.post("/comments", async (c) => {',
+        "  const body = await c.req.json();",
+        '  await c.env.DB.prepare("INSERT INTO comments (author, text) VALUES (?, ?)").bind(body.author, body.text).run();',
+        "  return c.json({ ok: true });",
+        "});",
+        "",
+        'app.get("/comments", async (c) => {',
+        '  const { results } = await c.env.DB.prepare("SELECT author, text FROM comments").all();',
+        "  return c.html(html`<ul>${results.map((r) => html`<li>${r.text}</li>`)}</ul>`); // [A]",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/comments",
+        parameter: "text",
+        sink: "html",
+        real: false,
+        why: "The html helper turns anything saved by a visitor into harmless text.",
+      },
+    ],
+  },
+
+  {
+    id: "stored-app-written-raw",
+    tests: "A page shows a visit log the app writes itself; no visitor's text is ever saved in it.",
+    files: [
+      file("server/src/index.ts", [
+        ...HEAD,
+        'app.post("/visit", async (c) => {',
+        "  const at = new Date().toISOString();",
+        '  await c.env.DB.prepare("INSERT INTO visits (at, source) VALUES (?, ?)").bind(at, "web").run();',
+        "  return c.json({ ok: true });",
+        "});",
+        "",
+        'app.get("/visits", async (c) => {',
+        '  const { results } = await c.env.DB.prepare("SELECT at, source FROM visits").all();',
+        '  const rows = results.map((r) => `<li>${r.at} from ${r.source}</li>`).join("");',
+        "  return c.html(`<ul>${rows}</ul>`); // [A]",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/visits",
+        parameter: "source",
+        sink: "html",
+        real: false,
+        why: "Only the app writes to this table, with a fixed word and the time, so a visitor cannot put anything in it.",
+      },
+    ],
+  },
+
+  {
+    id: "stored-number-checked",
+    tests: "A rating is saved only after being turned into a number, then shown on a page.",
+    files: [
+      file("server/src/index.ts", [
+        ...HEAD,
+        'app.post("/ratings", async (c) => {',
+        "  const body = await c.req.json();",
+        "  const stars = Number(body.stars);",
+        '  await c.env.DB.prepare("INSERT INTO ratings (stars) VALUES (?)").bind(stars).run();',
+        "  return c.json({ ok: true });",
+        "});",
+        "",
+        'app.get("/ratings", async (c) => {',
+        '  const { results } = await c.env.DB.prepare("SELECT stars FROM ratings").all();',
+        '  const rows = results.map((r) => `<li>${r.stars} stars</li>`).join("");',
+        "  return c.html(`<ul>${rows}</ul>`); // [A]",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/ratings",
+        parameter: "stars",
+        sink: "html",
+        real: false,
+        why: "Only numbers are ever saved, and a number cannot carry a script.",
+      },
+    ],
+  },
+
+  {
+    id: "stored-row-picked-only",
+    tests: "A visitor's id only picks which post gets a view counted; post titles are shown raw but only the app writes them.",
+    files: [
+      file("server/src/index.ts", [
+        ...HEAD,
+        'app.post("/posts/:id/view", async (c) => {',
+        '  await c.env.DB.prepare("UPDATE posts SET views = views + 1 WHERE id = ?").bind(c.req.param("id")).run();',
+        "  return c.json({ ok: true });",
+        "});",
+        "",
+        'app.get("/posts", async (c) => {',
+        '  const { results } = await c.env.DB.prepare("SELECT title FROM posts").all();',
+        '  const rows = results.map((r) => `<li>${r.title}</li>`).join("");',
+        "  return c.html(`<ul>${rows}</ul>`); // [A]",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/posts",
+        parameter: "title",
+        sink: "html",
+        real: false,
+        why: "The visitor's value only chooses which row's counter goes up; it is never saved as text anyone sees.",
+      },
+    ],
+  },
+
+  {
+    id: "stored-prisma-where-only",
+    tests: "Prisma: a visitor's id is used only in `where` to mark a post read; post titles come from the app.",
+    files: [
+      file("server/routes.js", [
+        'app.post("/posts/:id/read", async (req, res) => {',
+        "  await prisma.post.update({ where: { id: req.params.id }, data: { read: true } });",
+        "  res.end();",
+        "});",
+        'app.get("/posts", async (req, res) => {',
+        "  const posts = await prisma.post.findMany();",
+        "  res.send(`<ul>${posts.map((p) => p.title).join('')}</ul>`); // [A]",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/posts",
+        parameter: "title",
+        sink: "html",
+        real: false,
+        why: "Only a fixed true/false is saved; the visitor's id just picks the post.",
+      },
+    ],
+  },
+
+  {
+    id: "stored-other-column",
+    tests: "A visitor's value is saved in one column, but the page shows a different column only the app writes.",
+    files: [
+      file("server/src/index.ts", [
+        ...HEAD,
+        'app.post("/likes", async (c) => {',
+        "  const body = await c.req.json();",
+        '  await c.env.DB.prepare("INSERT INTO likes (post_id, label) VALUES (?, \'liked\')").bind(body.postId).run();',
+        "  return c.json({ ok: true });",
+        "});",
+        "",
+        'app.get("/likes", async (c) => {',
+        '  const { results } = await c.env.DB.prepare("SELECT label FROM likes").all();',
+        '  const rows = results.map((r) => `<li>${r.label}</li>`).join("");',
+        "  return c.html(`<ul>${rows}</ul>`); // [A]",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/likes",
+        parameter: "label",
+        sink: "html",
+        real: false,
+        why: "The page shows only the label column, which always holds the fixed word the app wrote.",
+      },
+    ],
+  },
+
   // --- redirects -----------------------------------------------------------
   {
     id: "redirect-open",

@@ -19,7 +19,9 @@ import type {
   Sink,
   SinkKind,
   SourceKind,
+  StoreAccess,
 } from "./inventory.ts";
+import { visitorInputChecker } from "./oracle.ts";
 
 /**
  * The attack-surface inventory, built from parsed syntax rather than matched
@@ -164,7 +166,312 @@ export function buildInventoryFromAst(snapshot: RepoSnapshot): Inventory {
     const matches = (inventory.functions ?? []).filter((f) => f.name === door.handlerRef);
     if (matches.length === 1) door.handlerAt = { path: matches[0]!.path, range: matches[0]!.bodyRange };
   }
+  addStoredSources(inventory);
   return inventory;
+}
+
+/**
+ * Stored data: a column a visitor's input is saved into is itself an input,
+ * everywhere it is read back. Both halves must be shown by the code -- a
+ * value a visitor sends, saved into a named column with nothing checking it
+ * first, and a read of the same table that selects that column -- before the
+ * read counts. Values that only pick which row to change (`WHERE id = ?`,
+ * Prisma's `where`) are not saved and do not count.
+ */
+function addStoredSources(inventory: Inventory): void {
+  const stores = inventory.stores ?? [];
+  if (!stores.some((s) => s.mode === "write")) return;
+
+  const savedByVisitor = visitorInputChecker(inventory);
+  const visitor = new Map<string, Set<string>>();
+  const known = new Map<string, Set<string>>();
+  const add = (map: Map<string, Set<string>>, store: string, column: string): void => {
+    const columns = map.get(store) ?? new Set<string>();
+    columns.add(column);
+    map.set(store, columns);
+  };
+  for (const write of stores) {
+    if (write.mode !== "write") continue;
+    for (const column of write.touches ?? []) add(known, write.store, column);
+    for (const column of savedByVisitor(write)) add(visitor, write.store, column);
+  }
+  if (visitor.size === 0) return;
+
+  for (const read of stores) {
+    const fromVisitor = visitor.get(read.store);
+    if (read.mode !== "read" || !read.binding || !fromVisitor) continue;
+    if (!readsOnlyVisitorText(read.columns ?? ["*"], fromVisitor, known.get(read.store) ?? new Set())) continue;
+    inventory.sources.push({
+      id: read.id.replace(":store:", ":src:"),
+      kind: "stored-data",
+      expression: read.expression,
+      binding: read.binding,
+      location: read.location,
+      ...(read.doorId ? { doorId: read.doorId } : {}),
+    });
+  }
+}
+
+/** Ids, foreign keys and timestamps: set by the database or the app, never text worth showing. */
+const BOOKKEEPING = /^(?:id|created|updated|\w+_at|\w+At|created_on|updated_on)$/;
+
+/**
+ * True when what a read returns is visitor text and nothing else that could
+ * be text. The result is followed as one value, so a read that also returns
+ * columns only the app writes cannot say which of them reaches the page;
+ * that case stays silent rather than guessing.
+ */
+function readsOnlyVisitorText(selected: string[], fromVisitor: Set<string>, known: Set<string>): boolean {
+  if (fromVisitor.has("*")) return true;
+  const returned = selected.includes("*") ? [...known].filter((c) => c !== "*") : selected;
+  if (selected.includes("*") && known.has("*")) return false;
+  const visitorColumns = returned.filter((c) => fromVisitor.has(c));
+  const others = returned.filter((c) => !fromVisitor.has(c) && !BOOKKEEPING.test(c));
+  return visitorColumns.length > 0 && others.length === 0;
+}
+
+const SQL_INSERT = /\bINSERT\s+(?:OR\s+\w+\s+)?INTO\s+["`'[]?(\w+)["`'\]]?\s*(?:\(([^)]*)\))?\s*VALUES\s*\(/i;
+const SQL_UPDATE = /\bUPDATE\s+["`'[]?(\w+)["`'\]]?\s+SET\b/i;
+const SQL_READ = /\bSELECT\b([\s\S]*?)\bFROM\s+["`'[]?(\w+)/i;
+/**
+ * `?`, `$2`, or an interpolation slot. quasiText marks slots with U+0000; it
+ * is swapped for a private-use character first so the pattern stays printable.
+ */
+const SLOT = "\uE000";
+const PLACEHOLDER = /\?|\$(\d+)|\uE000/g;
+const MODEL_CREATE = /^(?:create|createMany|bulkCreate|insert|insertOne|insertMany)$/;
+const MODEL_UPDATE = /^(?:update|updateOne|updateMany|upsert|findOneAndUpdate|findByIdAndUpdate)$/;
+const MODEL_READ = /^(?:find|findOne|findAll|findMany|findFirst|findUnique|findById|findByPk)$/;
+const GENERIC_OWNER = /^(?:db|prisma|models?|repo|repository|knex|this)$/;
+/** Expression shapes a query result passes through on its way to a variable. */
+const CHAIN = /^(?:CallExpression|MemberExpression|StaticMemberExpression|ComputedMemberExpression|AwaitExpression|TaggedTemplateExpression|ChainExpression|ParenthesizedExpression)$/;
+
+const storeName = (raw: string): string => raw.toLowerCase().replace(/s$/, "");
+const columnName = (raw: string): string =>
+  raw.trim().replace(/^["`'[]|["`'\]]$/g, "").split(".").pop()!.toLowerCase();
+
+/** Splits on commas that are not inside brackets: `a, f(b, c), d`. */
+function topLevelParts(text: string, offset: number): Array<{ text: string; at: number }> {
+  const parts: Array<{ text: string; at: number }> = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i <= text.length; i++) {
+    const ch = text[i];
+    if (ch === "(") depth++;
+    else if (ch === ")") depth--;
+    if ((ch === "," && depth === 0) || i === text.length) {
+      parts.push({ text: text.slice(start, i), at: offset + start });
+      start = i + 1;
+    }
+  }
+  return parts;
+}
+
+/**
+ * Which values a SQL write saves into which columns. Each placeholder is
+ * matched to the value bound to it -- positionally for `?`, by number for
+ * `$2`, and in order for a template's `${...}` -- and only placeholders in
+ * the VALUES list or a `SET col = ?` count. Anything it cannot line up is
+ * left out, which errs towards silence.
+ */
+function sqlWrittenValues(
+  text: string,
+  bound: Node[],
+  interpolated: Node[],
+): { values: StoreValue[]; touches: string[] } | undefined {
+  const slots: Array<{ at: number; node: Node | undefined }> = [];
+  let question = 0;
+  let slot = 0;
+  for (const match of text.replaceAll("\u0000", SLOT).matchAll(PLACEHOLDER)) {
+    const node = match[0] === "?" ? bound[question++]
+      : match[0] === SLOT ? interpolated[slot++]
+      : bound[Number(match[1]) - 1];
+    slots.push({ at: match.index!, node });
+  }
+  const valuesIn = (from: number, to: number): Node[] =>
+    slots.filter((s) => s.at >= from && s.at < to && s.node).map((s) => s.node!);
+
+  const insert = SQL_INSERT.exec(text);
+  if (insert) {
+    const columns = insert[2] ? insert[2].split(",").map(columnName) : [];
+    const open = insert.index + insert[0].length;
+    let depth = 1;
+    let close = open;
+    while (close < text.length && depth > 0) {
+      if (text[close] === "(") depth++;
+      else if (text[close] === ")") depth--;
+      close++;
+    }
+    const values = topLevelParts(text.slice(open, close - 1), open).flatMap((part, i) =>
+      valuesIn(part.at, part.at + part.text.length).map((node) => ({ column: columns[i] ?? "*", node }))
+    );
+    return { values, touches: columns.length > 0 ? columns : ["*"] };
+  }
+
+  const update = SQL_UPDATE.exec(text);
+  if (update) {
+    const setFrom = update.index + update[0].length;
+    const where = /\bWHERE\b/i.exec(text.slice(setFrom));
+    const setText = text.slice(setFrom, where ? setFrom + where.index : text.length);
+    const parts = topLevelParts(setText, setFrom).filter((part) => part.text.includes("="));
+    const values = parts.flatMap((part) => {
+      const eq = part.text.indexOf("=");
+      const column = columnName(part.text.slice(0, eq));
+      return valuesIn(part.at + eq, part.at + part.text.length).map((node) => ({ column, node }));
+    });
+    return { values, touches: parts.map((part) => columnName(part.text.slice(0, part.text.indexOf("=")))) };
+  }
+  return undefined;
+}
+
+/** The columns a SELECT returns: `*`, or the names it lists. */
+function selectedColumns(list: string): string[] {
+  return topLevelParts(list.replaceAll("\u0000", ""), 0).map((part) => {
+    const text = part.text.trim();
+    if (/(?:^|\.)\*$/.test(text)) return "*";
+    // `count(*) AS n` returns a number, not anything a visitor typed.
+    if (/^\w+\s*\(/.test(text)) return "";
+    return columnName(text.split(/\s+(?:as\s+)?/i)[0] ?? "");
+  }).filter(Boolean);
+}
+
+/** Properties of an object literal, by name. */
+function propertiesOf(node: Node | undefined): Map<string, Node> {
+  const found = new Map<string, Node>();
+  if (node?.type !== "ObjectExpression") return found;
+  for (const prop of (node.properties ?? []) as Node[]) {
+    if (prop.type !== "Property" && prop.type !== "ObjectProperty") continue;
+    const key = prop.key as Node | undefined;
+    const name = key?.type === "Identifier" ? key.name : isStringLiteral(key) ? key.value : undefined;
+    if (name !== undefined) found.set(String(name).toLowerCase(), prop.value as Node);
+  }
+  return found;
+}
+
+/** A saved document: one value per named field, or the whole thing when it is not written out. */
+function documentValues(doc: Node | undefined): StoreValue[] {
+  if (!doc) return [];
+  const props = propertiesOf(doc);
+  if (doc.type === "ObjectExpression") {
+    return [...props.entries()].map(([column, node]) => ({ column, node }));
+  }
+  if (doc.type === "ArrayExpression") {
+    return ((doc.elements ?? []) as Node[]).flatMap((e) => documentValues(e));
+  }
+  return [{ column: "*", node: doc }];
+}
+
+/**
+ * The values a model method saves. Only the document or `data` counts, never
+ * the filter that picks which record: `prisma.post.update({ where, data })`,
+ * Mongoose's `updateOne(filter, update)`, Sequelize's `update(values, { where })`.
+ */
+function modelWrittenValues(method: string, args: Node[]): StoreValue[] {
+  const first = args[0];
+  const firstProps = propertiesOf(first);
+  if (firstProps.has("data") || firstProps.has("where")) {
+    return ["data", "create", "update"].flatMap((key) => documentValues(firstProps.get(key)));
+  }
+  if (MODEL_CREATE.test(method)) return documentValues(first);
+  if (args.length >= 2 && propertiesOf(args[1]).has("where")) return documentValues(first);
+  return documentValues(args[1]);
+}
+
+interface StoreValue {
+  column: string;
+  node: Node;
+}
+
+/**
+ * A read or write of a named table or collection at this node, if any.
+ * SQL is recognised in a string or template passed to a call (or tagged), so
+ * prose that mentions "update ... set" is not mistaken for a statement.
+ */
+function storeAccessFor(parsed: ParsedFile, node: Node, parents: Node[]): StoreAccess | undefined {
+  let text: string | undefined;
+  if (node.type === "TemplateLiteral") text = quasiText(node);
+  else if (isStringLiteral(node)) text = String(node.value);
+
+  // The call chain the statement sits in: `db.prepare("...").bind(a).run()`.
+  const chain: Node[] = [];
+  for (const parent of parents) {
+    if (!CHAIN.test(parent.type)) break;
+    chain.push(parent);
+  }
+  const outer = chain.at(-1) ?? node;
+
+  const make = (store: string, mode: StoreAccess["mode"], extra: Partial<StoreAccess>): StoreAccess => {
+    const binding = mode === "read" ? bindingFor(parents) : undefined;
+    return {
+      id: `${parsed.path}:store:${node.start}`,
+      store: storeName(store),
+      mode,
+      ...(binding ? { binding } : {}),
+      expression: textOf(parsed, outer).replace(/\s+/g, " ").slice(0, 160),
+      range: [outer.start, outer.end],
+      location: locationOf(parsed, node),
+      ...extra,
+    };
+  };
+  const toWritten = (values: StoreValue[]): NonNullable<StoreAccess["written"]> =>
+    values.map(({ column, node: value }) => ({
+      column,
+      names: identifiersIn(value),
+      range: [value.start, value.end] as [number, number],
+    }));
+
+  if (text !== undefined) {
+    const inCall = parents[0]?.type === "CallExpression" ||
+      (parents[0]?.type === "TaggedTemplateExpression" && parents[0].quasi === node);
+    if (!inCall) return undefined;
+
+    // Values bound to the statement, in order: the call's other arguments (an
+    // array of them counts as the list), then those of `.bind(...)`/`.run(...)`.
+    const bound = chain
+      .filter((n) => n.type === "CallExpression")
+      .flatMap((call) => {
+        const args = ((call.arguments ?? []) as Node[]).filter((a) => a !== node);
+        return args.length === 1 && args[0]!.type === "ArrayExpression"
+          ? ((args[0]!.elements ?? []) as Node[])
+          : args;
+      });
+    const interpolated = node.type === "TemplateLiteral" ? ((node.expressions ?? []) as Node[]) : [];
+
+    const writes = sqlWrittenValues(text, bound, interpolated);
+    const store = SQL_INSERT.exec(text)?.[1] ?? SQL_UPDATE.exec(text)?.[1];
+    if (writes && store) return make(store, "write", { written: toWritten(writes.values), touches: writes.touches });
+
+    const read = SQL_READ.exec(text);
+    if (read) {
+      const columns = selectedColumns(read[1]!);
+      return columns.length > 0 ? make(read[2]!, "read", { columns }) : undefined;
+    }
+    return undefined;
+  }
+
+  if (node.type !== "CallExpression") return undefined;
+  const parts = (dottedName(node.callee) ?? "").split(".");
+  const method = parts.at(-1) ?? "";
+  const owners = parts.slice(0, -1);
+  if (owners.length === 0) return undefined;
+
+  // `prisma.comment.create`, `db.Comment.create` -> the part after the client;
+  // `Comment.create`, `CommentModel.find` -> the model itself.
+  const last = owners.at(-1)!;
+  const model = owners.length >= 2 && GENERIC_OWNER.test(owners[0]!) && !GENERIC_OWNER.test(last)
+    ? last
+    : /^[A-Z]/.test(last) || /(?:Col|Collection|Model)$/.test(last)
+    ? last.replace(/(?:Col|Collection|Model)$/, "") || last
+    : undefined;
+  if (!model) return undefined;
+
+  const args = (node.arguments ?? []) as Node[];
+  if (MODEL_CREATE.test(method) || MODEL_UPDATE.test(method)) {
+    const values = modelWrittenValues(method, args);
+    return make(model, "write", { written: toWritten(values), touches: values.map((v) => v.column) });
+  }
+  if (MODEL_READ.test(method)) return make(model, "read", { columns: ["*"] });
+  return undefined;
 }
 
 /** Page templates, which are text rather than code but decide what is escaped. */
@@ -413,6 +720,10 @@ function collect(
         path: parsed.path,
       });
     }
+
+    // --- tables and collections, for stored data -------------------------
+    const store = storeAccessFor(parsed, node, parents);
+    if (store) (into.stores ??= []).push({ ...store, ...doorId });
 
     // --- sinks -----------------------------------------------------------
     const sink = sinkFor(parsed, node, parents, views);

@@ -1,5 +1,14 @@
 import type { CodeLocation } from "../types.ts";
-import type { Assignment, Door, Inventory, Sanitizer, Sink, TaintSource } from "./inventory.ts";
+import type {
+  Assignment,
+  Door,
+  Inventory,
+  Sanitizer,
+  Sink,
+  SourceKind,
+  StoreAccess,
+  TaintSource,
+} from "./inventory.ts";
 
 /**
  * Phase 3: the deterministic oracle.
@@ -49,6 +58,8 @@ export interface TaintPath {
 
 /** Scope for a single analysis unit: one route handler, or one file's top level. */
 interface Scope {
+  /** The door's id, or `file:<path>` for a file's top level. */
+  key: string;
   door?: Door;
   range: [number, number];
   sources: TaintSource[];
@@ -77,6 +88,7 @@ function scopesFor(inventory: Inventory): Scope[] {
     if (!scope) {
       const door = inventory.doors.find((d) => d.id === doorId);
       scope = {
+        key,
         ...(door ? { door } : {}),
         range: door?.bodyRange ?? [0, Number.MAX_SAFE_INTEGER],
         sources: [],
@@ -212,6 +224,46 @@ export function analyseTaint(inventory: Inventory): TaintPath[] {
     }
   }
   return paths;
+}
+
+/** Inputs a visitor types or sends directly; what can end up saved for others. */
+const VISITOR_KINDS: ReadonlySet<SourceKind> = new Set([
+  "route-param",
+  "query-string",
+  "request-body",
+  "header",
+  "cookie",
+  "uploaded-file",
+]);
+
+/**
+ * For stored data: which columns of this write receive a visitor's own
+ * input, with nothing checking it on the way? An input written inline
+ * (`Comment.create(req.body)`) counts; so does one that travels through plain
+ * assignments first. A check in between leaves that column out -- this errs
+ * towards silence.
+ */
+export function visitorInputChecker(inventory: Inventory): (write: StoreAccess) => string[] {
+  const byKey = new Map(scopesFor(inventory).map((scope) => [scope.key, scope]));
+
+  return (write) => {
+    const scope = byKey.get(write.doorId ?? `file:${write.location.path}`);
+    if (!scope) return [];
+    const statementAt = write.range[0];
+
+    return (write.written ?? []).filter((value) =>
+      scope.sources.some((source) => {
+        if (!VISITOR_KINDS.has(source.kind)) return false;
+        const at = positionOf(source.id);
+        if (at >= value.range[0] && at < value.range[1]) return true;
+        if (at >= statementAt || !source.binding) return false;
+
+        const tainted = aliasesOf(source.binding, scope, at);
+        if (!value.names.some((name) => tainted.has(name))) return false;
+        return !(checkOnArrival(source, scope) ?? interveningSanitizer(tainted, scope, at, statementAt));
+      })
+    ).map((value) => value.column);
+  };
 }
 
 function makePath(

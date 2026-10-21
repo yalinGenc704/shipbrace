@@ -228,6 +228,7 @@ const SOURCE_COPY: Record<string, string> = {
   "repo-content": "content from a linked repository",
   // Only settings an outsider fills in are treated as inputs at all.
   environment: "a build setting filled in from a pull request or issue, which anyone can open",
+  "stored-data": "text another visitor saved earlier (for example a comment or a profile), read back from the database",
 };
 
 interface ModuleShape {
