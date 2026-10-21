@@ -116,6 +116,23 @@ const FILESYSTEM =
  */
 const DYNAMIC_CODE = /^(?:eval|vm\.runIn(?:New|This)?Context|vm\.compileFunction)$|(?:^|\.)unserialize$/;
 
+/**
+ * libxmljs (and libxmljs2) parse calls. They leave outside references alone
+ * unless told otherwise, so only a call that switches them on is an operation
+ * at all; xml2js, fast-xml-parser and xmldom never fetch them.
+ */
+const XML_PARSE = /(?:^|\.)(?:parseXml|parseXmlString|parseXmlAsync)$/;
+
+/** True for an options object with `noent` or `dtdload` set to `true` (or 1) written out. */
+function expandsEntities(options: Node | undefined): boolean {
+  if (options?.type !== "ObjectExpression") return false;
+  return ((options.properties ?? []) as Node[]).some((prop) => {
+    const key = (prop.key as Node | undefined)?.name ?? (prop.key as Node | undefined)?.value;
+    const value = prop.value as Node | undefined;
+    return /^(?:noent|dtdload)$/.test(String(key)) && (value?.value === true || value?.value === 1);
+  });
+}
+
 /** Bun's own file calls. Matched exactly: `stream.write` is not a file path. */
 const BUN_FILE = /^Bun\.(?:write|file)$/;
 
@@ -1379,6 +1396,9 @@ function sinkFor(
 
   if (SHELL.test(name)) {
     return isCommandBuilt(args) ? make("shell", operands) : undefined;
+  }
+  if (XML_PARSE.test(name) && expandsEntities(args[1])) {
+    return make("xml-entities", args[0] ? identifiersIn(args[0]) : []);
   }
   if (DYNAMIC_CODE.test(name)) return make("dynamic-code", operands);
 

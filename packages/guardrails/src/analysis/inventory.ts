@@ -45,7 +45,13 @@ export type SinkKind =
   | "outbound-request"
   | "dynamic-code"
   /** A MongoDB-style query whose filter takes a visitor's value as-is. */
-  | "nosql";
+  | "nosql"
+  /**
+   * XML parsed with outside references switched on (libxmljs `noent: true`):
+   * the document can name a file on the server or an internal address and
+   * have its contents pulled in (XXE).
+   */
+  | "xml-entities";
 
 export type SanitizerKind =
   | "schema-validation"

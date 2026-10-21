@@ -494,3 +494,13 @@ test("a query that opens with a comment or EXPLAIN is still a query", () => {
     assert.equal(inventory.sinks.filter((s) => s.kind === "sql").length, 1, start);
   }
 });
+
+test("XML is an operation only when outside references are switched on", () => {
+  const kinds = (options: string) =>
+    buildInventory(snap("server/a.js", `const doc = libxmljs.parseXmlString(xml${options});`)).sinks.map((s) => s.kind);
+  assert.deepEqual(kinds(""), []);
+  assert.deepEqual(kinds(", { noblanks: true }"), []);
+  assert.deepEqual(kinds(", { noent: false }"), []);
+  assert.deepEqual(kinds(", { noent: true }"), ["xml-entities"]);
+  assert.deepEqual(kinds(", { dtdload: true }"), ["xml-entities"]);
+});

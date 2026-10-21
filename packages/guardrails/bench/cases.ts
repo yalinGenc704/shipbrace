@@ -1123,6 +1123,62 @@ export const CASES: BenchCase[] = [
     ],
   },
 
+  // --- XML that pulls in outside files (XXE) ---------------------------------
+  {
+    id: "xxe-upload-noent",
+    tests: "An uploaded product list is read as XML with outside references switched on.",
+    files: [
+      file("server/routes.js", [
+        'const libxmljs = require("libxmljs");',
+        'const express = require("express");',
+        "const app = express();",
+        'app.post("/products/import", (req, res) => {',
+        '  const xml = req.files.products.data.toString("utf8");',
+        "  const doc = libxmljs.parseXmlString(xml, { noent: true, noblanks: true }); // [A]",
+        "  res.json({ count: doc.root().childNodes().length });",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/products/import",
+        parameter: "products",
+        sink: "xml-entities",
+        real: true,
+        why: "The uploaded XML can name /etc/passwd or a private address, and the parser pulls it in.",
+      },
+    ],
+  },
+
+  {
+    id: "xxe-own-file-noent",
+    tests: "The app reads its own settings file as XML with outside references on; no visitor's XML is ever parsed.",
+    files: [
+      file("server/routes.js", [
+        'const libxmljs = require("libxmljs");',
+        'const fs = require("fs");',
+        'const express = require("express");',
+        "const app = express();",
+        'app.get("/settings", (req, res) => {',
+        '  const xml = fs.readFileSync("config/settings.xml", "utf8");',
+        "  const doc = libxmljs.parseXmlString(xml, { noent: true }); // [A]",
+        '  res.json({ theme: doc.get("//theme").text() });',
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/settings",
+        parameter: "xml",
+        sink: "xml-entities",
+        real: false,
+        why: "Only the app's own file is parsed; a visitor has no way to put a reference into it.",
+      },
+    ],
+  },
+
   // --- redirects -----------------------------------------------------------
   {
     id: "redirect-open",

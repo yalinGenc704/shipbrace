@@ -148,6 +148,7 @@ const SINK_GRADE: Record<string, Grade> = {
   html: "medium",
   redirect: "low",
   nosql: "high",
+  "xml-entities": "high",
 };
 
 /**
@@ -172,6 +173,13 @@ const SINK_COPY: Record<string, { operation: string; impact: string; fix: string
       "Someone could run their own commands on the machine hosting your site, which usually means full control of it.",
     fix:
       "Pass the command and its arguments as a separate array rather than building one string, so the shell never interprets characters inside the value. Better still, use a library that does the job directly instead of running a command at all.",
+  },
+  "xml-entities": {
+    operation: "reading an XML document with outside references switched on",
+    impact:
+      "Someone could send XML that asks your server to fetch one of its own files (passwords, keys, settings) or a private internal address, and get the contents back.",
+    fix:
+      "Remove `noent: true` (and `dtdload: true`) from the parse options, so references to outside files are never followed. If you do not need XML at all, accept JSON instead.",
   },
   "dynamic-code": {
     operation: "code the application builds and runs on the fly",
@@ -454,6 +462,13 @@ const MODULES: ModuleShape[] = [
         covers: "no visitor input was traced into a page without escaping",
         title: "Visitor-supplied content cannot inject scripts into pages",
         detector: "taint:html",
+      },
+      {
+        id: "injection/xml-entities",
+        covers:
+          "no visitor input was traced into libxmljs with outside references switched on; other XML tools and options set elsewhere were not checked",
+        title: "Uploaded XML cannot make the server read its own files",
+        detector: "taint:xml-entities",
       },
     ],
   },
@@ -747,6 +762,7 @@ const ITEM_FOR_SINK: Record<string, string> = {
   redirect: "access-control/file-paths",
   nosql: "injection/database",
   "outbound-request": "ssrf/url-allowlist",
+  "xml-entities": "injection/xml-entities",
 };
 
 /**

@@ -74,7 +74,7 @@ everywhere:
 # PostgreSQL 18 (Homebrew, not started at login). Databases: shipbrace, shipbrace_test.
 LC_ALL=en_US.UTF-8 /opt/homebrew/opt/postgresql@18/bin/pg_ctl -D /opt/homebrew/var/postgresql@18 -l /opt/homebrew/var/log/postgresql@18.log start
 
-# all tests (expect 236 pass). Without TEST_DATABASE_URL the 6 database tests
+# all tests (expect 237 pass). Without TEST_DATABASE_URL the 6 database tests
 # are skipped and say so; it must name a database ending in _test (it is wiped).
 # CI (.github/workflows/ci.yml) runs typecheck, lint, tests and build on every push.
 TEST_DATABASE_URL=postgres:///shipbrace_test npm test
@@ -138,8 +138,8 @@ the server with the AI step, start it with an extra `--env-file` that sets
 
 ## Current state and known gaps
 
-- **Benchmark (69 apps, 36 real problems, 34 safe decoys), 2026-10-20:** rules
-  alone prove 32; a perfect suggester proves 35; zero false alarms. Only
+- **Benchmark (71 apps, 37 real problems, 35 safe decoys), 2026-10-20:** rules
+  alone prove 33; a perfect suggester proves 36; zero false alarms. Only
   miss: a React component pasting a `body` prop as raw HTML, with nothing
   showing where the prop comes from (stays "worth a look").
 - **Stored attacks (2026-10-20).** A table column a visitor's unchecked
@@ -172,7 +172,14 @@ the server with the AI step, start it with an extra `--env-file` that sets
   `reserve` is parameterised like `sql` (`tx.unsafe(...)` is not). A
   template or `+` counts as a query only when its text starts with a
   statement keyword (after any leading SQL comments), so prose mentioning a
-  query is not one. The starter kit is held to its
+  query is not one.
+- **XML outside references (XXE, 2026-10-20).** A libxmljs
+  `parseXml`/`parseXmlString`/`parseXmlAsync` call whose options object
+  literally sets `noent` or `dtdload` is an `xml-entities` operation
+  (checklist item `injection/xml-entities`, whose "checked" text names
+  libxmljs only). Not covered: options held in a variable, libxslt,
+  libxml-xsd, xmllint. xml2js, fast-xml-parser, xmldom and sax never fetch
+  outside files. The starter kit is held to its
   own review (`packages/scaffold/test/self-review.test.ts`): no warnings
   except the lockfile a fresh app gets on first install.
 - **"Checked" says what was checked** (`ActionItem.covers`). Error pages hand
@@ -209,7 +216,7 @@ the server with the AI step, start it with an extra `--env-file` that sets
   were not seen as sign-in checks (DVNA 27 -> 1 open-route warnings, Juice Shop
   86 -> 18). DVNA: 5 of its 19 documented holes found automatically (SQL and
   command injection, insecure deserialisation, open redirect, missing headers).
-  Templates added afterwards (DVNA reflected XSS now caught). Not detected yet: XXE, NoSQL injection,
+  Templates added afterwards (DVNA reflected XSS now caught). Not detected yet: NoSQL injection,
   CSRF, a session secret left at a default. Sign-in checks written inside a
   handler (Juice Shop `dataErasure`) are recognised since 2026-10-20, not
   yet re-run on Juice Shop.
@@ -246,7 +253,7 @@ the server with the AI step, start it with an extra `--env-file` that sets
   across files. It does not follow method calls (`obj.fn(x)`), and a helper
   name defined twice, unknown code, or destructured parameters make the
   claim `undecidable` (never `no-path`).
-- 16 of 38 checklist items have no detector and are left to the user (counted 2026-10-09). The
+- 16 of 39 checklist items have no detector and are left to the user (counted 2026-10-20). The
   checklist follows OWASP Top 10:2025; the four items added for its new
   categories (A03 supply chain, A10 exceptional conditions) have no detector yet.
 - **GitHub App works end to end (first live run 2026-10-01):** App ID 5157570
@@ -448,7 +455,7 @@ item only once it can actually run ("no false pass"). In order:
    sanitizer to the kinds of operation it protects; not flagging routes that
    only return constants; sign-in checks written inside a handler;
    transactions written `` tx`...` ``; SQL-looking text in documentation
-   templates. Still to do: XXE.
+   templates; XXE.
 3. **New proven checks** (input traced to the problem, so they are risks):
    mass assignment (a request body saved whole, e.g. `User.create(req.body)`,
    so a visitor can set `role` or `owner_id`); unsafe decoding of input
@@ -493,6 +500,6 @@ App permission).
    Cloudflare account, or ShipBrace's.
 5. **Starting structure for new apps:** `packages/scaffold` exists and passes
    its own review, but nothing lets a user reach it yet.
-6. **More detection:** browser-side code, the XML upload attack (XXE).
+6. **More detection:** browser-side code.
 
 See `docs/architecture.md` for the reasoning behind these decisions.
