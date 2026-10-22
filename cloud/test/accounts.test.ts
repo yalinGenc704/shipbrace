@@ -4,7 +4,7 @@ import { beforeEach, test } from "node:test";
 import { runSecurityReview, snapshotFromFiles } from "@shipbrace/guardrails";
 import { Hono } from "hono";
 import { allowHit } from "../src/rate-window.ts";
-import { accountRoutes, forgetInstallation, networkOf, PER_MINUTE, installationIsSetUp, installationSwitches, NOTICE_VERSION } from "../src/accounts.ts";
+import { accountRoutes, forgetInstallation, networkOf, PER_MINUTE, reviewsPushes, installationIsSetUp, installationSwitches, NOTICE_VERSION } from "../src/accounts.ts";
 import { decrypt, encrypt, randomToken } from "../src/crypto.ts";
 import type { Env } from "../src/env.ts";
 import { parseRepoLink } from "../src/github-user.ts";
@@ -547,4 +547,76 @@ test("the limits asked for are 60 requests and 10 attempts a minute, and IPv6 co
   assert.equal(networkOf("2001:db8:aa:bb::9"), "2001:db8:aa:bb::/64");
   assert.equal(networkOf("2001:db8::1"), "2001:db8:0:0::/64");
   assert.equal(networkOf("203.0.113.9"), "203.0.113.9");
+});
+
+test("only a repository's admins can switch push reviews off, and the webhook then ignores pushes", async () => {
+  const cookie = await signIn();
+  assert.equal((await post("/api/repos/101/settings", { reviewPushes: false }, cookie)).status, 403, "write access is not enough");
+  assert.equal(await reviewsPushes(env.DB, 101), true, "on by default");
+  REPOS["ada/shop"]!.admin = true;
+  try {
+    assert.equal((await post("/api/repos/101/settings", { reviewPushes: false }, cookie)).status, 200);
+    assert.equal(await reviewsPushes(env.DB, 101), false);
+    const listed = (await (await call("/api/repos", {}, cookie)).json()) as { repositories: Array<{ githubId: number; reviewPushes: boolean; canManage: boolean }> };
+    assert.deepEqual(listed.repositories.find((r) => r.githubId === 101), { ...listed.repositories.find((r) => r.githubId === 101), reviewPushes: false, canManage: true });
+    assert.equal((await post("/api/repos/101/settings", { reviewPushes: true }, cookie)).status, 200);
+    assert.equal(await reviewsPushes(env.DB, 101), true);
+  } finally {
+    REPOS["ada/shop"]!.admin = false;
+  }
+});
+
+test("a repository's admins can clear its history; everyone can clear the reviews they started", async () => {
+  await keep(101, "ada/shop", ME);
+  await keep(101, "ada/shop", 99);
+  const cookie = await signIn();
+  assert.equal((await post("/api/repos/101/clear-history", {}, cookie)).status, 403, "not an admin");
+  const mine = (await (await post("/api/history/clear-mine", {}, cookie)).json()) as { deleted: number; hidden: number };
+  assert.deepEqual([mine.deleted, mine.hidden], [0, 1], "not an admin: her review leaves her view but stays for the admins");
+  const kept = await env.DB.prepare("SELECT count(*) AS n FROM reviews WHERE ran_by IS NULL").first<{ n: number }>();
+  assert.equal(kept?.n, 1);
+  REPOS["ada/shop"]!.admin = true;
+  try {
+    const all = (await (await post("/api/repos/101/clear-history", {}, cookie)).json()) as { deleted: number };
+    assert.equal(all.deleted, 2, "both reviews, as an admin");
+  } finally {
+    REPOS["ada/shop"]!.admin = false;
+  }
+  const left = await env.DB.prepare("SELECT count(*) AS n FROM reviews").first<{ n: number }>();
+  assert.equal(left?.n, 0);
+  const actions = (await env.DB.prepare("SELECT action FROM audit_log WHERE action IN ('history-cleared', 'refused')").all<{ action: string }>()).results.map((r) => r.action);
+  assert.deepEqual(actions, ["refused", "history-cleared", "history-cleared"]);
+});
+
+test("someone who can edit an organisation's repository but not add it is told to ask its owners", async () => {
+  REPOS["acme/site"] = { id: 301, private: false, push: true, pull: true, installed: null };
+  try {
+    const cookie = await signIn();
+    const outcome = (await (await post("/api/repos", { link: "acme/site" }, cookie)).json()) as { status: string; message: string };
+    assert.equal(outcome.status, "needs-install");
+    assert.match(outcome.message, /Only the owners of acme/);
+    const own = (await (await post("/api/repos", { link: "ada/fresh" }, cookie)).json()) as { message: string };
+    assert.match(own.message, /review starts by itself/);
+  } finally {
+    delete REPOS["acme/site"];
+  }
+});
+
+test("in a repository she administers, clearing her own reviews deletes them", async () => {
+  REPOS["ada/shop"]!.admin = true;
+  try {
+    await keep(101, "ada/shop", ME);
+    const cookie = await signIn();
+    const mine = (await (await post("/api/history/clear-mine", {}, cookie)).json()) as { deleted: number; hidden: number };
+    assert.deepEqual([mine.deleted, mine.hidden], [1, 0]);
+  } finally {
+    REPOS["ada/shop"]!.admin = false;
+  }
+});
+
+test("uninstalling forgets the push switches, so a reinstall starts from the defaults", async () => {
+  await keep(101, "ada/shop", ME);
+  await env.DB.prepare("INSERT INTO repo_settings (github_id, review_pushes) VALUES (101, 0)").run();
+  await forgetInstallation(env.DB, 7, "all");
+  assert.equal(await reviewsPushes(env.DB, 101), true);
 });

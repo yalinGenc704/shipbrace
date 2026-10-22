@@ -257,7 +257,16 @@ export function accountRoutes() {
       signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
     });
     if (asApp.status === 404) {
-      return c.json({ status: "needs-install", installUrl, message: "Allow ShipBrace on this repository on GitHub, then paste the link again." });
+      // Only an organisation's owners can add its repositories; others can
+      // only ask them, which GitHub's page offers.
+      const someoneElses = repo.owner.toLowerCase() !== session.login.toLowerCase() && !repo.admin;
+      return c.json({
+        status: "needs-install",
+        installUrl,
+        message: someoneElses
+          ? `Only the owners of ${repo.owner} can allow ShipBrace on this repository. GitHub lets you send them a request from the next page; once they allow it, paste the link again.`
+          : "Allow ShipBrace on this repository on GitHub. When you come back, the review starts by itself.",
+      });
     }
     if (!asApp.ok) return c.json({ status: "error", error: "GitHub did not answer. Please try again." }, 502);
     const { id: installationId } = (await asApp.json()) as { id: number };
@@ -303,7 +312,8 @@ export function accountRoutes() {
       .flat()
       .filter((r) => r.read)
       .slice(0, 90);
-    if (repos.length === 0) return c.json({ repositories: [] });
+    const installUrl = `https://github.com/apps/${c.env.GITHUB_APP_SLUG}/installations/new`;
+    if (repos.length === 0) return c.json({ repositories: [], installUrl });
 
     // The latest review this person may open: any, where they are an admin;
     // otherwise the latest they started. `?` lists are built from the count only.
@@ -320,8 +330,15 @@ export function accountRoutes() {
       .bind(...admin, session.githubId, ...repos.map((r) => r.githubId))
       .all<{ github_id: number; history_id: string; review_id: string | null; created_at: string | null; conclusion: string | null; title: string | null }>();
     const kept = new Map(results.map((row) => [row.github_id, row]));
+    const { results: settings } = await c.env.DB.prepare(
+      `SELECT github_id FROM repo_settings WHERE review_pushes = 0 AND github_id IN (${repos.map(() => "?").join(",")})`,
+    )
+      .bind(...repos.map((r) => r.githubId))
+      .all<{ github_id: number }>();
+    const pushesOff = new Set(settings.map((row) => row.github_id));
 
     return c.json({
+      installUrl,
       repositories: repos.map((r) => {
         const row = kept.get(r.githubId);
         return {
@@ -330,6 +347,10 @@ export function accountRoutes() {
           name: r.name,
           private: r.private,
           canReview: r.write,
+          // Repository admins (which includes a personal repository's owner
+          // and an organisation's owners) choose its settings and may clear its history.
+          canManage: r.admin,
+          reviewPushes: !pushesOff.has(r.githubId),
           installationId: r.installationId,
           historyId: row?.history_id ?? null,
           latest: row?.review_id ? { id: row.review_id, createdAt: row.created_at, conclusion: row.conclusion, title: row.title } : null,
@@ -426,6 +447,77 @@ export function accountRoutes() {
     return c.json({ ok: true });
   });
 
+  // --- per repository: automatic reviews of pushes, and clearing history ------------
+
+  /** The repository by GitHub id, when this person is one of its admins; otherwise null. */
+  async function adminRepo(c: C): Promise<{ githubId: number } | null> {
+    const id = Number(c.req.param("githubId"));
+    if (!Number.isSafeInteger(id)) return null;
+    const access = await repoAccessById(c.get("session").token, id);
+    return access?.admin ? { githubId: id } : null;
+  }
+
+  app.post("/api/repos/:githubId/settings", async (c) => {
+    const session = c.get("session");
+    const repo = await adminRepo(c);
+    if (!repo) {
+      await record(c.env.DB, { actor: session.githubId, action: "refused", target: c.req.param("githubId"), detail: { attempt: "push reviews" } });
+      return c.json({ error: "Only the repository's admins can change this." }, 403);
+    }
+    const body = (await c.req.json().catch(() => ({}))) as { reviewPushes?: unknown };
+    if (typeof body.reviewPushes !== "boolean") return c.json({ error: "Nothing to change." }, 400);
+    const on = body.reviewPushes ? 1 : 0;
+    await c.env.DB.prepare(
+      `INSERT INTO repo_settings (github_id, review_pushes, changed_by) VALUES (?, ?, ?)
+       ON CONFLICT (github_id) DO UPDATE SET review_pushes = excluded.review_pushes, changed_by = excluded.changed_by,
+         changed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`,
+    )
+      .bind(repo.githubId, on, session.githubId)
+      .run();
+    await record(c.env.DB, { actor: session.githubId, action: "push-reviews-changed", target: repo.githubId, detail: { review_pushes: on } });
+    return c.json({ ok: true });
+  });
+
+  /** Deletes every saved review of one repository. Its admins only. */
+  app.post("/api/repos/:githubId/clear-history", async (c) => {
+    const session = c.get("session");
+    const repo = await adminRepo(c);
+    if (!repo) {
+      await record(c.env.DB, { actor: session.githubId, action: "refused", target: c.req.param("githubId"), detail: { attempt: "clear history" } });
+      return c.json({ error: "Only the repository's admins can clear its history." }, 403);
+    }
+    const result = await c.env.DB.prepare("DELETE FROM reviews WHERE repository_id IN (SELECT id FROM repositories WHERE github_id = ?)")
+      .bind(repo.githubId)
+      .run();
+    await record(c.env.DB, { actor: session.githubId, action: "history-cleared", target: repo.githubId, detail: { reviews: result.meta.changes ?? 0 } });
+    return c.json({ ok: true, deleted: result.meta.changes ?? 0 });
+  });
+
+  /**
+   * Clears the reviews this person started. In repositories they administer
+   * the reports are deleted. Elsewhere the report belongs to that
+   * repository's admins too -- a collaborator must not be able to erase the
+   * record of their own failed push -- so it is only taken out of this
+   * person's view: it stops being "theirs" and stays visible to the admins.
+   */
+  app.post("/api/history/clear-mine", async (c) => {
+    const session = c.get("session");
+    const installations = (await userInstallations(session.token)).slice(0, 10);
+    const adminOf = (await Promise.all(installations.map(({ id }) => installationRepos(session.token, id))))
+      .flat()
+      .filter((r) => r.admin)
+      .map((r) => r.githubId)
+      .slice(0, 90);
+    const inAdminRepos = `repository_id IN (SELECT id FROM repositories WHERE github_id IN (${adminOf.map(() => "?").join(",")}))`;
+    const [deleted, hidden] = await c.env.DB.batch([
+      c.env.DB.prepare(`DELETE FROM reviews WHERE ran_by = ? AND ${adminOf.length > 0 ? inAdminRepos : "0"}`).bind(session.githubId, ...adminOf),
+      c.env.DB.prepare("UPDATE reviews SET ran_by = NULL WHERE ran_by = ?").bind(session.githubId),
+    ]);
+    const counts = { deleted: deleted?.meta.changes ?? 0, hidden: hidden?.meta.changes ?? 0 };
+    await record(c.env.DB, { actor: session.githubId, action: "history-cleared", detail: { ...counts, scope: "own" } });
+    return c.json({ ok: true, ...counts });
+  });
+
   // --- kept reviews: only for who started them, and the repository's admins ----------
 
   app.get("/api/reviews/:id", async (c) => {
@@ -472,8 +564,19 @@ async function refused(db: D1Database, actor: number, attempt: "set up" | "chang
   await record(db, { actor, action: "refused", target: Number.isSafeInteger(id) ? id : "not a number", detail: { attempt } });
 }
 
+/** Whether pushes to this repository are reviewed automatically (the default). */
+export async function reviewsPushes(db: D1Database, repositoryId: number): Promise<boolean> {
+  const row = await db.prepare("SELECT review_pushes FROM repo_settings WHERE github_id = ?").bind(repositoryId).first<{ review_pushes: number }>();
+  return row?.review_pushes !== 0;
+}
+
 export async function forgetInstallation(db: D1Database, installationId: number, repositoryIds: number[] | "all"): Promise<void> {
   // Told by GitHub (the App was uninstalled, or repositories removed from it).
+  // Per-repository choices go too, so a reinstall starts from the defaults.
+  await (repositoryIds === "all"
+    ? db.prepare("DELETE FROM repo_settings WHERE github_id IN (SELECT github_id FROM repositories WHERE installation_id = ?)").bind(installationId)
+    : db.prepare(`DELETE FROM repo_settings WHERE github_id IN (${repositoryIds.slice(0, 500).map(() => "?").join(",") || "NULL"})`).bind(...repositoryIds.slice(0, 500))
+  ).run();
   await record(db, {
     action: repositoryIds === "all" ? "installation-removed" : "repositories-removed",
     target: installationId,

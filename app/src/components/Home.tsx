@@ -4,12 +4,15 @@ import { AlertTriangle, CircleHelp, ExternalLink, Loader2, LogIn, LogOut, Shield
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   acceptNotice,
+  clearMyHistory,
+  clearRepoHistory,
   loadInstallations,
   loadMe,
   loadRepos,
   pasteLink,
   rememberLink,
   saveSettings,
+  setPushReviews,
   setUpInstallation,
   signInUrl,
   signOut,
@@ -141,25 +144,30 @@ function Paste({ login }: { login: string }) {
   const autoSubmitted = useRef(false);
 
   // Once the queued review is saved, open it.
+  const list = repos.data?.repositories ?? [];
+  const [mode, setMode] = useState<"pick" | "paste">("pick");
+  const picking = mode === "pick" && list.some((r) => r.canReview);
+
   useEffect(() => {
     if (!waitingFor) return;
-    const repo = repos.data?.find((r) => r.githubId === waitingFor.githubId);
+    const repo = list.find((r) => r.githubId === waitingFor.githubId);
     if (repo?.latest && Date.parse(repo.latest.createdAt) >= waitingFor.since - 5_000) {
       setWaitingFor(null);
       void navigate({ to: "/reviews/$id", params: { id: repo.latest.id } });
     }
   }, [repos.data, waitingFor, navigate]);
 
-  async function submit(event?: FormEvent) {
+  async function submit(event?: FormEvent, chosen?: string) {
     event?.preventDefault();
-    if (!link.trim() || busy) return;
+    const target = chosen ?? link;
+    if (!target.trim() || busy) return;
     setBusy(true);
     setResult(null);
-    const outcome = await pasteLink(link);
+    const outcome = await pasteLink(target);
     setBusy(false);
     setResult(outcome);
     if (outcome.status === "queued") setWaitingFor({ githubId: outcome.repository.githubId, since: Date.now() });
-    if (outcome.status === "needs-install") rememberLink(link);
+    if (outcome.status === "needs-install") rememberLink(target);
   }
 
   // Coming back from GitHub with a link pasted before: try it again once.
@@ -173,21 +181,66 @@ function Paste({ login }: { login: string }) {
   return (
     <Shell login={login}>
       <h1 className="text-xl font-semibold text-ink sm:text-2xl">Review a repository</h1>
-      <form onSubmit={(e) => void submit(e)} className="mt-4 flex flex-col gap-2 sm:flex-row">
-        <label htmlFor="link" className="sr-only">GitHub repository link</label>
-        <input
-          id="link"
-          value={link}
-          onChange={(e) => setLink(e.target.value)}
-          placeholder="https://github.com/you/your-app"
-          autoComplete="off"
-          spellCheck={false}
-          className="min-w-0 flex-1 rounded-lg border border-line bg-surface-raised px-3 py-2.5 text-sm text-ink placeholder:text-ink-soft"
-        />
-        <button type="submit" disabled={busy || !link.trim()} className={button}>
-          {busy && <Loader2 className="size-4 animate-spin" aria-hidden />}Review
-        </button>
-      </form>
+      {!repos.isPending && list.length === 0 && repos.data?.installUrl && (
+        <div className="mt-4 rounded-2xl border border-line bg-surface-raised p-4 text-sm text-ink">
+          <p className="font-medium">First, choose which repositories ShipBrace can review.</p>
+          <p className="mt-1 text-ink-soft">
+            GitHub asks you to pick all of your repositories or only some. You can change this at any time.
+          </p>
+          <a href={repos.data.installUrl} className={`${button} mt-3`}>
+            Choose repositories on GitHub <ExternalLink className="size-3.5" aria-hidden />
+          </a>
+        </div>
+      )}
+      {list.length > 0 && (
+        <div className="mt-4 inline-flex rounded-lg border border-line p-0.5 text-sm" role="tablist">
+          {(["pick", "paste"] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              role="tab"
+              aria-selected={(m === "pick") === picking}
+              onClick={() => setMode(m)}
+              className={`rounded-md px-3 py-1.5 ${(m === "pick") === picking ? "bg-surface-raised font-medium text-ink" : "text-ink-soft"}`}
+            >
+              {m === "pick" ? "Your repositories" : "Paste a link"}
+            </button>
+          ))}
+        </div>
+      )}
+      {picking ? (
+        <ul className="mt-3 divide-y divide-line rounded-2xl border border-line bg-surface-raised">
+          {list.filter((r) => r.canReview).map((repo) => (
+            <li key={repo.githubId} className="flex items-center gap-3 p-3">
+              <span className="min-w-0 flex-1 truncate text-sm text-ink">{repo.owner}/{repo.name}</span>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void submit(undefined, `${repo.owner}/${repo.name}`)}
+                className={button}
+              >
+                Review now
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <form onSubmit={(e) => void submit(e)} className="mt-4 flex flex-col gap-2 sm:flex-row">
+          <label htmlFor="link" className="sr-only">GitHub repository link</label>
+          <input
+            id="link"
+            value={link}
+            onChange={(e) => setLink(e.target.value)}
+            placeholder="https://github.com/you/your-app"
+            autoComplete="off"
+            spellCheck={false}
+            className="min-w-0 flex-1 rounded-lg border border-line bg-surface-raised px-3 py-2.5 text-sm text-ink placeholder:text-ink-soft"
+          />
+          <button type="submit" disabled={busy || !link.trim()} className={button}>
+            {busy && <Loader2 className="size-4 animate-spin" aria-hidden />}Review
+          </button>
+        </form>
+      )}
       <Outcome result={result} waiting={Boolean(waitingFor)} />
 
       <Settings />
@@ -195,16 +248,50 @@ function Paste({ login }: { login: string }) {
       <h2 className="mt-10 text-sm font-semibold text-ink">Connected repositories</h2>
       {repos.isPending ? (
         <p className="mt-2 text-sm text-ink-soft">Loading…</p>
-      ) : !repos.data || repos.data.length === 0 ? (
-        <p className="mt-2 text-sm text-ink-soft">None yet. Paste a link above to connect your first one.</p>
+      ) : list.length === 0 ? (
+        <p className="mt-2 text-sm text-ink-soft">None yet. Choose repositories on GitHub, or paste a link above.</p>
       ) : (
         <ul className="mt-3 divide-y divide-line rounded-2xl border border-line bg-surface-raised">
-          {repos.data.map((repo) => (
+          {list.map((repo) => (
             <RepoRow key={repo.githubId} repo={repo} />
           ))}
         </ul>
       )}
+      {repos.data?.installUrl && list.length > 0 && (
+        <a href={repos.data.installUrl} className="mt-3 inline-flex items-center gap-1.5 text-sm text-ink-soft underline hover:text-ink">
+          Add or change repositories on GitHub <ExternalLink className="size-3.5" aria-hidden />
+        </a>
+      )}
+      <ClearMine />
     </Shell>
+  );
+}
+
+/** Deletes the saved reviews this person started, after asking. */
+function ClearMine() {
+  const client = useQueryClient();
+  const [note, setNote] = useState("");
+  async function clear() {
+    if (
+      !window.confirm(
+        "Clear the reports you started? In repositories you administer they are deleted for good. In other people's repositories they are removed from your view but stay in the history their admins see.",
+      )
+    ) return;
+    const result = await clearMyHistory();
+    setNote(
+      result.ok
+        ? `Deleted ${result.deleted ?? 0}, removed ${result.hidden ?? 0} from your view.`
+        : result.error ?? "That didn't work. Please try again.",
+    );
+    void client.invalidateQueries({ queryKey: ["repos"] });
+  }
+  return (
+    <div className="mt-10 border-t border-line pt-4">
+      <button type="button" onClick={() => void clear()} className="text-sm text-ink-soft underline hover:text-danger">
+        Clear the reviews I started
+      </button>
+      {note && <p className="mt-1 text-sm text-ink-soft">{note}</p>}
+    </div>
   );
 }
 
@@ -232,21 +319,56 @@ function Outcome({ result, waiting }: { result: PasteResult | null; waiting: boo
 }
 
 function RepoRow({ repo }: { repo: ConnectedRepo }) {
+  const client = useQueryClient();
+  const [error, setError] = useState("");
   const Icon = !repo.latest ? CircleHelp : repo.latest.conclusion === "failure" ? AlertTriangle : repo.latest.conclusion === "neutral" ? CircleHelp : ShieldCheck;
   const tone = !repo.latest ? "text-ink-soft" : repo.latest.conclusion === "failure" ? "text-danger" : repo.latest.conclusion === "neutral" ? "text-warn" : "text-ok";
+
+  async function flipPushes(on: boolean) {
+    setError("");
+    const result = await setPushReviews(repo.githubId, on);
+    if (!result.ok) setError(result.error ?? "That didn't save. Please try again.");
+    void client.invalidateQueries({ queryKey: ["repos"] });
+  }
+  async function clear() {
+    if (!window.confirm(`Delete all saved reports for ${repo.owner}/${repo.name}? This can't be undone. A review running right now may still be saved afterwards.`)) return;
+    setError("");
+    const result = await clearRepoHistory(repo.githubId);
+    if (!result.ok) setError(result.error ?? "That didn't work. Please try again.");
+    void client.invalidateQueries({ queryKey: ["repos"] });
+  }
+
   return (
-    <li className="flex items-start gap-3 p-4 sm:items-center">
-      <Icon className={`mt-0.5 size-5 shrink-0 sm:mt-0 ${tone}`} aria-hidden />
-      <span className="min-w-0 flex-1">
-        <span className="block text-sm text-ink">{repo.owner}/{repo.name}</span>
-        <span className="mt-0.5 block text-xs text-ink-soft">
-          {repo.latest ? `${repo.latest.title} · ${formatWhen(repo.latest.createdAt)}` : "Not reviewed yet"}
+    <li className="p-4">
+      <div className="flex items-start gap-3 sm:items-center">
+        <Icon className={`mt-0.5 size-5 shrink-0 sm:mt-0 ${tone}`} aria-hidden />
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm text-ink">{repo.owner}/{repo.name}</span>
+          <span className="mt-0.5 block text-xs text-ink-soft">
+            {repo.latest ? `${repo.latest.title} · ${formatWhen(repo.latest.createdAt)}` : "Not reviewed yet"}
+          </span>
         </span>
-      </span>
-      {repo.historyId && (
-        <Link to="/history/$id" params={{ id: repo.historyId }} className="shrink-0 text-sm text-ink-soft underline hover:text-ink">
-          History
-        </Link>
+        {repo.historyId && (
+          <Link to="/history/$id" params={{ id: repo.historyId }} className="shrink-0 text-sm text-ink-soft underline hover:text-ink">
+            History
+          </Link>
+        )}
+      </div>
+      {repo.canManage && (
+        <div className="mt-2 pl-8">
+          <Switch
+            label="Review every push"
+            detail="Each push to this repository is reviewed and the result shown on GitHub. Off: pushes are ignored and don't use your monthly reviews."
+            on={repo.reviewPushes !== false}
+            onChange={(on) => void flipPushes(on)}
+          />
+          {repo.historyId && (
+            <button type="button" onClick={() => void clear()} className="mt-2 text-xs text-ink-soft underline hover:text-danger">
+              Clear history
+            </button>
+          )}
+          {error && <p className="mt-1 text-xs text-danger">{error}</p>}
+        </div>
       )}
     </li>
   );

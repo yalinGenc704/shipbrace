@@ -1,7 +1,7 @@
 import { handleWebhook, reviewPush, type PushJob, type ReviewDeps } from "@shipbrace/server/github/webhook.ts";
 import { Hono } from "hono";
 import { secureHeaders } from "hono/secure-headers";
-import { accountRoutes, forgetInstallation, installationIsSetUp } from "./accounts.ts";
+import { accountRoutes, forgetInstallation, installationIsSetUp, reviewsPushes } from "./accounts.ts";
 import { forgetOldAudit } from "./audit.ts";
 import type { Env } from "./env.ts";
 import { d1History } from "./history-d1.ts";
@@ -49,6 +49,7 @@ app.post("/api/github/webhook", webhookBodyLimit, async (c) => {
       secret,
       schedule: (job) => void jobs.push(job),
       isSetUp: (id) => installationIsSetUp(c.env.DB, id),
+      reviewsPushes: (id) => reviewsPushes(c.env.DB, id),
       forget: (id, repos) => forgetInstallation(c.env.DB, id, repos),
     },
     { signature: c.req.header("x-hub-signature-256"), event: c.req.header("x-github-event") },
@@ -99,6 +100,10 @@ export default {
       // installation to their name, once older than the reviews' own limit.
       env.DB.prepare(
         "DELETE FROM repositories WHERE id NOT IN (SELECT repository_id FROM reviews) AND created_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?)",
+      ).bind(`-${KEEP_DAYS} days`),
+      // Switch rows for repositories ShipBrace no longer knows, once old.
+      env.DB.prepare(
+        "DELETE FROM repo_settings WHERE github_id NOT IN (SELECT github_id FROM repositories) AND changed_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?)",
       ).bind(`-${KEEP_DAYS} days`),
       env.DB.prepare(
         "DELETE FROM users WHERE github_id NOT IN (SELECT github_id FROM sessions) AND github_id NOT IN (SELECT set_up_by FROM installations WHERE set_up_by IS NOT NULL) AND created_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?)",

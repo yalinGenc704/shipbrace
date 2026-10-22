@@ -15,6 +15,10 @@ export interface ConnectedRepo {
   name: string;
   private: boolean;
   canReview: boolean;
+  /** An admin of this repository on GitHub: may change its settings and clear its history. */
+  canManage?: boolean;
+  /** Whether pushes are reviewed automatically (on by default). */
+  reviewPushes?: boolean;
   installationId: number;
   historyId: string | null;
   latest: { id: string; createdAt: string; conclusion: "success" | "neutral" | "failure"; title: string } | null;
@@ -69,11 +73,17 @@ export async function loadInstallations(): Promise<{ installations: Installation
 export const saveSettings = (id: number, change: { packageLookup?: boolean; aiReview?: boolean }) =>
   send<{ ok?: boolean; error?: string }>(`/api/installations/${id}/settings`, change);
 
-export async function loadRepos(): Promise<ConnectedRepo[]> {
+export async function loadRepos(): Promise<{ repositories: ConnectedRepo[]; installUrl?: string }> {
   const response = await fetch("/api/repos");
   if (!response.ok) throw new Error(`The server answered ${response.status}.`);
-  return ((await response.json()) as { repositories: ConnectedRepo[] }).repositories;
+  return (await response.json()) as { repositories: ConnectedRepo[]; installUrl?: string };
 }
+
+export const setPushReviews = (githubId: number, on: boolean) =>
+  send<{ ok?: boolean; error?: string }>(`/api/repos/${githubId}/settings`, { reviewPushes: on });
+export const clearRepoHistory = (githubId: number) =>
+  send<{ ok?: boolean; deleted?: number; error?: string }>(`/api/repos/${githubId}/clear-history`);
+export const clearMyHistory = () => send<{ ok?: boolean; deleted?: number; hidden?: number; error?: string }>("/api/history/clear-mine");
 
 /**
  * The link someone pasted before being sent to GitHub to allow the App, so

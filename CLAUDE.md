@@ -74,7 +74,7 @@ everywhere:
 # PostgreSQL 18 (Homebrew, not started at login). Databases: shipbrace, shipbrace_test.
 LC_ALL=en_US.UTF-8 /opt/homebrew/opt/postgresql@18/bin/pg_ctl -D /opt/homebrew/var/postgresql@18 -l /opt/homebrew/var/log/postgresql@18.log start
 
-# all tests (expect 284 pass). Without TEST_DATABASE_URL the 6 database tests
+# all tests (expect 290 pass). Without TEST_DATABASE_URL the 6 database tests
 # are skipped and say so; it must name a database ending in _test (it is wiped).
 # CI (.github/workflows/ci.yml) runs typecheck, lint, tests and build on every push.
 TEST_DATABASE_URL=postgres:///shipbrace_test npm test
@@ -442,6 +442,19 @@ the server with the AI step, start it with an extra `--env-file` that sets
   shows "N of 50 reviews used this month". The Docker fallback has no AI
   allowlist: keep `AI_REVIEW` off there. A subscription and free trial are
   planned later.
+- **Dashboard: pick or paste, push switch, clearing history (2026-10-21, user
+  decisions).** A new user with no repositories sees one step, "Choose
+  repositories on GitHub" (the App's install page); afterwards "Your
+  repositories" (each with Review now, same limits as pasting) or "Paste a
+  link". Per repository, its GitHub admins get a "Review every push" switch
+  (`repo_settings`, migration 0007; on by default; off = the webhook ignores
+  pushes, no check and no count) and "Clear history" (deletes its saved
+  reports). Everyone has "Clear the reviews I started": deleted in
+  repositories they administer, elsewhere only taken out of their view
+  (`ran_by` set to NULL, still visible to admins), so nobody can erase the
+  record of their own failed push. Uninstalling forgets the switches. All
+  audited. Pasting an organisation repository the App is not on, as a
+  non-admin, says only its owners can allow it.
 - **The query check trusts tagged templates by name** (`SAFE_TAG`: `sql`, `db`,
   `query`), plus transaction tags (see above, 2026-10-20).
 

@@ -12,6 +12,8 @@ export type AuditAction =
   | "switches-changed"
   | "installation-removed"
   | "repositories-removed"
+  | "push-reviews-changed"
+  | "history-cleared"
   | "refused";
 
 export const KEEP_AUDIT_DAYS = 365;

@@ -43,6 +43,8 @@ export interface WebhookDeps {
    * Omitted on a laptop, where the person running it is the one who agreed.
    */
   isSetUp?: (installationId: number) => Promise<boolean>;
+  /** False when automatic reviews of pushes are switched off for this repository (by GitHub id). */
+  reviewsPushes?: (repositoryId: number) => Promise<boolean>;
   /** The App was uninstalled (`"all"`), or repositories were removed from it: delete what was kept. */
   forget?: (installationId: number, repositoryIds: number[] | "all") => Promise<void>;
 }
@@ -113,6 +115,10 @@ export async function handleWebhook(
 
   if (deps.isSetUp && !(await deps.isSetUp(installation))) {
     return { status: 202, body: { accepted: false, reason: "This installation has not been set up yet." } };
+  }
+
+  if (deps.reviewsPushes && !(await deps.reviewsPushes(githubId!))) {
+    return { status: 202, body: { accepted: false, reason: "Reviews of pushes are switched off for this repository." } };
   }
 
   const ranBy = event.sender?.id;

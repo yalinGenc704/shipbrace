@@ -307,3 +307,13 @@ test("a push remembers who pushed it, so only they and the repository's admins c
   assert.equal(result.status, 202);
   assert.equal(jobs[0]?.ranBy, 31);
 });
+
+test("a push to a repository with push reviews switched off is acknowledged and not reviewed", async () => {
+  const github = fakeGitHub({ "server/src/api.ts": VULNERABLE });
+  const d = { ...deps(github.fetchImpl), reviewsPushes: async (id: number) => id !== 4242 };
+  const body = push();
+  const result = await handleWebhook(d, { signature: sign(body), event: "push" }, body);
+  assert.equal(result.status, 202);
+  assert.deepEqual(result.body, { accepted: false, reason: "Reviews of pushes are switched off for this repository." });
+  assert.equal(github.calls.length, 0, "nothing posted on GitHub");
+});
