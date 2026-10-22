@@ -437,10 +437,16 @@ the server with the AI step, start it with an extra `--env-file` that sets
   a read-only (Read, Grep, Glob) audit of ShipBrace itself, adapted from
   Osmani's agent-skills (MIT) with ShipBrace's own risky areas: webhook,
   sign-in, hostile repositories, the reviewer's internet wall, D1. It skips
-  the benchmark's deliberately vulnerable apps. Run on request, before
-  opening up, or after changes to those areas; its findings are leads that
+  the benchmark's deliberately vulnerable apps. Its findings are leads that
   the main session verifies. It cannot run `npm audit`, so the main session
   does. First run 2026-10-18.
+  **Rule since 2026-10-21:** every change to ShipBrace's own service
+  (`cloud/`, `server/`, `app/`, `deploy/`, `Dockerfile`) gets a
+  `security-auditor` pass scoped to the changed files before it is
+  committed, and a full audit runs before opening up to other users.
+  Checker changes (`packages/guardrails`) get `conventions-reviewer`
+  instead. In a session opened from the parent folder, project agents do not
+  load: give a general-purpose agent the agent file to follow.
 - **Sub-agent** `conventions-reviewer` (`.claude/agents/`, added 2026-10-20):
   checks a finished change against the load-bearing conventions above and
   runs typecheck, lint, tests and the benchmark (never with `--model`). It

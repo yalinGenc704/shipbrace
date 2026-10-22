@@ -230,10 +230,14 @@ export function accountRoutes() {
     const sha = head.ok ? ((await head.json()) as { sha?: string }).sha : undefined;
     if (!sha || !/^[0-9a-f]{40}$/.test(sha)) return c.json({ status: "empty", error: "This repository has no commits to review yet." }, 409);
 
-    // Pasting with the notices accepted is setting the installation up: from
-    // now on its pushes are reviewed too.
+    // Pasting with the notices accepted also sets the installation up -- from
+    // now on its pushes are reviewed too -- but only for someone who may manage
+    // it. Anyone with write access gets the one review they asked for.
+    const setUp = await mayManage(session, installationId);
     await c.env.DB.batch([
-      c.env.DB.prepare("INSERT INTO installations (installation_id, set_up_by) VALUES (?, ?) ON CONFLICT DO NOTHING").bind(installationId, session.githubId),
+      ...(setUp
+        ? [c.env.DB.prepare("INSERT INTO installations (installation_id, set_up_by) VALUES (?, ?) ON CONFLICT DO NOTHING").bind(installationId, session.githubId)]
+        : []),
       c.env.DB.prepare("INSERT INTO review_requests (github_id) VALUES (?)").bind(session.githubId),
     ]);
     await c.env.REVIEWS.send({ installationId, githubId: repo.githubId, ranBy: session.githubId, owner: repo.owner, repo: repo.name, sha });
@@ -283,14 +287,31 @@ export function accountRoutes() {
     });
   });
 
-  /** GitHub's "Setup URL" lands here after someone installs the App. */
+  /**
+   * Who may set up an installation or change its switches: the person whose
+   * own account it is, or an admin of at least one repository it covers.
+   * Seeing an installation is not enough -- GitHub lists an organisation's
+   * installation to members with read-only access too, and these switches
+   * decide what leaves the platform.
+   */
+  async function mayManage(session: { token: string; githubId: number }, id: number): Promise<boolean> {
+    if (!Number.isSafeInteger(id)) return false;
+    const installation = (await userInstallations(session.token)).find((i) => i.id === id);
+    if (!installation) return false;
+    // By GitHub's permanent account number, not the name: a name can be given
+    // up and taken by someone else, a number cannot.
+    if (installation.accountType === "User" && installation.accountId === session.githubId) return true;
+    return (await installationRepos(session.token, id)).some((repo) => repo.admin);
+  }
+
+  /** GitHub's "Setup URL" leads to a page whose button posts here, after someone installs the App. */
   app.post("/api/installations/:id/setup", async (c) => {
     const session = c.get("session");
     if (session.noticeVersion !== NOTICE_VERSION) return c.json({ error: "Please read the notices first." }, 403);
     const id = Number(c.req.param("id"));
-    // The address can be typed by anyone; GitHub says whether this person can see that installation.
-    if (!Number.isSafeInteger(id) || !(await userInstallations(session.token)).some((i) => i.id === id)) {
-      return c.json({ error: "That installation isn't yours." }, 403);
+    // The address can be typed by anyone; GitHub says whether this person may run that installation.
+    if (!(await mayManage(session, id))) {
+      return c.json({ error: "Only the account's owner or an admin of its repositories can set this up." }, 403);
     }
     await c.env.DB.prepare("INSERT INTO installations (installation_id, set_up_by) VALUES (?, ?) ON CONFLICT DO NOTHING")
       .bind(id, session.githubId)
@@ -300,9 +321,12 @@ export function accountRoutes() {
 
   // --- what leaves the platform: per-installation switches -------------------------
 
-  /** The installations this person can see that are set up, with their switches. */
+  /** The installations this person may manage that are set up, with their switches. */
   app.get("/api/installations", async (c) => {
-    const visible = await userInstallations(c.get("session").token);
+    const session = c.get("session");
+    const all = await userInstallations(session.token);
+    const allowed = await Promise.all(all.map((i) => mayManage(session, i.id)));
+    const visible = all.filter((_, n) => allowed[n]);
     if (visible.length === 0) return c.json({ installations: [], aiAvailable: c.env.AI_REVIEW === "on" });
     const { results } = await c.env.DB.prepare(
       `SELECT installation_id, package_lookup, ai_review FROM installations WHERE installation_id IN (${visible.map(() => "?").join(",")})`,
@@ -322,8 +346,8 @@ export function accountRoutes() {
 
   app.post("/api/installations/:id/settings", async (c) => {
     const id = Number(c.req.param("id"));
-    if (!Number.isSafeInteger(id) || !(await userInstallations(c.get("session").token)).some((i) => i.id === id)) {
-      return c.json({ error: "That installation isn't yours." }, 403);
+    if (!(await mayManage(c.get("session"), id))) {
+      return c.json({ error: "Only the account's owner or an admin of its repositories can change this." }, 403);
     }
     const body = (await c.req.json().catch(() => ({}))) as { packageLookup?: unknown; aiReview?: unknown };
     if (body.aiReview === true && c.env.AI_REVIEW !== "on") return c.json({ error: "The AI step isn't available yet." }, 403);

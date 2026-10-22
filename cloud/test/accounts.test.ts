@@ -38,7 +38,7 @@ function fakeGitHub(): typeof fetch {
       return Response.json({ access_token: "user-token", expires_in: 28800, refresh_token: "refresh-token" });
     }
     if (path === "/user") return Response.json({ id: 5, login: "ada" });
-    if (path === "/user/installations") return Response.json({ installations: [{ id: 7, account: { login: "ada" } }] });
+    if (path === "/user/installations") return Response.json({ installations: [{ id: 7, account: { login: "ada", id: 5, type: "User" } }] });
     if (path === "/user/installations/7/repositories") {
       return Response.json({ repositories: [repoBody("ada/shop")] });
     }
@@ -375,4 +375,67 @@ test("the AI step cannot be switched on before it is offered", async () => {
 
 test("an installation nobody set up sends nothing anywhere", async () => {
   assert.deepEqual(await installationSwitches(env.DB, 12345), { packageLookup: false, aiReview: false });
+});
+
+test("only the account's owner or a repository admin can set up or change an organisation's installation", async () => {
+  const base = fakeGitHub();
+  // ada sees two organisation installations: one where she can only read, one where she is an admin.
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    const org = (id: number, admin: boolean) =>
+      Response.json({ repositories: [{ id: 300 + id, name: "site", private: true, default_branch: "main", owner: { login: "acme", id: 2 }, permissions: { pull: true, push: admin, admin } }] });
+    if (url.pathname === "/user/installations") {
+      return Response.json({
+        installations: [
+          { id: 7, account: { login: "ada", id: 5, type: "User" } },
+          { id: 11, account: { login: "acme", id: 50, type: "Organization" } },
+          { id: 12, account: { login: "acme-labs", id: 51, type: "Organization" } },
+        ],
+      });
+    }
+    if (url.pathname === "/user/installations/11/repositories") return org(11, false);
+    if (url.pathname === "/user/installations/12/repositories") return org(12, true);
+    return base(input, init);
+  }) as typeof fetch;
+
+  const cookie = await signIn();
+  assert.equal((await post("/api/installations/11/setup", {}, cookie)).status, 403, "read-only member");
+  assert.equal(await installationIsSetUp(env.DB, 11), false);
+  assert.equal((await post("/api/installations/12/setup", {}, cookie)).status, 200, "admin of a repository");
+  assert.equal((await post("/api/installations/7/setup", {}, cookie)).status, 200, "her own account");
+  await env.DB.prepare("INSERT INTO installations (installation_id, set_up_by) VALUES (11, 5)").run();
+  assert.equal((await post("/api/installations/11/settings", { packageLookup: false }, cookie)).status, 403);
+  const listed = (await (await call("/api/installations", {}, cookie)).json()) as { installations: Array<{ id: number }> };
+  assert.deepEqual(listed.installations.map((i) => i.id).sort((a, b) => a - b), [7, 12], "a read-only member does not see the switches");
+});
+
+test("pasting a link with write access reviews it once, but sets up the installation only for a manager", async () => {
+  const base = fakeGitHub();
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    // Same installation number as ada's, but now owned by an organisation where she is not an admin.
+    if (url.pathname === "/user/installations") {
+      return Response.json({ installations: [{ id: 7, account: { login: "acme", id: 50, type: "Organization" } }] });
+    }
+    if (url.pathname === "/user/installations/7/repositories") {
+      return Response.json({ repositories: [{ id: 101, name: "shop", private: false, default_branch: "main", owner: { login: "acme", id: 50 }, permissions: { pull: true, push: true, admin: false } }] });
+    }
+    return base(input, init);
+  }) as typeof fetch;
+  const cookie = await signIn();
+  assert.equal((await post("/api/repos", { link: "ada/shop" }, cookie)).status, 200);
+  assert.equal(queued.length, 1, "the review she asked for still runs");
+  assert.equal(await installationIsSetUp(env.DB, 7), false, "but later pushes are not signed up");
+});
+
+test("an account whose name matches someone's old name is not theirs", async () => {
+  const base = fakeGitHub();
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    if (url.pathname === "/user/installations") return Response.json({ installations: [{ id: 13, account: { login: "ada", id: 77, type: "Organization" } }] });
+    if (url.pathname === "/user/installations/13/repositories") return Response.json({ repositories: [] });
+    return base(input, init);
+  }) as typeof fetch;
+  const cookie = await signIn();
+  assert.equal((await post("/api/installations/13/setup", {}, cookie)).status, 403);
 });

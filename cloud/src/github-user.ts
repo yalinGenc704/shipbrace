@@ -122,13 +122,21 @@ export async function repoAccessById(token: string, githubId: number, fetchImpl:
 }
 
 /** The App installations this person can see: their own, and their organisations' they belong to. */
-export async function userInstallations(token: string, fetchImpl: typeof fetch = fetch): Promise<Array<{ id: number; account: string }>> {
-  const { body } = await get<{ installations: Array<{ id: number; account?: { login?: string } }> }>(
+export async function userInstallations(
+  token: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<Array<{ id: number; account: string; accountId?: number; accountType?: string }>> {
+  const { body } = await get<{ installations: Array<{ id: number; account?: { login?: string; id?: number; type?: string } }> }>(
     token,
     "/user/installations?per_page=100",
     fetchImpl,
   );
-  return body?.installations.map((i) => ({ id: i.id, account: i.account?.login ?? "" })) ?? [];
+  return body?.installations.map((i) => ({
+    id: i.id,
+    account: i.account?.login ?? "",
+    ...(i.account?.id !== undefined ? { accountId: i.account.id } : {}),
+    ...(i.account?.type ? { accountType: i.account.type } : {}),
+  })) ?? [];
 }
 
 /** Repositories in one installation this person can see, with their permissions. */

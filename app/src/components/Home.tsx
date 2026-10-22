@@ -319,28 +319,45 @@ function Switch({ label, detail, on, disabled, onChange }: { label: string; deta
 /** Where GitHub sends people after they allow ShipBrace on a repository. */
 export function SetupPage() {
   const me = useQuery({ queryKey: ["me"], queryFn: loadMe });
-  const [state, setState] = useState<"working" | "done" | "failed">("working");
+  const [state, setState] = useState<"ready" | "working" | "done" | "failed">("ready");
   const id = Number(new URLSearchParams(window.location.search).get("installation_id"));
 
   useEffect(() => {
-    if (!me.data) return;
-    if (!me.data.signedIn) {
-      window.location.href = signInUrl(window.location.pathname + window.location.search);
-      return;
-    }
-    if (!me.data.noticeAccepted || !Number.isSafeInteger(id)) return;
-    void setUpInstallation(id).then((r) => setState(r.ok ? "done" : "failed"));
-  }, [me.data, id]);
+    if (me.data && !me.data.signedIn) window.location.href = signInUrl(window.location.pathname + window.location.search);
+  }, [me.data]);
 
-  if (me.data?.signedIn && !me.data.noticeAccepted) return <Notice version={me.data.noticeVersion} />;
+  if (!me.data || !me.data.signedIn) return <Loading>Finishing setup…</Loading>;
+  if (!me.data.noticeAccepted) return <Notice version={me.data.noticeVersion} />;
   if (state === "working") return <Loading>Finishing setup…</Loading>;
+  // Nothing is set up until the person asks: a link alone must not change anything.
+  if (state === "ready") {
+    return (
+      <Shell>
+        <h1 className="text-xl font-semibold text-ink">Finish setting up ShipBrace</h1>
+        <p className="mt-2 text-sm text-ink-soft">
+          ShipBrace will review every change pushed to the repositories you chose on GitHub.
+        </p>
+        <button
+          type="button"
+          className={`${button} mt-6`}
+          disabled={!Number.isSafeInteger(id)}
+          onClick={() => {
+            setState("working");
+            void setUpInstallation(id).then((r) => setState(r.ok ? "done" : "failed"));
+          }}
+        >
+          Finish setup
+        </button>
+      </Shell>
+    );
+  }
   return (
     <Shell>
       <h1 className="text-xl font-semibold text-ink">{state === "done" ? "ShipBrace is set up" : "Setup didn't finish"}</h1>
       <p className="mt-2 text-sm text-ink-soft">
         {state === "done"
           ? "Every change pushed to the repositories you chose will now be reviewed. To review one right now, paste its link."
-          : "GitHub didn't confirm that this installation is yours. Please try installing again from your repository's link."}
+          : "Only the account's owner, or an admin of its repositories, can finish setup. Ask one of them, or install ShipBrace again from your own account."}
       </p>
       <Link to="/" className={`${button} mt-6`}>Continue</Link>
     </Shell>
