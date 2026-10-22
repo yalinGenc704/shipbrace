@@ -16,7 +16,7 @@ const SNAPSHOT = snapshotFromFiles([{ path: "index.js", content: "console.log(1)
 
 /** A Worker environment whose reviewer container ends every review with `reply`. */
 function envWith(db: D1Database, reply: () => Promise<Response>, limits: Partial<Env> = {}) {
-  const started = { count: 0 };
+  const started = { count: 0, allowed: undefined as string[] | undefined };
   const env = {
     DB: db,
     REVIEWER: {
@@ -25,6 +25,9 @@ function envWith(db: D1Database, reply: () => Promise<Response>, limits: Partial
         fetch: () => {
           started.count++;
           return reply();
+        },
+        allow: async (steps: string[]) => {
+          started.allowed = steps;
         },
         destroy: async () => {},
       }),
@@ -95,4 +98,21 @@ test("a finished review comes back unchanged", async () => {
   const result = { modules: [], summary: {}, stats: {} };
   const { env } = envWith(fakeD1(), async () => Response.json({ type: "done", result }));
   assert.deepEqual(await reviewInContainer(env, SNAPSHOT, 1), result);
+});
+
+test("a review is allowed only the outside steps its installation has switched on", async () => {
+  const db = fakeD1();
+  const done = async () => Response.json({ type: "stopped", reason: "crash" });
+  // A set-up installation: package lookup on (the default), AI off.
+  await db.prepare("INSERT INTO users (github_id, login) VALUES (5, 'ada')").run();
+  await db.prepare("INSERT INTO installations (installation_id, set_up_by) VALUES (1, 5)").run();
+  const on = envWith(db, done, { PACKAGE_LOOKUP: "on", AI_REVIEW: "on", ANTHROPIC_API_KEY: "k", INSTALLATION_DAILY_LIMIT: "10" } as Partial<Env>);
+  await assert.rejects(reviewInContainer(on.env, SNAPSHOT, 1));
+  assert.deepEqual(on.started.allowed, ["lookup"], "package lookup is on by default; the AI step is off until switched on");
+  const notSetUp = envWith(db, done, { PACKAGE_LOOKUP: "on", INSTALLATION_DAILY_LIMIT: "10" });
+  await assert.rejects(reviewInContainer(notSetUp.env, SNAPSHOT, 3));
+  assert.deepEqual(notSetUp.started.allowed, [], "an installation nobody has set up sends nothing out");
+  const off = envWith(db, done, { PACKAGE_LOOKUP: "off", INSTALLATION_DAILY_LIMIT: "10" });
+  await assert.rejects(reviewInContainer(off.env, SNAPSHOT, 2));
+  assert.deepEqual(off.started.allowed, [], "switched off for the whole deployment");
 });

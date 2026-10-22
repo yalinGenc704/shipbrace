@@ -3,6 +3,7 @@ import { createClaudeProposer, ProposerRefusedError } from "@shipbrace/guardrail
 import { createOsvSource } from "@shipbrace/guardrails/vulnerabilities";
 import { Container, type OutboundHandlerContext } from "@cloudflare/containers";
 import type { Env } from "./env.ts";
+import { mayAsk, type OutsideStep } from "./outside-steps.ts";
 
 /**
  * The review container: one per review, started for it and destroyed after.
@@ -12,17 +13,29 @@ import type { Env } from "./env.ts";
  * `answer` below rather than to any network. That is how the reviewer asks for
  * the AI's suggestions and the package lookup -- and `answer` treats every
  * request as coming from code that might have been taken over: each step at
- * most once per review, only if switched on, with a size limit.
+ * most once per review, only if switched on (on this deployment and for this
+ * installation, recorded by `allow` before the review starts), with a size
+ * limit.
  */
 export class Reviewer extends Container<Env> {
   override defaultPort = 8080;
   override sleepAfter = "2m";
   override enableInternet = false;
 
-  /** True the first time a review asks for `step`; false ever after. */
+  /**
+   * The outside steps this review may use, set by the Worker from the
+   * installation's switches before the review starts. Called over RPC; never
+   * remove it or `claim`.
+   */
+  async allow(steps: OutsideStep[]): Promise<void> {
+    await this.ctx.storage.put("allowed", steps);
+  }
+
+  /** True the first time a review asks for an allowed `step`; false otherwise and ever after. */
   async claim(step: string): Promise<boolean> {
     const key = `asked:${step}`;
-    if (await this.ctx.storage.get(key)) return false;
+    const allowed = await this.ctx.storage.get<OutsideStep[]>("allowed");
+    if (!mayAsk(allowed, Boolean(await this.ctx.storage.get(key)), step)) return false;
     await this.ctx.storage.put(key, true);
     return true;
   }
@@ -38,7 +51,7 @@ async function answer(request: Request, env: Env, ctx: OutboundHandlerContext): 
 
   const reviewer = env.REVIEWER.get(env.REVIEWER.idFromString(ctx.containerId));
   if (!(await reviewer.claim(step))) {
-    console.error("reviewer asked twice for", step, "- refused");
+    console.error("reviewer asked for", step, "when not allowed or twice - refused");
     return reply({ error: "failed" }, 403);
   }
 

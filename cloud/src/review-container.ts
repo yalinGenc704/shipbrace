@@ -4,6 +4,7 @@ import type { ReviewReply, ReviewRequest } from "@shipbrace/server/sandbox/revie
 import { ReviewStoppedError } from "@shipbrace/server/sandbox/stopped.ts";
 import { installationSwitches } from "./accounts.ts";
 import type { Env } from "./env.ts";
+import type { OutsideStep } from "./outside-steps.ts";
 import { claimReviewStart, dailyLimits } from "./limits.ts";
 
 const STOP_REASONS = new Set(["time", "memory", "crash", "busy", "unavailable"]);
@@ -23,17 +24,23 @@ export async function reviewInContainer(env: Env, snapshot: RepoSnapshot, instal
   // Each outside step needs both: offered on this deployment, and switched on
   // for this installation. Switched off, the report says it was not checked.
   const switches = await installationSwitches(env.DB, installationId);
+  const useAi = env.AI_REVIEW === "on" && Boolean(env.ANTHROPIC_API_KEY) && switches.aiReview;
+  const useLookup = env.PACKAGE_LOOKUP === "on" && switches.packageLookup;
   const reviewer = env.REVIEWER.get(env.REVIEWER.newUniqueId());
   const request: ReviewRequest = {
     files: snapshot.files.map(({ path, content }) => ({ path, content })),
     tracked: [...snapshot.tracked],
-    ...(env.AI_REVIEW === "on" && env.ANTHROPIC_API_KEY && switches.aiReview ? { proposer: { name: "claude" } } : {}),
-    ...(env.PACKAGE_LOOKUP === "on" && switches.packageLookup ? { vulnerabilities: { notice: OSV_NOTICE } } : {}),
+    ...(useAi ? { proposer: { name: "claude" } } : {}),
+    ...(useLookup ? { vulnerabilities: { notice: OSV_NOTICE } } : {}),
   };
+  // Told to the review's own record before it starts, so the Worker refuses
+  // any other step even if the code inside the container is taken over.
+  const allowed: OutsideStep[] = [...(useAi ? (["propose"] as const) : []), ...(useLookup ? (["lookup"] as const) : [])];
 
   try {
     let response: Response;
     try {
+      await reviewer.allow(allowed);
       response = await reviewer.fetch("http://reviewer/review", {
         method: "POST",
         headers: { "content-type": "application/json" },
