@@ -73,16 +73,18 @@
       "max_instances": 2
     }
   ],
-  // Brakes on floods (approximate, per Cloudflare location): 60 requests a
-  // minute per signed-in person, 10 sign-in attempts or pasted links a minute.
-  "ratelimits": [
-    { "name": "API_LIMITER", "namespace_id": "1001", "simple": { "limit": 60, "period": 60 } },
-    { "name": "ATTEMPT_LIMITER", "namespace_id": "1002", "simple": { "limit": 10, "period": 60 } }
-  ],
   "durable_objects": {
-    "bindings": [{ "name": "REVIEWER", "class_name": "Reviewer" }]
+    "bindings": [
+      { "name": "REVIEWER", "class_name": "Reviewer" },
+      // Exact per-minute limits: 60 requests per signed-in person, 10 sign-in
+      // attempts or pasted links (src/rate-counter.ts, src/accounts.ts).
+      { "name": "RATE_COUNTER", "class_name": "RateCounter" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Reviewer"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Reviewer"] },
+    { "tag": "v2", "new_sqlite_classes": ["RateCounter"] }
+  ],
 
   // Nightly clean-up (src/index.ts, `scheduled`): reviews older than 90 days.
   "triggers": { "crons": ["17 3 * * *"] }

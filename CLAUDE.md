@@ -74,7 +74,7 @@ everywhere:
 # PostgreSQL 18 (Homebrew, not started at login). Databases: shipbrace, shipbrace_test.
 LC_ALL=en_US.UTF-8 /opt/homebrew/opt/postgresql@18/bin/pg_ctl -D /opt/homebrew/var/postgresql@18 -l /opt/homebrew/var/log/postgresql@18.log start
 
-# all tests (expect 282 pass). Without TEST_DATABASE_URL the 6 database tests
+# all tests (expect 284 pass). Without TEST_DATABASE_URL the 6 database tests
 # are skipped and say so; it must name a database ending in _test (it is wiped).
 # CI (.github/workflows/ci.yml) runs typecheck, lint, tests and build on every push.
 TEST_DATABASE_URL=postgres:///shipbrace_test npm test
@@ -430,13 +430,14 @@ the server with the AI step, start it with an extra `--env-file` that sets
   `account-daily-limit` / `limit`). The AI step
   runs only for reviews started by GitHub ids in `AI_ALLOWED_GITHUB_IDS`
   (the owner, 174497899) with that installation's switch on
-  (`cloud/src/ai-access.ts`); `AI_REVIEW` is on only for that. Cloudflare
-  `ratelimits` bindings: 60 requests a minute per signed-in person on `/api/*`,
-  10 sign-in attempts (by address) or pasted links (by person) a minute;
-  approximate, and a limiter error lets the request through (and is logged).
-  Measured live 2026-10-21: it barely engages at these numbers (3 of 110
-  sign-in attempts over a minute refused), because each Cloudflare server
-  counts separately; treat it as a brake on very large floods only. The dashboard
+  (`cloud/src/ai-access.ts`); `AI_REVIEW` is on only for that. Per-minute
+  limits are exact, in a Durable Object per key (`cloud/src/rate-counter.ts`,
+  sliding window in `rate-window.ts`): 60 requests per signed-in person on
+  `/api/*`, 10 sign-in attempts (per address; IPv6 per /64) or pasted links
+  (per person). A counter error lets the request through and is logged.
+  Cloudflare's built-in rate-limiting binding was tried first and barely
+  engaged when measured live (3 of 110 refused), so it was replaced. The
+  dashboard
   shows "N of 50 reviews used this month". The Docker fallback has no AI
   allowlist: keep `AI_REVIEW` off there. A subscription and free trial are
   planned later.

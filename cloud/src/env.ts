@@ -1,4 +1,5 @@
 import type { PushJob } from "@shipbrace/server/github/webhook.ts";
+import type { RateCounter } from "./rate-counter.ts";
 import type { Reviewer } from "./reviewer.ts";
 
 /** What the Worker is given by Cloudflare (wrangler.jsonc, plus secrets). */
@@ -31,14 +32,11 @@ export interface Env {
   GITHUB_APP_SLUG: string;
 
   /**
-   * Cloudflare rate limiting (wrangler.jsonc `ratelimits`): approximate, per
-   * Cloudflare location, a brake on floods rather than an exact count.
-   * API_LIMITER: requests per signed-in person; ATTEMPT_LIMITER: sign-in
-   * attempts (by address, nobody is known yet) and pasted links (by person).
-   * Optional so tests and local runs work without them.
+   * Exact per-minute limits (rate-counter.ts): one counter per signed-in
+   * person, or per address before sign-in. Optional so tests and local runs
+   * work without it.
    */
-  API_LIMITER?: RateLimit;
-  ATTEMPT_LIMITER?: RateLimit;
+  RATE_COUNTER?: DurableObjectNamespace<RateCounter>;
 
   /** Secrets, set with `wrangler secret put`; never in the config file. */
   GITHUB_PRIVATE_KEY?: string;

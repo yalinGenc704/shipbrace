@@ -11,6 +11,7 @@ import { webhookBodyLimit } from "./webhook-limit.ts";
 
 export { ContainerProxy } from "@cloudflare/containers";
 export { Reviewer } from "./reviewer.ts";
+export { RateCounter } from "./rate-counter.ts";
 
 /**
  * ShipBrace (still named ShipBrace in the code) on Cloudflare.

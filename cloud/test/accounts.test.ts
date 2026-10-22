@@ -3,7 +3,8 @@ import { generateKeyPairSync } from "node:crypto";
 import { beforeEach, test } from "node:test";
 import { runSecurityReview, snapshotFromFiles } from "@shipbrace/guardrails";
 import { Hono } from "hono";
-import { accountRoutes, forgetInstallation, installationIsSetUp, installationSwitches, NOTICE_VERSION } from "../src/accounts.ts";
+import { allowHit } from "../src/rate-window.ts";
+import { accountRoutes, forgetInstallation, networkOf, PER_MINUTE, installationIsSetUp, installationSwitches, NOTICE_VERSION } from "../src/accounts.ts";
 import { decrypt, encrypt, randomToken } from "../src/crypto.ts";
 import type { Env } from "../src/env.ts";
 import { parseRepoLink } from "../src/github-user.ts";
@@ -485,32 +486,38 @@ test("only people on the AI list can switch the AI step on or see it offered", a
   assert.equal(listed.aiAvailable, true);
 });
 
-/** A stand-in for Cloudflare's rate limiter: allows `limit` calls per key. */
-function fakeLimiter(limit: number): RateLimit {
-  const counts = new Map<string, number>();
+/** A stand-in for the rate counters, using the real counting rule with smaller limits. */
+const seen: number[] = [];
+function fakeCounters(limit: number): NonNullable<Env["RATE_COUNTER"]> {
+  const times = new Map<string, number[]>();
   return {
-    limit: async ({ key }: { key: string }) => {
-      counts.set(key, (counts.get(key) ?? 0) + 1);
-      return { success: counts.get(key)! <= limit };
-    },
-  } as RateLimit;
+    idFromName: (name: string) => name,
+    get: (id: string) => ({
+      hit: async (_key: string, asked: number) => {
+        seen.push(asked);
+        const list = times.get(id) ?? [];
+        times.set(id, list);
+        return allowHit(list, Date.now(), Math.min(limit, asked), 60_000);
+      },
+    }),
+  } as unknown as NonNullable<Env["RATE_COUNTER"]>;
 }
 
 test("a signed-in person sending too many requests a minute is told to wait", async () => {
   const cookie = await signIn();
-  env.API_LIMITER = fakeLimiter(3);
+  env.RATE_COUNTER = fakeCounters(3);
   for (let i = 0; i < 3; i++) assert.equal((await call("/api/me", {}, cookie)).status, 200);
   assert.equal((await call("/api/me", {}, cookie)).status, 429);
 });
 
 test("too many sign-in attempts or pasted links a minute are refused", async () => {
-  env.ATTEMPT_LIMITER = fakeLimiter(1);
+  env.RATE_COUNTER = fakeCounters(1);
   const login = () => app.request("/auth/login", { headers: { "cf-connecting-ip": "203.0.113.9" } }, env);
   assert.equal((await login()).status, 302);
   assert.equal((await login()).status, 429);
-  env.ATTEMPT_LIMITER = undefined;
+  env.RATE_COUNTER = undefined;
   const cookie = await signIn();
-  env.ATTEMPT_LIMITER = fakeLimiter(1);
+  env.RATE_COUNTER = fakeCounters(1);
   assert.equal((await post("/api/repos", { link: "ada/shop" }, cookie)).status, 200);
   assert.equal((await post("/api/repos", { link: "ada/shop" }, cookie)).status, 429);
 });
@@ -525,4 +532,19 @@ test("the settings list says how many of the month's reviews an account has used
   assert.equal(listed.installations[0]?.reviews.used, 2);
   assert.equal(listed.installations[0]?.reviews.limit, 50);
   assert.match(listed.installations[0]?.reviews.resetsOn ?? "", /^\d{4}-\d{2}-01T00:00:00\.000Z$/);
+});
+
+test("the limits asked for are 60 requests and 10 attempts a minute, and IPv6 counts by network", async () => {
+  seen.length = 0;
+  const cookie = await signIn();
+  env.RATE_COUNTER = fakeCounters(1_000);
+  await call("/api/me", {}, cookie);
+  await post("/api/repos", { link: "ada/shop" }, cookie);
+  await app.request("/auth/login", { headers: { "cf-connecting-ip": "203.0.113.9" } }, env);
+  assert.deepEqual([...new Set(seen)].sort((a, b) => a - b), [PER_MINUTE.attempts, PER_MINUTE.api]);
+  assert.deepEqual(PER_MINUTE, { api: 60, attempts: 10 });
+  assert.equal(networkOf("2001:db8:aa:bb:1:2:3:4"), "2001:db8:aa:bb::/64");
+  assert.equal(networkOf("2001:db8:aa:bb::9"), "2001:db8:aa:bb::/64");
+  assert.equal(networkOf("2001:db8::1"), "2001:db8:0:0::/64");
+  assert.equal(networkOf("203.0.113.9"), "203.0.113.9");
 });

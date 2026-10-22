@@ -94,26 +94,43 @@ const mayOpen = (session: Session, access: { read: boolean; admin: boolean }, ra
 
 const NOT_YOURS = "Only the person who started this review and the repository's admins can open it.";
 
+/** The per-minute limits: requests per signed-in person, and sign-in attempts or pasted links. */
+export const PER_MINUTE = { api: 60, attempts: 10 } as const;
+
 /**
- * True when this key is still under its limit (or no limiter is configured).
- * A limiter that fails to answer lets the request through: it is a brake on
- * floods, and the daily and monthly review limits stay exact regardless.
+ * True when this key is still under its per-minute limit (or no counter is
+ * configured). The counter is exact (rate-counter.ts). If it fails to answer,
+ * the request goes through and the failure is logged: the review limits stay
+ * exact regardless, so costs stay capped.
  */
-async function underLimit(limiter: RateLimit | undefined, key: string): Promise<boolean> {
-  if (!limiter) return true;
+async function underLimit(counters: Env["RATE_COUNTER"], key: string, limit: number): Promise<boolean> {
+  if (!counters) return true;
   try {
-    return (await limiter.limit({ key })).success;
+    return await counters.get(counters.idFromName(key)).hit(key, limit, 60_000);
   } catch (error) {
-    console.error("rate limiter did not answer; request let through:", error instanceof Error ? error.message : "unknown");
+    console.error("rate counter did not answer; request let through:", error instanceof Error ? error.message : "unknown");
     return true;
   }
 }
 
 const TOO_MANY = { error: "Too many requests. Please wait a minute and try again." };
 
-/** The visitor's address as Cloudflare saw it; used only before anyone is signed in. */
+/**
+ * The visitor's network as Cloudflare saw it; used only before anyone is
+ * signed in. An IPv6 address is cut to its first four groups (the /64 a home
+ * or office is usually given), since one such network holds countless
+ * addresses and each would otherwise get its own allowance.
+ */
+export function networkOf(address: string | undefined): string {
+  if (!address) return "unknown";
+  if (!address.includes(":")) return address;
+  const groups = address.split("::")[0]!.split(":");
+  const full = address.includes("::") ? [...groups, ...Array(8).fill("0")].slice(0, 8) : groups;
+  return `${full.slice(0, 4).map((g) => g.toLowerCase() || "0").join(":")}::/64`;
+}
+
 const addressOf = (c: { req: { header: (name: string) => string | undefined } }) =>
-  c.req.header("cf-connecting-ip") ?? "unknown";
+  networkOf(c.req.header("cf-connecting-ip"));
 
 export function accountRoutes() {
   const app = new Hono<{ Bindings: Env; Variables: { session: Session } }>();
@@ -122,7 +139,7 @@ export function accountRoutes() {
 
   app.get("/auth/login", async (c) => {
     if (!configured(c.env)) return c.text("Sign-in is not set up yet.", 503);
-    if (!(await underLimit(c.env.ATTEMPT_LIMITER, `sign-in:${addressOf(c)}`))) return c.text(TOO_MANY.error, 429);
+    if (!(await underLimit(c.env.RATE_COUNTER, `sign-in:${addressOf(c)}`, PER_MINUTE.attempts))) return c.text(TOO_MANY.error, 429);
     const state = randomToken();
     const back = safeReturn(c.req.query("return"));
     c.header("Set-Cookie", `${STATE_COOKIE}=${state}.${encodeURIComponent(back)}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=600`);
@@ -131,7 +148,7 @@ export function accountRoutes() {
 
   app.get("/auth/callback", async (c) => {
     if (!configured(c.env)) return c.text("Sign-in is not set up yet.", 503);
-    if (!(await underLimit(c.env.ATTEMPT_LIMITER, `sign-in:${addressOf(c)}`))) return c.text(TOO_MANY.error, 429);
+    if (!(await underLimit(c.env.RATE_COUNTER, `sign-in:${addressOf(c)}`, PER_MINUTE.attempts))) return c.text(TOO_MANY.error, 429);
     const [expected, back] = (cookieValue(c.req.header("cookie"), STATE_COOKIE) ?? "").split(".");
     const state = c.req.query("state") ?? "";
     const code = c.req.query("code");
@@ -171,7 +188,7 @@ export function accountRoutes() {
     const current = session && allowed(c.env, session.login) ? session : null;
     if (!current && c.req.path === "/api/me") return c.json({ signedIn: false, noticeVersion: NOTICE_VERSION });
     if (!current) return c.json({ error: "Please sign in." }, 401);
-    if (!(await underLimit(c.env.API_LIMITER, `api:${current.githubId}`))) return c.json(TOO_MANY, 429);
+    if (!(await underLimit(c.env.RATE_COUNTER, `api:${current.githubId}`, PER_MINUTE.api))) return c.json(TOO_MANY, 429);
     c.set("session", current);
     c.header("Cache-Control", "no-store");
     c.header("X-Robots-Tag", "noindex");
@@ -207,7 +224,7 @@ export function accountRoutes() {
 
   async function pasted(c: C) {
     const session = c.get("session");
-    if (!(await underLimit(c.env.ATTEMPT_LIMITER, `paste:${session.githubId}`))) return c.json({ status: "limit", ...TOO_MANY }, 429);
+    if (!(await underLimit(c.env.RATE_COUNTER, `paste:${session.githubId}`, PER_MINUTE.attempts))) return c.json({ status: "limit", ...TOO_MANY }, 429);
     if (session.noticeVersion !== NOTICE_VERSION) return c.json({ status: "notice", error: "Please read the notices first." }, 403);
 
     const { link } = (await c.req.json().catch(() => ({}))) as { link?: string };
