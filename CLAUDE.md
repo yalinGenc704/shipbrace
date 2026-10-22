@@ -433,7 +433,10 @@ the server with the AI step, start it with an extra `--env-file` that sets
   (`cloud/src/ai-access.ts`); `AI_REVIEW` is on only for that. Cloudflare
   `ratelimits` bindings: 60 requests a minute per signed-in person on `/api/*`,
   10 sign-in attempts (by address) or pasted links (by person) a minute;
-  approximate, and a limiter error lets the request through. The dashboard
+  approximate, and a limiter error lets the request through (and is logged).
+  Measured live 2026-10-21: it barely engages at these numbers (3 of 110
+  sign-in attempts over a minute refused), because each Cloudflare server
+  counts separately; treat it as a brake on very large floods only. The dashboard
   shows "N of 50 reviews used this month". The Docker fallback has no AI
   allowlist: keep `AI_REVIEW` off there. A subscription and free trial are
   planned later.
