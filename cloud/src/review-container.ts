@@ -26,7 +26,8 @@ export async function reviewInContainer(
   const claimed = await claimReviewStart(env.DB, installationId, reviewLimits(env));
   if (!claimed.ok) {
     // The daily one is ShipBrace-wide, so it is worth noticing in the logs.
-    console.error(`${claimed.reason === "limit" ? "daily safety limit" : "monthly account limit"} reached; review not started (installation ${installationId})`);
+    const which = { limit: "daily safety limit", "monthly-limit": "monthly account limit", "account-daily-limit": "daily account limit" };
+    console.error(`${which[claimed.reason]} reached; review not started (installation ${installationId})`);
     throw new ReviewStoppedError(claimed.reason);
   }
   // Each outside step needs both: offered on this deployment, and switched on

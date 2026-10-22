@@ -218,7 +218,7 @@ export async function reviewPush(
           title: "The review could not be completed",
           // A stopped review says why in fixed words; anything else stays in the log.
           summary: error instanceof ReviewStoppedError
-            ? error.reason === "limit" || error.reason === "monthly-limit"
+            ? error.reason === "limit" || error.reason === "monthly-limit" || error.reason === "account-daily-limit"
               ? error.userMessage
               : `${error.userMessage} Push again to retry; if it keeps happening, the server log has the details.`
             : "Nothing was checked for this commit. Push again to retry; if it keeps happening, the server log has the details.",

@@ -18,6 +18,8 @@ export interface Env {
   DAILY_REVIEW_LIMIT: string;
   /** Most reviews started per calendar month by one GitHub account (installation). */
   MONTHLY_REVIEW_LIMIT?: string;
+  /** Most reviews started in any 24 hours by one GitHub account (installation). */
+  ACCOUNT_DAILY_REVIEW_LIMIT?: string;
   /**
    * GitHub user ids (comma-separated) whose reviews may use the AI step --
    * the only part with a per-review cost. Empty means nobody.

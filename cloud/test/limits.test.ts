@@ -74,13 +74,13 @@ test("one GitHub account cannot use more than its reviews for the month", async 
 
 test("the month resets on the 1st; the daily cap looks back 24 hours", async () => {
   const db = fakeD1();
-  const limits = { monthly: 1, daily: 5 };
+  const limits = { monthly: 1, accountDaily: 10, daily: 5 };
   await db.prepare("INSERT INTO review_starts (installation_id, started_at) VALUES (7, strftime('%Y-%m-%dT%H:%M:%fZ', 'now', 'start of month', '-1 second'))").run();
   assert.deepEqual(await claimReviewStart(db, 7, limits), { ok: true }, "last month's start does not count");
   assert.deepEqual(await claimReviewStart(db, 7, limits), { ok: false, reason: "monthly-limit" });
   assert.equal(await usedThisMonth(db, 7), 1);
   await db.prepare("INSERT INTO review_starts (installation_id, started_at) VALUES (8, strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-25 hours'))").run();
-  assert.deepEqual(await claimReviewStart(db, 9, { monthly: 10, daily: 1 }), { ok: false, reason: "limit" }, "one start in the last 24 hours fills a cap of one");
+  assert.deepEqual(await claimReviewStart(db, 9, { monthly: 10, accountDaily: 10, daily: 1 }), { ok: false, reason: "limit" }, "one start in the last 24 hours fills a cap of one");
 });
 
 test("the nightly job keeps this month and last month, and removes older starts", async () => {
@@ -95,15 +95,18 @@ test("the nightly job keeps this month and last month, and removes older starts"
 
 test("simultaneous starts cannot both take the last place", async () => {
   const db = fakeD1();
-  const results = await Promise.all(Array.from({ length: 5 }, (_, i) => claimReviewStart(db, i, { monthly: 1, daily: 1 })));
+  const results = await Promise.all(Array.from({ length: 5 }, (_, i) => claimReviewStart(db, i, { monthly: 1, accountDaily: 1, daily: 1 })));
   assert.equal(results.filter((r) => r.ok).length, 1);
 });
 
 test("an unreadable setting falls back to a low limit, never to none", () => {
-  assert.deepEqual(reviewLimits({ DAILY_REVIEW_LIMIT: "500", MONTHLY_REVIEW_LIMIT: "300" }), { daily: 500, monthly: 300 });
-  assert.deepEqual(reviewLimits({}), { daily: 50, monthly: 50 });
-  assert.deepEqual(reviewLimits({ DAILY_REVIEW_LIMIT: "lots", MONTHLY_REVIEW_LIMIT: "-1" }), { daily: 50, monthly: 50 });
-  assert.deepEqual(reviewLimits({ DAILY_REVIEW_LIMIT: "0" }), { daily: 0, monthly: 50 }, "zero stops all reviews");
+  assert.deepEqual(
+    reviewLimits({ DAILY_REVIEW_LIMIT: "500", MONTHLY_REVIEW_LIMIT: "300", ACCOUNT_DAILY_REVIEW_LIMIT: "20" }),
+    { daily: 500, monthly: 300, accountDaily: 20 },
+  );
+  assert.deepEqual(reviewLimits({}), { daily: 50, monthly: 50, accountDaily: 10 });
+  assert.deepEqual(reviewLimits({ DAILY_REVIEW_LIMIT: "lots", MONTHLY_REVIEW_LIMIT: "-1" }), { daily: 50, monthly: 50, accountDaily: 10 });
+  assert.deepEqual(reviewLimits({ DAILY_REVIEW_LIMIT: "0" }), { daily: 0, monthly: 50, accountDaily: 10 }, "zero stops all reviews");
 });
 
 test("the reset date is the 1st of next month, also across a year end", () => {
@@ -149,4 +152,13 @@ test("the AI step runs only for reviews started by someone on the AI list", asyn
   const unknown = envWith(db, done, settings);
   await assert.rejects(reviewInContainer(unknown.env, SNAPSHOT, 1));
   assert.deepEqual(unknown.started.allowed, [], "a review with no known starter gets no AI");
+});
+
+test("one account can start at most its daily share, and the others keep theirs", async () => {
+  const db = fakeD1();
+  const limits = { monthly: 50, accountDaily: 2, daily: 50 };
+  assert.equal((await claimReviewStart(db, 7, limits)).ok, true);
+  assert.equal((await claimReviewStart(db, 7, limits)).ok, true);
+  assert.deepEqual(await claimReviewStart(db, 7, limits), { ok: false, reason: "account-daily-limit" });
+  assert.equal((await claimReviewStart(db, 8, limits)).ok, true, "another account is unaffected");
 });

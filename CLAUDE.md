@@ -74,7 +74,7 @@ everywhere:
 # PostgreSQL 18 (Homebrew, not started at login). Databases: shipbrace, shipbrace_test.
 LC_ALL=en_US.UTF-8 /opt/homebrew/opt/postgresql@18/bin/pg_ctl -D /opt/homebrew/var/postgresql@18 -l /opt/homebrew/var/log/postgresql@18.log start
 
-# all tests (expect 281 pass). Without TEST_DATABASE_URL the 6 database tests
+# all tests (expect 282 pass). Without TEST_DATABASE_URL the 6 database tests
 # are skipped and say so; it must name a database ending in _test (it is wiped).
 # CI (.github/workflows/ci.yml) runs typecheck, lint, tests and build on every push.
 TEST_DATABASE_URL=postgres:///shipbrace_test npm test
@@ -423,9 +423,11 @@ the server with the AI step, start it with an extra `--env-file` that sets
 - **Review limits, AI access and rate limiting (2026-10-21, user decisions).**
   Each GitHub account (installation) gets `MONTHLY_REVIEW_LIMIT` (50) reviews
   per calendar month (UTC, resets on the 1st), counting every push or pasted
-  review of its repositories at start; `DAILY_REVIEW_LIMIT` (50, rolling 24
-  hours, across everyone) is a safety cap (`cloud/src/limits.ts`). The check
-  says which limit stopped a review (`monthly-limit` / `limit`). The AI step
+  review of its repositories at start, and at most
+  `ACCOUNT_DAILY_REVIEW_LIMIT` (10) in any 24 hours; `DAILY_REVIEW_LIMIT` (50,
+  rolling 24 hours, across everyone) is a safety cap (`cloud/src/limits.ts`).
+  The check says which limit stopped a review (`monthly-limit` /
+  `account-daily-limit` / `limit`). The AI step
   runs only for reviews started by GitHub ids in `AI_ALLOWED_GITHUB_IDS`
   (the owner, 174497899) with that installation's switch on
   (`cloud/src/ai-access.ts`); `AI_REVIEW` is on only for that. Cloudflare

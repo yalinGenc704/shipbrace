@@ -38,6 +38,7 @@
     // installation. Low while ShipBrace is private; raise at launch.
     "DAILY_REVIEW_LIMIT": "50",
     "MONTHLY_REVIEW_LIMIT": "50",
+    "ACCOUNT_DAILY_REVIEW_LIMIT": "10",
     "AI_ALLOWED_GITHUB_IDS": "174497899",
     // Invite-only until launch: only these GitHub accounts can sign in.
     "ALLOWED_GITHUB_USERS": "yalinGenc704"
