@@ -436,7 +436,8 @@ the server with the AI step, start it with an extra `--env-file` that sets
   `/api/*`, 10 sign-in attempts (per address; IPv6 per /64) or pasted links
   (per person). A counter error lets the request through and is logged.
   Cloudflare's built-in rate-limiting binding was tried first and barely
-  engaged when measured live (3 of 110 refused), so it was replaced. The
+  engaged when measured live (3 of 110 refused), so it was replaced; the
+  replacement, measured live, let exactly 10 of a burst of 40 through. The
   dashboard
   shows "N of 50 reviews used this month". The Docker fallback has no AI
   allowlist: keep `AI_REVIEW` off there. A subscription and free trial are
