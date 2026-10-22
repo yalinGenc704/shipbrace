@@ -14,6 +14,8 @@ import {
   type OAuthApp,
 } from "./github-user.ts";
 import { d1History } from "./history-d1.ts";
+import { aiAllowedFor } from "./ai-access.ts";
+import { nextReset, reviewLimits, usedThisMonth } from "./limits.ts";
 import { record } from "./audit.ts";
 import { clearedSessionCookie, closeSession, cookieValue, openSession, readSession, sessionCookie, type Session } from "./session.ts";
 
@@ -92,13 +94,34 @@ const mayOpen = (session: Session, access: { read: boolean; admin: boolean }, ra
 
 const NOT_YOURS = "Only the person who started this review and the repository's admins can open it.";
 
+/**
+ * True when this key is still under its limit (or no limiter is configured).
+ * A limiter that fails to answer lets the request through: it is a brake on
+ * floods, and the daily and monthly review limits stay exact regardless.
+ */
+async function underLimit(limiter: RateLimit | undefined, key: string): Promise<boolean> {
+  if (!limiter) return true;
+  try {
+    return (await limiter.limit({ key })).success;
+  } catch {
+    return true;
+  }
+}
+
+const TOO_MANY = { error: "Too many requests. Please wait a minute and try again." };
+
+/** The visitor's address as Cloudflare saw it; used only before anyone is signed in. */
+const addressOf = (c: { req: { header: (name: string) => string | undefined } }) =>
+  c.req.header("cf-connecting-ip") ?? "unknown";
+
 export function accountRoutes() {
   const app = new Hono<{ Bindings: Env; Variables: { session: Session } }>();
 
   // --- signing in and out --------------------------------------------------------
 
-  app.get("/auth/login", (c) => {
+  app.get("/auth/login", async (c) => {
     if (!configured(c.env)) return c.text("Sign-in is not set up yet.", 503);
+    if (!(await underLimit(c.env.ATTEMPT_LIMITER, `sign-in:${addressOf(c)}`))) return c.text(TOO_MANY.error, 429);
     const state = randomToken();
     const back = safeReturn(c.req.query("return"));
     c.header("Set-Cookie", `${STATE_COOKIE}=${state}.${encodeURIComponent(back)}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=600`);
@@ -107,6 +130,7 @@ export function accountRoutes() {
 
   app.get("/auth/callback", async (c) => {
     if (!configured(c.env)) return c.text("Sign-in is not set up yet.", 503);
+    if (!(await underLimit(c.env.ATTEMPT_LIMITER, `sign-in:${addressOf(c)}`))) return c.text(TOO_MANY.error, 429);
     const [expected, back] = (cookieValue(c.req.header("cookie"), STATE_COOKIE) ?? "").split(".");
     const state = c.req.query("state") ?? "";
     const code = c.req.query("code");
@@ -146,6 +170,7 @@ export function accountRoutes() {
     const current = session && allowed(c.env, session.login) ? session : null;
     if (!current && c.req.path === "/api/me") return c.json({ signedIn: false, noticeVersion: NOTICE_VERSION });
     if (!current) return c.json({ error: "Please sign in." }, 401);
+    if (!(await underLimit(c.env.API_LIMITER, `api:${current.githubId}`))) return c.json(TOO_MANY, 429);
     c.set("session", current);
     c.header("Cache-Control", "no-store");
     c.header("X-Robots-Tag", "noindex");
@@ -181,6 +206,7 @@ export function accountRoutes() {
 
   async function pasted(c: C) {
     const session = c.get("session");
+    if (!(await underLimit(c.env.ATTEMPT_LIMITER, `paste:${session.githubId}`))) return c.json({ status: "limit", ...TOO_MANY }, 429);
     if (session.noticeVersion !== NOTICE_VERSION) return c.json({ status: "notice", error: "Please read the notices first." }, 403);
 
     const { link } = (await c.req.json().catch(() => ({}))) as { link?: string };
@@ -338,19 +364,23 @@ export function accountRoutes() {
     const all = await userInstallations(session.token);
     const allowed = await Promise.all(all.map((i) => mayManage(session, i.id)));
     const visible = all.filter((_, n) => allowed[n]);
-    if (visible.length === 0) return c.json({ installations: [], aiAvailable: c.env.AI_REVIEW === "on" });
+    const aiAvailable = aiAllowedFor(c.env, session.githubId);
+    if (visible.length === 0) return c.json({ installations: [], aiAvailable });
     const { results } = await c.env.DB.prepare(
       `SELECT installation_id, package_lookup, ai_review FROM installations WHERE installation_id IN (${visible.map(() => "?").join(",")})`,
     )
       .bind(...visible.map((i) => i.id))
       .all<{ installation_id: number; package_lookup: number; ai_review: number }>();
+    const limits = reviewLimits(c.env);
+    const used = await Promise.all(results.map((row) => usedThisMonth(c.env.DB, row.installation_id)));
     return c.json({
-      aiAvailable: c.env.AI_REVIEW === "on",
-      installations: results.map((row) => ({
+      aiAvailable,
+      installations: results.map((row, n) => ({
         id: row.installation_id,
         account: visible.find((i) => i.id === row.installation_id)?.account ?? "",
         packageLookup: row.package_lookup === 1,
         aiReview: row.ai_review === 1,
+        reviews: { used: used[n], limit: limits.monthly, resetsOn: nextReset() },
       })),
     });
   });
@@ -362,7 +392,9 @@ export function accountRoutes() {
       return c.json({ error: "Only the account's owner or an admin of its repositories can change this." }, 403);
     }
     const body = (await c.req.json().catch(() => ({}))) as { packageLookup?: unknown; aiReview?: unknown };
-    if (body.aiReview === true && c.env.AI_REVIEW !== "on") return c.json({ error: "The AI step isn't available yet." }, 403);
+    if (body.aiReview === true && !aiAllowedFor(c.env, c.get("session").githubId)) {
+      return c.json({ error: "The AI step isn't available yet." }, 403);
+    }
     const updates: Array<[string, number]> = [];
     if (typeof body.packageLookup === "boolean") updates.push(["package_lookup", body.packageLookup ? 1 : 0]);
     if (typeof body.aiReview === "boolean") updates.push(["ai_review", body.aiReview ? 1 : 0]);

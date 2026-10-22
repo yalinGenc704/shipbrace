@@ -32,12 +32,13 @@
     "GITHUB_APP_ID": "5157570",
     "GITHUB_APP_SLUG": "yg-aegis-review",
     "GITHUB_CLIENT_ID": "Iv23liy8pr9ByG3NznCo",
-    "AI_REVIEW": "off",
+    "AI_REVIEW": "on",
     "PACKAGE_LOOKUP": "on",
     // Reviews started per rolling 24 hours, across everyone and per GitHub
     // installation. Low while ShipBrace is private; raise at launch.
-    "DAILY_REVIEW_LIMIT": "20",
-    "INSTALLATION_DAILY_LIMIT": "10",
+    "DAILY_REVIEW_LIMIT": "50",
+    "MONTHLY_REVIEW_LIMIT": "50",
+    "AI_ALLOWED_GITHUB_IDS": "174497899",
     // Invite-only until launch: only these GitHub accounts can sign in.
     "ALLOWED_GITHUB_USERS": "yalinGenc704"
   },
@@ -70,6 +71,12 @@
       "instance_type": "standard-1",
       "max_instances": 2
     }
+  ],
+  // Brakes on floods (approximate, per Cloudflare location): 60 requests a
+  // minute per signed-in person, 10 sign-in attempts or pasted links a minute.
+  "ratelimits": [
+    { "name": "API_LIMITER", "namespace_id": "1001", "simple": { "limit": 60, "period": 60 } },
+    { "name": "ATTEMPT_LIMITER", "namespace_id": "1002", "simple": { "limit": 10, "period": 60 } }
   ],
   "durable_objects": {
     "bindings": [{ "name": "REVIEWER", "class_name": "Reviewer" }]

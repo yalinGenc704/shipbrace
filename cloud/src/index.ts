@@ -70,7 +70,7 @@ app.all("/api/*", (c) => c.json({ error: "Not found." }, 404));
 function reviewDeps(env: Env, job: PushJob): ReviewDeps {
   return {
     credentials: { appId: env.GITHUB_APP_ID, privateKey: env.GITHUB_PRIVATE_KEY ?? "" },
-    review: (snapshot) => reviewInContainer(env, snapshot, job.installationId),
+    review: (snapshot) => reviewInContainer(env, snapshot, job.installationId, job.ranBy),
     history: d1History(env.DB),
     publicUrl: env.PUBLIC_URL.replace(/\/+$/, ""),
     log: (message, error) => console.error(message, error instanceof Error ? error.message : ""),

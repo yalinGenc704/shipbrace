@@ -74,7 +74,7 @@ everywhere:
 # PostgreSQL 18 (Homebrew, not started at login). Databases: shipbrace, shipbrace_test.
 LC_ALL=en_US.UTF-8 /opt/homebrew/opt/postgresql@18/bin/pg_ctl -D /opt/homebrew/var/postgresql@18 -l /opt/homebrew/var/log/postgresql@18.log start
 
-# all tests (expect 266 pass). Without TEST_DATABASE_URL the 6 database tests
+# all tests (expect 281 pass). Without TEST_DATABASE_URL the 6 database tests
 # are skipped and say so; it must name a database ending in _test (it is wiped).
 # CI (.github/workflows/ci.yml) runs typecheck, lint, tests and build on every push.
 TEST_DATABASE_URL=postgres:///shipbrace_test npm test
@@ -420,6 +420,21 @@ the server with the AI step, start it with an extra `--env-file` that sets
   nothing about who ran a review. **This repository is public: open findings are not written
   here.** They are kept in Claude's private memory for this project and
   listed when Murat asks what is left to fix.
+- **Review limits, AI access and rate limiting (2026-10-21, user decisions).**
+  Each GitHub account (installation) gets `MONTHLY_REVIEW_LIMIT` (50) reviews
+  per calendar month (UTC, resets on the 1st), counting every push or pasted
+  review of its repositories at start; `DAILY_REVIEW_LIMIT` (50, rolling 24
+  hours, across everyone) is a safety cap (`cloud/src/limits.ts`). The check
+  says which limit stopped a review (`monthly-limit` / `limit`). The AI step
+  runs only for reviews started by GitHub ids in `AI_ALLOWED_GITHUB_IDS`
+  (the owner, 174497899) with that installation's switch on
+  (`cloud/src/ai-access.ts`); `AI_REVIEW` is on only for that. Cloudflare
+  `ratelimits` bindings: 60 requests a minute per signed-in person on `/api/*`,
+  10 sign-in attempts (by address) or pasted links (by person) a minute;
+  approximate, and a limiter error lets the request through. The dashboard
+  shows "N of 50 reviews used this month". The Docker fallback has no AI
+  allowlist: keep `AI_REVIEW` off there. A subscription and free trial are
+  planned later.
 - **The query check trusts tagged templates by name** (`SAFE_TAG`: `sql`, `db`,
   `query`), plus transaction tags (see above, 2026-10-20).
 
@@ -567,8 +582,9 @@ App permission).
    section 5, reviewed by a lawyer; the AI provider's data processing
    agreement; a trademark check on "ShipBrace".
 2. **Opening up:** make the GitHub App public, widen `ALLOWED_GITHUB_USERS`,
-   raise `DAILY_REVIEW_LIMIT` and `INSTALLATION_DAILY_LIMIT` (wrangler.jsonc), add Cloudflare rate limiting on `/api/*`, and
-   decide who may use the AI step (the only part with a per-review cost).
+   raise `DAILY_REVIEW_LIMIT` (wrangler.jsonc), and decide who may use the AI
+   step (`AI_ALLOWED_GITHUB_IDS`; the only part with a per-review cost) --
+   later through a subscription and free trial.
 3. **Small gaps:** "your call" ticks are per browser, shared across every
    repository; they should be per repository.
 

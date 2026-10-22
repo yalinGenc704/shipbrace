@@ -10,7 +10,8 @@ const MESSAGES = {
   crash: "The review stopped unexpectedly while reading the code. Nothing in this commit was checked.",
   busy: "The review was not started because too many reviews were already waiting. Nothing in this commit was checked.",
   unavailable: "The review could not start because the review service is not running. Nothing in this commit was checked.",
-  limit: "The review was not started because the daily review limit has been reached. Nothing in this commit was checked. Try again tomorrow.",
+  limit: "The review was not started because ShipBrace's daily review limit has been reached. Nothing in this commit was checked. Try again tomorrow.",
+  "monthly-limit": "The review was not started because this account has used all of its reviews for this month. Reviews start again on the 1st of next month. Nothing in this commit was checked.",
 } as const;
 
 /** A review the sandbox stopped. `userMessage` is fixed text, safe to show anyone. */

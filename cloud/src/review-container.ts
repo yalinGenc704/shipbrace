@@ -5,7 +5,8 @@ import { ReviewStoppedError } from "@shipbrace/server/sandbox/stopped.ts";
 import { installationSwitches } from "./accounts.ts";
 import type { Env } from "./env.ts";
 import type { OutsideStep } from "./outside-steps.ts";
-import { claimReviewStart, dailyLimits } from "./limits.ts";
+import { aiAllowedFor } from "./ai-access.ts";
+import { claimReviewStart, reviewLimits } from "./limits.ts";
 
 const STOP_REASONS = new Set(["time", "memory", "crash", "busy", "unavailable"]);
 
@@ -16,15 +17,24 @@ const STOP_REASONS = new Set(["time", "memory", "crash", "busy", "unavailable"])
  * installation (limits.ts): a ceiling on what any burst -- or abuse -- can
  * cost. Over either, nothing runs and the check says so in plain words.
  */
-export async function reviewInContainer(env: Env, snapshot: RepoSnapshot, installationId: number): Promise<ReviewResult> {
-  if (!(await claimReviewStart(env.DB, installationId, dailyLimits(env)))) {
-    console.error(`daily review limit reached; review not started (installation ${installationId})`);
-    throw new ReviewStoppedError("limit");
+export async function reviewInContainer(
+  env: Env,
+  snapshot: RepoSnapshot,
+  installationId: number,
+  ranBy?: number,
+): Promise<ReviewResult> {
+  const claimed = await claimReviewStart(env.DB, installationId, reviewLimits(env));
+  if (!claimed.ok) {
+    // The daily one is ShipBrace-wide, so it is worth noticing in the logs.
+    console.error(`${claimed.reason === "limit" ? "daily safety limit" : "monthly account limit"} reached; review not started (installation ${installationId})`);
+    throw new ReviewStoppedError(claimed.reason);
   }
   // Each outside step needs both: offered on this deployment, and switched on
   // for this installation. Switched off, the report says it was not checked.
   const switches = await installationSwitches(env.DB, installationId);
-  const useAi = env.AI_REVIEW === "on" && Boolean(env.ANTHROPIC_API_KEY) && switches.aiReview;
+  // The AI step: offered, switched on for this installation, and started by
+  // someone allowed to use it (ai-access.ts).
+  const useAi = aiAllowedFor(env, ranBy) && switches.aiReview;
   const useLookup = env.PACKAGE_LOOKUP === "on" && switches.packageLookup;
   const reviewer = env.REVIEWER.get(env.REVIEWER.newUniqueId());
   const request: ReviewRequest = {

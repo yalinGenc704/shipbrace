@@ -276,6 +276,13 @@ function Settings() {
         {data.data.installations.map((inst) => (
           <li key={inst.id} className="rounded-2xl border border-line bg-surface-raised p-4">
             <p className="text-sm font-medium text-ink">{inst.account}</p>
+            {inst.reviews && (
+              <p className="mt-1 text-sm text-ink-soft">
+                {inst.reviews.used} of {inst.reviews.limit} reviews used this month
+                {inst.reviews.used >= inst.reviews.limit ? " -- reviews are paused" : ""}; resets on{" "}
+                {new Date(inst.reviews.resetsOn).toLocaleDateString(undefined, { day: "numeric", month: "long", timeZone: "UTC" })}.
+              </p>
+            )}
             <Switch
               label="Check packages for known flaws"
               detail="Sends the names and versions of your public packages to OSV.dev. Never your code."

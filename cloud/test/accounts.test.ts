@@ -469,3 +469,60 @@ test("signing in, setting up, changing a switch, signing out and removal are rec
   assert.deepEqual(JSON.parse(changed.detail!), { package_lookup: 0 });
   assert.ok(!results.some((r) => /user-token|refresh-token/.test(JSON.stringify(r))), "no token is ever recorded");
 });
+
+test("only people on the AI list can switch the AI step on or see it offered", async () => {
+  env.AI_REVIEW = "on";
+  env.ANTHROPIC_API_KEY = "k";
+  const cookie = await signIn();
+  await post("/api/repos", { link: "ada/shop" }, cookie);
+  env.AI_ALLOWED_GITHUB_IDS = "999";
+  assert.equal((await post("/api/installations/7/settings", { aiReview: true }, cookie)).status, 403);
+  let listed = (await (await call("/api/installations", {}, cookie)).json()) as { aiAvailable: boolean };
+  assert.equal(listed.aiAvailable, false);
+  env.AI_ALLOWED_GITHUB_IDS = "5";
+  assert.equal((await post("/api/installations/7/settings", { aiReview: true }, cookie)).status, 200);
+  listed = (await (await call("/api/installations", {}, cookie)).json()) as { aiAvailable: boolean };
+  assert.equal(listed.aiAvailable, true);
+});
+
+/** A stand-in for Cloudflare's rate limiter: allows `limit` calls per key. */
+function fakeLimiter(limit: number): RateLimit {
+  const counts = new Map<string, number>();
+  return {
+    limit: async ({ key }: { key: string }) => {
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+      return { success: counts.get(key)! <= limit };
+    },
+  } as RateLimit;
+}
+
+test("a signed-in person sending too many requests a minute is told to wait", async () => {
+  const cookie = await signIn();
+  env.API_LIMITER = fakeLimiter(3);
+  for (let i = 0; i < 3; i++) assert.equal((await call("/api/me", {}, cookie)).status, 200);
+  assert.equal((await call("/api/me", {}, cookie)).status, 429);
+});
+
+test("too many sign-in attempts or pasted links a minute are refused", async () => {
+  env.ATTEMPT_LIMITER = fakeLimiter(1);
+  const login = () => app.request("/auth/login", { headers: { "cf-connecting-ip": "203.0.113.9" } }, env);
+  assert.equal((await login()).status, 302);
+  assert.equal((await login()).status, 429);
+  env.ATTEMPT_LIMITER = undefined;
+  const cookie = await signIn();
+  env.ATTEMPT_LIMITER = fakeLimiter(1);
+  assert.equal((await post("/api/repos", { link: "ada/shop" }, cookie)).status, 200);
+  assert.equal((await post("/api/repos", { link: "ada/shop" }, cookie)).status, 429);
+});
+
+test("the settings list says how many of the month's reviews an account has used", async () => {
+  const cookie = await signIn();
+  await post("/api/repos", { link: "ada/shop" }, cookie);
+  await env.DB.prepare("INSERT INTO review_starts (installation_id) VALUES (7), (7)").run();
+  const listed = (await (await call("/api/installations", {}, cookie)).json()) as {
+    installations: Array<{ reviews: { used: number; limit: number; resetsOn: string } }>;
+  };
+  assert.equal(listed.installations[0]?.reviews.used, 2);
+  assert.equal(listed.installations[0]?.reviews.limit, 50);
+  assert.match(listed.installations[0]?.reviews.resetsOn ?? "", /^\d{4}-\d{2}-01T00:00:00\.000Z$/);
+});

@@ -56,6 +56,8 @@ export interface InstallationSettings {
   account: string;
   packageLookup: boolean;
   aiReview: boolean;
+  /** Reviews this account has started this month, out of its monthly allowance. */
+  reviews?: { used: number; limit: number; resetsOn: string };
 }
 
 export async function loadInstallations(): Promise<{ installations: InstallationSettings[]; aiAvailable: boolean }> {
