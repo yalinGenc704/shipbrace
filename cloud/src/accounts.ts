@@ -510,7 +510,10 @@ export function accountRoutes() {
       .slice(0, 90);
     const inAdminRepos = `repository_id IN (SELECT id FROM repositories WHERE github_id IN (${adminOf.map(() => "?").join(",")}))`;
     const [deleted, hidden] = await c.env.DB.batch([
-      c.env.DB.prepare(`DELETE FROM reviews WHERE ran_by = ? AND ${adminOf.length > 0 ? inAdminRepos : "0"}`).bind(session.githubId, ...adminOf),
+      // In their own repositories this includes reports kept before 2026-10-18,
+      // when who started a review was not yet recorded: an admin owns those too.
+      c.env.DB.prepare(`DELETE FROM reviews WHERE (ran_by = ? OR ran_by IS NULL) AND ${adminOf.length > 0 ? inAdminRepos : "0"}`)
+        .bind(session.githubId, ...adminOf),
       c.env.DB.prepare("UPDATE reviews SET ran_by = NULL WHERE ran_by = ?").bind(session.githubId),
     ]);
     const counts = { deleted: deleted?.meta.changes ?? 0, hidden: hidden?.meta.changes ?? 0 };

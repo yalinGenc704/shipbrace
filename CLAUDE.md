@@ -450,7 +450,8 @@ the server with the AI step, start it with an extra `--env-file` that sets
   (`repo_settings`, migration 0007; on by default; off = the webhook ignores
   pushes, no check and no count) and "Clear history" (deletes its saved
   reports). Everyone has "Clear the reviews I started": deleted in
-  repositories they administer, elsewhere only taken out of their view
+  repositories they administer (together with reports linked to nobody:
+  kept before 2026-10-18, or hidden by others), elsewhere only taken out of their view
   (`ran_by` set to NULL, still visible to admins), so nobody can erase the
   record of their own failed push. Uninstalling forgets the switches. All
   audited. Pasting an organisation repository the App is not on, as a

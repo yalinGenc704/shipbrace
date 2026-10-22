@@ -274,7 +274,7 @@ function ClearMine() {
   async function clear() {
     if (
       !window.confirm(
-        "Clear the reports you started? In repositories you administer they are deleted for good. In other people's repositories they are removed from your view but stay in the history their admins see.",
+        "Clear the reports you started? In repositories you administer they are deleted for good, along with reports not linked to anyone (older ones, and ones others cleared from their own view). In other people's repositories they are removed from your view but stay in the history their admins see.",
       )
     ) return;
     const result = await clearMyHistory();
@@ -349,9 +349,16 @@ function RepoRow({ repo }: { repo: ConnectedRepo }) {
           </span>
         </span>
         {repo.historyId && (
-          <Link to="/history/$id" params={{ id: repo.historyId }} className="shrink-0 text-sm text-ink-soft underline hover:text-ink">
-            History
-          </Link>
+          <span className="flex shrink-0 items-center gap-3 text-sm">
+            <Link to="/history/$id" params={{ id: repo.historyId }} className="text-ink-soft underline hover:text-ink">
+              History
+            </Link>
+            {repo.canManage && (
+              <button type="button" onClick={() => void clear()} className="text-ink-soft underline hover:text-danger">
+                Clear history
+              </button>
+            )}
+          </span>
         )}
       </div>
       {repo.canManage && (
@@ -362,11 +369,6 @@ function RepoRow({ repo }: { repo: ConnectedRepo }) {
             on={repo.reviewPushes !== false}
             onChange={(on) => void flipPushes(on)}
           />
-          {repo.historyId && (
-            <button type="button" onClick={() => void clear()} className="mt-2 text-xs text-ink-soft underline hover:text-danger">
-              Clear history
-            </button>
-          )}
           {error && <p className="mt-1 text-xs text-danger">{error}</p>}
         </div>
       )}

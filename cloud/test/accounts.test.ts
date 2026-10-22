@@ -602,13 +602,15 @@ test("someone who can edit an organisation's repository but not add it is told t
   }
 });
 
-test("in a repository she administers, clearing her own reviews deletes them", async () => {
+test("in a repository she administers, clearing her own reviews deletes them, and older unrecorded ones", async () => {
   REPOS["ada/shop"]!.admin = true;
   try {
     await keep(101, "ada/shop", ME);
+    await keep(101, "ada/shop");
+    await keep(101, "ada/shop", 99);
     const cookie = await signIn();
     const mine = (await (await post("/api/history/clear-mine", {}, cookie)).json()) as { deleted: number; hidden: number };
-    assert.deepEqual([mine.deleted, mine.hidden], [1, 0]);
+    assert.deepEqual([mine.deleted, mine.hidden], [2, 0], "hers and the unrecorded one; a teammate's stays");
   } finally {
     REPOS["ada/shop"]!.admin = false;
   }
