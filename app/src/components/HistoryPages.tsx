@@ -40,14 +40,12 @@ export function StoredReviewPage({ id }: { id: string }) {
       review={data.result}
       context={
         <div className="mb-4 space-y-3">
-          <Link
-            to="/history/$id"
-            params={{ id: historyId }}
-            className="inline-flex items-center gap-1.5 text-sm text-ink-soft hover:text-ink"
-          >
-            <ArrowLeft className="size-4" aria-hidden />
-            All reviews of {owner}/{name}
-          </Link>
+          <nav className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-ink-soft" aria-label="Back">
+            <DashboardLink />
+            <Link to="/history/$id" params={{ id: historyId }} className="hover:text-ink">
+              All reviews of {owner}/{name}
+            </Link>
+          </nav>
           <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-ink-soft">
             <GitCommitHorizontal className="size-4" aria-hidden />
             <span>
@@ -90,6 +88,9 @@ export function HistoryPage({ id }: { id: string }) {
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-8 sm:py-12">
+      <nav className="mb-4 text-sm text-ink-soft" aria-label="Back">
+        <DashboardLink />
+      </nav>
       <h1 className="text-xl font-semibold text-ink sm:text-2xl">
         {data.owner}/{data.name}
       </h1>
@@ -136,5 +137,22 @@ function ConclusionIcon({ conclusion }: { conclusion: Conclusion }) {
 }
 
 function Problem({ children }: { children: ReactNode }) {
-  return <p className="p-8 text-sm text-danger">{children}</p>;
+  return (
+    <div className="p-8">
+      <p className="text-sm text-danger">{children}</p>
+      <p className="mt-4 text-sm text-ink-soft">
+        <DashboardLink />
+      </p>
+    </div>
+  );
+}
+
+/** Back to the front page, where the repositories and settings are. */
+function DashboardLink() {
+  return (
+    <Link to="/" className="inline-flex items-center gap-1.5 hover:text-ink">
+      <ArrowLeft className="size-4" aria-hidden />
+      Dashboard
+    </Link>
+  );
 }
