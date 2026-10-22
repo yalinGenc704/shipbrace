@@ -103,7 +103,8 @@ async function underLimit(limiter: RateLimit | undefined, key: string): Promise<
   if (!limiter) return true;
   try {
     return (await limiter.limit({ key })).success;
-  } catch {
+  } catch (error) {
+    console.error("rate limiter did not answer; request let through:", error instanceof Error ? error.message : "unknown");
     return true;
   }
 }
