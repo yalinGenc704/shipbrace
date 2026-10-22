@@ -1,7 +1,7 @@
 import { fork } from "node:child_process";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { RepoSnapshot, ReviewOptions, ReviewResult } from "@shipbrace/guardrails";
+import { redact, type RepoSnapshot, type ReviewOptions, type ReviewResult } from "@shipbrace/guardrails";
 import { ReviewStoppedError } from "./stopped.ts";
 import type { FromWorker, ToWorker } from "./worker.ts";
 
@@ -72,6 +72,17 @@ export type Review = (snapshot: RepoSnapshot, options?: ReviewOptions) => Promis
  * `entry` is the program run inside; tests replace it with deliberately
  * misbehaving ones to prove the walls hold.
  */
+/**
+ * The one line of a crash worth logging: the error's own line ("TypeError:
+ * ..."), secrets blanked, any quoted text removed (a parse error quotes the
+ * input it choked on, which is someone's repository), and kept short.
+ */
+function errorLine(stderr: string): string {
+  const line = /^\s*(?:\w*Error|RangeError|FATAL ERROR)\b.*$/m.exec(stderr)?.[0]?.trim();
+  if (!line) return "";
+  return `: ${redact(line).replace(/(["'`])(?:(?!\1).){0,400}\1/g, "$1…$1").slice(0, 200)}`;
+}
+
 export function createSandbox(
   limits: SandboxLimits = DEFAULT_SANDBOX_LIMITS,
   entry: string = WORKER,
@@ -205,7 +216,7 @@ function reviewOnce(
       if (settled) return;
       const reason =
         stoppedFor ?? (/heap out of memory|allocation failed/i.test(stderr) ? "memory" : "crash");
-      log(`sandbox: review process ended early (${reason}; code ${code}, signal ${signal})${stderr ? `: ${stderr.slice(0, 500)}` : ""}`);
+      log(`sandbox: review process ended early (${reason}; code ${code}, signal ${signal})${errorLine(stderr)}`);
       finish({ error: new ReviewStoppedError(reason) });
     });
 

@@ -1,7 +1,12 @@
 # Never sent to the image build: secrets, local installs, git history.
 .env
 .env.*
+**/.env
+**/.env.*
 *.pem
+**/*.pem
+.dev.vars*
+**/.dev.vars*
 deploy/.env
 deploy/secrets
 node_modules

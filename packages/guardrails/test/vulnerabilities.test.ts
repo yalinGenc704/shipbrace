@@ -167,3 +167,19 @@ test("versions compare numerically, not as text", () => {
   assert.ok(compareVersions("1.0.0-beta", "1.0.0") < 0);
   assert.equal(compareVersions("2.0.0", "2.0.0"), 0);
 });
+
+test("past the per-review cap, advisories are still reported, graded high, with no made-up fix", async () => {
+  const ids = Array.from({ length: 302 }, (_, i) => `GHSA-${String(i).padStart(4, "0")}`);
+  let detailCalls = 0;
+  const fetchImpl = (async (url: string) => {
+    if (url.endsWith("/querybatch")) return Response.json({ results: [{ vulns: ids.map((id) => ({ id })) }] });
+    detailCalls++;
+    const id = decodeURIComponent(url.split("/").pop()!);
+    return Response.json({ id, summary: "low thing", database_specific: { severity: "LOW" } });
+  }) as typeof fetch;
+  const found = await createOsvSource(fetchImpl).lookup([{ name: "padded", version: "1.0.0", direct: true }]);
+  const advisories = [...found.values()][0]!;
+  assert.equal(detailCalls, 300, "only 300 looked up in full");
+  assert.equal(advisories.length, 302, "none hidden");
+  assert.deepEqual(advisories.filter((a) => a.unchecked).map((a) => a.grade), ["high", "high"]);
+});

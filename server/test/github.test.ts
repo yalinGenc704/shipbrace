@@ -134,6 +134,10 @@ test("a push is reviewed and the result posted back as a check, in plain words",
   assert.equal(started?.body.head_sha, SHA);
   assert.equal(started?.body.status, "in_progress");
 
+  // The token is asked for this one repository, to read code and write the check only.
+  const minted = github.calls.find((c) => c.path === "/app/installations/7/access_tokens");
+  assert.deepEqual(minted?.body, { repository_ids: [4242], permissions: { contents: "read", checks: "write", metadata: "read" } });
+
   const patches = github.calls.filter((c) => c.method === "PATCH").map((c) => c.body);
   const output = patches.find((p) => p.output)?.output;
   const final = patches.at(-1);

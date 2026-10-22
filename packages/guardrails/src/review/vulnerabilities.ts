@@ -36,6 +36,8 @@ export interface Advisory {
   grade: Grade;
   /** Lowest version that fixes it, when the advisory says. */
   fixedIn?: string;
+  /** True when its details were not fetched (past the per-review cap): grade and fix unknown. */
+  unchecked?: true;
 }
 
 export interface VulnerabilitySource {
@@ -153,6 +155,7 @@ function riskFor(dep: Dependency, advisories: Advisory[], notice: string): Risk 
     "low",
   );
   const fixes = advisories.map((a) => a.fixedIn).filter((v): v is string => Boolean(v));
+  const notLookedUp = advisories.some((a) => a.unchecked);
   const target = fixes.sort(compareVersions).at(-1);
   const ids = advisories.map((a) => a.id);
   const listed = ids.length > 3 ? `${ids.slice(0, 3).join(", ")} and ${ids.length - 3} more` : ids.join(", ");
@@ -168,7 +171,9 @@ function riskFor(dep: Dependency, advisories: Advisory[], notice: string): Risk 
       "Flaws in published packages are listed publicly, so anyone looking for vulnerable sites " +
       "knows exactly what to try against apps that still use this version. You inherit the flaw " +
       "even though your own code is fine.",
-    fix: dep.direct
+    fix: notLookedUp && !target
+      ? `Some of these advisories were not looked up in full, so a fixed version is not known here. Run your package manager's audit command for ${dep.name}.`
+      : dep.direct
       ? target
         ? `Update ${dep.name} to version ${target} or later, then run your tests.`
         : `No fixed version is published yet. Check whether you can stop using ${dep.name}, or watch for an update.`
@@ -256,6 +261,12 @@ const BATCH = 1000;
 // OSV.dev answers in well under a second; a call that hangs fails the lookup instead.
 const TIMEOUT_MS = 20_000;
 const DETAIL_CONCURRENCY = 8;
+/**
+ * At most this many advisories are fetched in full for one review, so a huge
+ * or deliberately padded lockfile cannot turn one review into thousands of
+ * requests. Advisories past it are still reported, with their id only.
+ */
+const MAX_ADVISORY_DETAILS = 300;
 
 function gradeOf(vuln: OsvVuln): Grade {
   const label = (vuln.database_specific?.severity ?? vuln.affected?.[0]?.database_specific?.severity ?? "")
@@ -317,8 +328,10 @@ export function createOsvSource(fetchImpl: typeof fetch = fetch): VulnerabilityS
       }
 
       // 2. Details for each distinct advisory, a few at a time.
-      const ids = [...new Set([...idsFor.values()].flatMap((s) => [...s]))];
+      const all = [...new Set([...idsFor.values()].flatMap((s) => [...s]))];
+      const ids = all.slice(0, MAX_ADVISORY_DETAILS);
       const details = new Map<string, OsvVuln>();
+      const unchecked = new Set(all.slice(MAX_ADVISORY_DETAILS));
       for (let i = 0; i < ids.length; i += DETAIL_CONCURRENCY) {
         await Promise.all(
           ids.slice(i, i + DETAIL_CONCURRENCY).map(async (id) => {
@@ -332,9 +345,13 @@ export function createOsvSource(fetchImpl: typeof fetch = fetch): VulnerabilityS
       const out = new Map<string, Advisory[]>();
       for (const dep of dependencies) {
         const advisories = [...(idsFor.get(keyOf(dep)) ?? [])]
-          .map((id) => details.get(id))
+          .map((id) => details.get(id) ?? (unchecked.has(id) ? ({ id } as OsvVuln) : undefined))
           .filter((v): v is OsvVuln => Boolean(v) && !v!.withdrawn)
           .map((v): Advisory => {
+            // Not looked up: assume the worst rather than let padding hide it.
+            if (unchecked.has(v.id)) {
+              return { id: v.id, summary: "Details were not looked up: this project has more advisories than one review fetches.", grade: "high", unchecked: true };
+            }
             const fixedIn = fixedFor(v, dep);
             return {
               id: v.id,

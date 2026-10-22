@@ -83,7 +83,10 @@ const KEEP_DAYS = 90;
 export default {
   fetch: app.fetch,
 
-  /** Nightly: old reviews, finished sign-ins, spent rate-limit records, and year-old audit records go. */
+  /**
+   * Nightly: old reviews, finished sign-ins, spent rate-limit records,
+   * year-old audit records, and repositories and people nothing refers to.
+   */
   async scheduled(_event: ScheduledController, env: Env): Promise<void> {
     await env.DB.batch([
       env.DB.prepare("DELETE FROM reviews WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?)").bind(`-${KEEP_DAYS} days`),
@@ -91,6 +94,14 @@ export default {
       env.DB.prepare("DELETE FROM review_requests WHERE requested_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 day')"),
       forgetOldStarts(env.DB),
       forgetOldAudit(env.DB),
+      // Repositories with no reviews left, and people with no session and no
+      // installation to their name, once older than the reviews' own limit.
+      env.DB.prepare(
+        "DELETE FROM repositories WHERE id NOT IN (SELECT repository_id FROM reviews) AND created_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?)",
+      ).bind(`-${KEEP_DAYS} days`),
+      env.DB.prepare(
+        "DELETE FROM users WHERE github_id NOT IN (SELECT github_id FROM sessions) AND github_id NOT IN (SELECT set_up_by FROM installations WHERE set_up_by IS NOT NULL) AND created_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?)",
+      ).bind(`-${KEEP_DAYS} days`),
     ]);
   },
 

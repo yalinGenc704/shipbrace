@@ -158,7 +158,7 @@ export async function reviewPush(
   let client: GitHubClient;
   let checkId: number;
   try {
-    client = await installationClient(deps.credentials, installationId, deps.fetchImpl);
+    client = await installationClient(deps.credentials, installationId, deps.fetchImpl, githubId);
     ({ id: checkId } = await client.post<{ id: number }>(`${where}/check-runs`, {
       name: CHECK_NAME,
       head_sha: sha,

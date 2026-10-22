@@ -62,19 +62,23 @@ export interface AppCredentials {
 }
 
 /**
- * A client acting as one installation of the App -- that is, with access to
- * exactly the repositories that installation was granted, for one hour.
- * Minted per review rather than cached, so no long-lived token sits in memory.
+ * A client acting as one installation of the App, for one hour. Minted per
+ * review rather than cached, so no long-lived token sits in memory. Given a
+ * repository, the token covers only that repository, and only reading its
+ * code and writing its check -- even though the installation may cover many.
  */
 export async function installationClient(
   credentials: AppCredentials,
   installationId: number,
   fetchImpl: typeof fetch = fetch,
+  repositoryId?: number,
 ): Promise<GitHubClient> {
   const asApp = clientWithToken(appJwt(credentials.appId, credentials.privateKey), fetchImpl);
   const { token } = await asApp.post<{ token: string }>(
     `/app/installations/${installationId}/access_tokens`,
-    {},
+    repositoryId === undefined
+      ? {}
+      : { repository_ids: [repositoryId], permissions: { contents: "read", checks: "write", metadata: "read" } },
   );
   return clientWithToken(token, fetchImpl);
 }
