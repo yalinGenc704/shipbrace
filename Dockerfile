@@ -43,5 +43,8 @@ COPY --from=build /app/app/dist app/dist
 # that ships with the image. Everything runs as that user, never as root.
 RUN mkdir -p /run/shipbrace && chown node:node /run/shipbrace
 USER node
+# Inside a container, listen on its own network so a port mapping or the
+# tunnel container can reach it (outside one, the server stays on 127.0.0.1).
+ENV HOST=0.0.0.0
 EXPOSE 3000
 CMD ["node", "--experimental-strip-types", "server/src/index.ts"]

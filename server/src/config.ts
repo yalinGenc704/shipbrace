@@ -12,6 +12,12 @@ import { z } from "zod";
  */
 const schema = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
+  /**
+   * Which network address to listen on. This machine only by default, so
+   * nobody else on the same Wi-Fi can reach it; the Docker setup sets
+   * 0.0.0.0 inside its container, where the tunnel needs to reach it.
+   */
+  HOST: z.string().default("127.0.0.1"),
   REVIEW_ROOT: z.string().default(process.cwd()),
   ALLOWED_ORIGINS: z
     .string()
@@ -80,6 +86,7 @@ if (!parsed.success) {
 
 export const config = {
   port: parsed.data.PORT,
+  host: parsed.data.HOST,
   reviewRoot: resolve(parsed.data.REVIEW_ROOT),
   allowedOrigins: parsed.data.ALLOWED_ORIGINS.split(",").map((origin) => origin.trim()),
   packageLookup: parsed.data.PACKAGE_LOOKUP === "on",

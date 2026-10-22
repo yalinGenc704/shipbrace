@@ -30,6 +30,8 @@ services:
     env_file: .env
     environment:
       PORT: "3000"
+      # Inside its container; only the tunnel container can reach it.
+      HOST: "0.0.0.0"
       LOCAL_REVIEW: "off"
       REVIEWER_SOCKET: /run/shipbrace/reviewer.sock
       DATABASE_URL: postgres://shipbrace:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}@postgres:5432/shipbrace

@@ -80,7 +80,8 @@ LC_ALL=en_US.UTF-8 /opt/homebrew/opt/postgresql@18/bin/pg_ctl -D /opt/homebrew/v
 TEST_DATABASE_URL=postgres:///shipbrace_test npm test
 npm run typecheck && npx oxlint .
 
-# review API on :3000. Set REVIEW_ROOT explicitly: npm runs workspace scripts
+# review API on 127.0.0.1:3000 (this machine only; HOST changes it, and folder
+# reviews answer only requests addressed to localhost). Set REVIEW_ROOT explicitly: npm runs workspace scripts
 # from inside server/, so without it only that one folder is reviewed.
 # PACKAGE_LOOKUP=off keeps it fully offline (no OSV.dev lookups).
 # Build the dashboard first so the server serves it (links from GitHub checks).
@@ -331,7 +332,8 @@ the server with the AI step, start it with an extra `--env-file` that sets
   yalinGenc704/aegis-dvna-test (a DVNA copy). A push produced a failing check
   with 12 line notes. Local setup: `GITHUB_*` settings in `.env`, key in
   `github-app.pem` (git-ignored), and a temporary Cloudflare quick tunnel
-  (`cloudflared tunnel --url http://localhost:3000`). The tunnel address
+  (`cloudflared tunnel --url http://localhost:3000`; start the server with
+  `LOCAL_REVIEW=off` while a tunnel is open). The tunnel address
   changes every run, so the App's webhook URL must be updated each time until
   it is hosted.
 - **Review history (2026-10-09).** With `DATABASE_URL`, each reviewed push is

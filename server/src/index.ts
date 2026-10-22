@@ -1,3 +1,4 @@
+import { createMiddleware } from "hono/factory";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { createHash } from "node:crypto";
@@ -141,8 +142,21 @@ function reviewOnce(snapshot: RepoSnapshot): Promise<ReviewResult> {
   return pending;
 }
 
+/**
+ * Folder reviews answer only requests addressed to this machine by name.
+ * A website can point its own name at 127.0.0.1 ("DNS rebinding") and have a
+ * visitor's browser call this server; its requests still carry that site's
+ * name in Host, so they are refused. So are requests through a tunnel.
+ */
+const THIS_MACHINE = /^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/;
+const onlyThisMachine = createMiddleware(async (c, next) => {
+  if (!THIS_MACHINE.test(c.req.header("host") ?? "")) return c.json({ error: "Not found." }, 404);
+  await next();
+});
+
 // Off on a hosted server: no route, so nothing to call.
 if (config.localReview) {
+  app.use("/api/review", onlyThisMachine);
   app.get("/api/review", async (c) => {
     try {
       return c.json(await review("."));
@@ -219,13 +233,14 @@ function failure(c: Context, error: unknown) {
 const dashboard = fileURLToPath(new URL("../../app/dist", import.meta.url));
 if (existsSync(dashboard)) {
   app.use("/assets/*", serveStatic({ root: dashboard }));
+  if (config.localReview) app.use("/", onlyThisMachine);
   for (const page of [...(config.localReview ? ["/"] : []), "/reviews/:id", "/history/:id"]) {
     app.get(page, serveStatic({ root: dashboard, path: "index.html" }));
   }
 }
 
-serve({ fetch: app.fetch, port: config.port }, (info) => {
-  console.log(`review API listening on http://localhost:${info.port}`);
+serve({ fetch: app.fetch, port: config.port, hostname: config.host }, (info) => {
+  console.log(`review API listening on http://${config.host === "0.0.0.0" ? "localhost" : config.host}:${info.port}`);
   console.log(config.localReview ? `reviewing folders under ${config.reviewRoot}` : "Folder reviews off (LOCAL_REVIEW=off)");
   console.log(config.github ? "GitHub App connected" : "GitHub App not configured");
   console.log(config.reviewerSocket ? `Reviews run in the review container (${config.reviewerSocket})` : "Reviews run in a sealed process on this machine");
