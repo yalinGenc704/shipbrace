@@ -6,6 +6,7 @@ import type { Env } from "./env.ts";
 import { d1History } from "./history-d1.ts";
 import { forgetOldStarts } from "./limits.ts";
 import { reviewInContainer } from "./review-container.ts";
+import { webhookBodyLimit } from "./webhook-limit.ts";
 
 export { ContainerProxy } from "@cloudflare/containers";
 export { Reviewer } from "./reviewer.ts";
@@ -24,8 +25,6 @@ export { Reviewer } from "./reviewer.ts";
  * `assets`); only /api/* reaches this code.
  */
 
-const MAX_WEBHOOK_BYTES = 5 * 1024 * 1024;
-
 const app = new Hono<{ Bindings: Env }>();
 
 app.use(
@@ -38,10 +37,9 @@ app.use(
 // Nothing about the deployment: anyone can call this.
 app.get("/api/health", (c) => c.json({ ok: true }));
 
-app.post("/api/github/webhook", async (c) => {
+app.post("/api/github/webhook", webhookBodyLimit, async (c) => {
   const secret = c.env.GITHUB_WEBHOOK_SECRET;
   if (!secret || !c.env.GITHUB_PRIVATE_KEY) return c.json({ error: "GitHub integration is not configured." }, 503);
-  if (Number(c.req.header("content-length") ?? 0) > MAX_WEBHOOK_BYTES) return c.json({ error: "Too large." }, 413);
 
   const jobs: PushJob[] = [];
   const result = await handleWebhook(
