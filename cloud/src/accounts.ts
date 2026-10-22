@@ -14,6 +14,7 @@ import {
   type OAuthApp,
 } from "./github-user.ts";
 import { d1History } from "./history-d1.ts";
+import { record } from "./audit.ts";
 import { clearedSessionCookie, closeSession, cookieValue, openSession, readSession, sessionCookie, type Session } from "./session.ts";
 
 /**
@@ -118,6 +119,7 @@ export function accountRoutes() {
       // Not on the invite list: no session, nothing stored about them.
       if (!allowed(c.env, user.login)) return c.redirect("/?invite-only=1");
       const value = await openSession(c.env.DB, c.env.SESSION_KEY!, user, tokens);
+      await record(c.env.DB, { actor: user.id, action: "sign-in", target: user.login });
       c.header("Set-Cookie", sessionCookie(value), { append: true });
       c.header("Set-Cookie", `${STATE_COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0`, { append: true });
       return c.redirect(safeReturn(decodeURIComponent(back ?? "")));
@@ -157,7 +159,8 @@ export function accountRoutes() {
 
   app.post("/auth/logout", async (c) => {
     if (c.req.header("origin") !== new URL(c.env.PUBLIC_URL).origin) return c.json({ error: "Refused." }, 403);
-    await closeSession(c.env.DB, c.req.header("cookie"));
+    const who = await closeSession(c.env.DB, c.req.header("cookie"));
+    if (who !== undefined) await record(c.env.DB, { actor: who, action: "sign-out" });
     c.header("Set-Cookie", clearedSessionCookie());
     return c.json({ ok: true });
   });
@@ -168,6 +171,7 @@ export function accountRoutes() {
     await c.env.DB.prepare("UPDATE users SET notice_version = ?, notice_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE github_id = ?")
       .bind(NOTICE_VERSION, c.get("session").githubId)
       .run();
+    await record(c.env.DB, { actor: c.get("session").githubId, action: "notices-accepted", detail: { version: NOTICE_VERSION } });
     return c.json({ ok: true });
   });
 
@@ -234,12 +238,15 @@ export function accountRoutes() {
     // now on its pushes are reviewed too -- but only for someone who may manage
     // it. Anyone with write access gets the one review they asked for.
     const setUp = await mayManage(session, installationId);
-    await c.env.DB.batch([
+    const [, inserted] = await c.env.DB.batch([
+      c.env.DB.prepare("INSERT INTO review_requests (github_id) VALUES (?)").bind(session.githubId),
       ...(setUp
         ? [c.env.DB.prepare("INSERT INTO installations (installation_id, set_up_by) VALUES (?, ?) ON CONFLICT DO NOTHING").bind(installationId, session.githubId)]
         : []),
-      c.env.DB.prepare("INSERT INTO review_requests (github_id) VALUES (?)").bind(session.githubId),
     ]);
+    if (inserted?.meta.changes) {
+      await record(c.env.DB, { actor: session.githubId, action: "installation-set-up", target: installationId, detail: { by: "pasted link" } });
+    }
     await c.env.REVIEWS.send({ installationId, githubId: repo.githubId, ranBy: session.githubId, owner: repo.owner, repo: repo.name, sha });
     return c.json({ status: "queued", repository: { githubId: repo.githubId, owner: repo.owner, name: repo.name, sha } });
   }
@@ -311,11 +318,15 @@ export function accountRoutes() {
     const id = Number(c.req.param("id"));
     // The address can be typed by anyone; GitHub says whether this person may run that installation.
     if (!(await mayManage(session, id))) {
+      await refused(c.env.DB, session.githubId, "set up", id);
       return c.json({ error: "Only the account's owner or an admin of its repositories can set this up." }, 403);
     }
-    await c.env.DB.prepare("INSERT INTO installations (installation_id, set_up_by) VALUES (?, ?) ON CONFLICT DO NOTHING")
+    const inserted = await c.env.DB.prepare("INSERT INTO installations (installation_id, set_up_by) VALUES (?, ?) ON CONFLICT DO NOTHING")
       .bind(id, session.githubId)
       .run();
+    if (inserted.meta.changes) {
+      await record(c.env.DB, { actor: session.githubId, action: "installation-set-up", target: id, detail: { by: "setup page" } });
+    }
     return c.json({ ok: true });
   });
 
@@ -347,6 +358,7 @@ export function accountRoutes() {
   app.post("/api/installations/:id/settings", async (c) => {
     const id = Number(c.req.param("id"));
     if (!(await mayManage(c.get("session"), id))) {
+      await refused(c.env.DB, c.get("session").githubId, "change switches", id);
       return c.json({ error: "Only the account's owner or an admin of its repositories can change this." }, 403);
     }
     const body = (await c.req.json().catch(() => ({}))) as { packageLookup?: unknown; aiReview?: unknown };
@@ -360,6 +372,7 @@ export function accountRoutes() {
       .bind(...updates.map(([, v]) => v), id)
       .run();
     if (!result.meta.changes) return c.json({ error: "Set this installation up first by reviewing one of its repositories." }, 409);
+    await record(c.env.DB, { actor: c.get("session").githubId, action: "switches-changed", target: id, detail: Object.fromEntries(updates) });
     return c.json({ ok: true });
   });
 
@@ -400,7 +413,22 @@ export async function installationSwitches(db: D1Database, id: number): Promise<
   return { packageLookup: row?.package_lookup === 1, aiReview: row?.ai_review === 1 };
 }
 
+/**
+ * A refused attempt on an installation: repeated tries at other people's
+ * installation numbers are what this record exists to show. Only numbers
+ * that are whole and safe are written; anything else is recorded as such.
+ */
+async function refused(db: D1Database, actor: number, attempt: "set up" | "change switches", id: number): Promise<void> {
+  await record(db, { actor, action: "refused", target: Number.isSafeInteger(id) ? id : "not a number", detail: { attempt } });
+}
+
 export async function forgetInstallation(db: D1Database, installationId: number, repositoryIds: number[] | "all"): Promise<void> {
+  // Told by GitHub (the App was uninstalled, or repositories removed from it).
+  await record(db, {
+    action: repositoryIds === "all" ? "installation-removed" : "repositories-removed",
+    target: installationId,
+    ...(repositoryIds === "all" ? {} : { detail: { count: repositoryIds.length, repositories: repositoryIds.slice(0, 50) } }),
+  });
   if (repositoryIds === "all") {
     await db.batch([
       db.prepare("DELETE FROM reviews WHERE repository_id IN (SELECT id FROM repositories WHERE installation_id = ?)").bind(installationId),

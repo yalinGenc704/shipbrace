@@ -439,3 +439,33 @@ test("an account whose name matches someone's old name is not theirs", async () 
   const cookie = await signIn();
   assert.equal((await post("/api/installations/13/setup", {}, cookie)).status, 403);
 });
+
+test("signing in, setting up, changing a switch, signing out and removal are recorded", async () => {
+  const cookie = await signIn();
+  await post("/api/installations/7/setup", {}, cookie);
+  await post("/api/installations/7/setup", {}, cookie);
+  await post("/api/installations/9/settings", { packageLookup: false }, cookie);
+  await post("/api/installations/7/settings", { packageLookup: false }, cookie);
+  await post("/auth/logout", {}, cookie);
+  await forgetInstallation(env.DB, 7, "all");
+  const { results } = await env.DB.prepare("SELECT actor, action, target, detail FROM audit_log ORDER BY id").all<{
+    actor: number | null;
+    action: string;
+    target: string | null;
+    detail: string | null;
+  }>();
+  assert.deepEqual(results.map((r) => r.action), [
+    "sign-in",
+    "notices-accepted",
+    "installation-set-up",
+    "refused",
+    "switches-changed",
+    "sign-out",
+    "installation-removed",
+  ]);
+  const changed = results.find((r) => r.action === "switches-changed")!;
+  assert.equal(changed.actor, 5);
+  assert.equal(changed.target, "7");
+  assert.deepEqual(JSON.parse(changed.detail!), { package_lookup: 0 });
+  assert.ok(!results.some((r) => /user-token|refresh-token/.test(JSON.stringify(r))), "no token is ever recorded");
+});

@@ -2,6 +2,7 @@ import { handleWebhook, reviewPush, type PushJob, type ReviewDeps } from "@shipb
 import { Hono } from "hono";
 import { secureHeaders } from "hono/secure-headers";
 import { accountRoutes, forgetInstallation, installationIsSetUp } from "./accounts.ts";
+import { forgetOldAudit } from "./audit.ts";
 import type { Env } from "./env.ts";
 import { d1History } from "./history-d1.ts";
 import { forgetOldStarts } from "./limits.ts";
@@ -82,13 +83,14 @@ const KEEP_DAYS = 90;
 export default {
   fetch: app.fetch,
 
-  /** Nightly: old reviews, finished sign-ins, and spent rate-limit records go. */
+  /** Nightly: old reviews, finished sign-ins, spent rate-limit records, and year-old audit records go. */
   async scheduled(_event: ScheduledController, env: Env): Promise<void> {
     await env.DB.batch([
       env.DB.prepare("DELETE FROM reviews WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?)").bind(`-${KEEP_DAYS} days`),
       env.DB.prepare("DELETE FROM sessions WHERE expires_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"),
       env.DB.prepare("DELETE FROM review_requests WHERE requested_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 day')"),
       forgetOldStarts(env.DB),
+      forgetOldAudit(env.DB),
     ]);
   },
 

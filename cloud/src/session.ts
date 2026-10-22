@@ -127,7 +127,10 @@ export async function readSession(
   return { idHash, githubId: row.github_id, login: row.login, noticeVersion: row.notice_version, token };
 }
 
-export async function closeSession(db: D1Database, cookieHeader: string | null | undefined): Promise<void> {
+/** Ends the session on the server. Returns whose it was, when there was one. */
+export async function closeSession(db: D1Database, cookieHeader: string | null | undefined): Promise<number | undefined> {
   const value = cookieValue(cookieHeader, SESSION_COOKIE);
-  if (value) await db.prepare("DELETE FROM sessions WHERE id_hash = ?").bind(await sha256(value)).run();
+  if (!value) return undefined;
+  const row = await db.prepare("DELETE FROM sessions WHERE id_hash = ? RETURNING github_id").bind(await sha256(value)).first<{ github_id: number }>();
+  return row?.github_id;
 }
