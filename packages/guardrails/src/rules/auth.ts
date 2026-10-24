@@ -20,18 +20,17 @@ const permissiveCors: Rule = {
       category: "auth",
       severity: "high",
       confidence: "likely",
-      title: "Any website is allowed to call your API",
+      title: "Your app accepts behind-the-scenes requests from any website",
       why:
-        `This sets the allowed origin to "any". A page on an unrelated site can then make ` +
-        `requests to your server, and if it does so with a logged-in visitor's browser, it ` +
-        `can act as that user. During development this looks like it simply made an error ` +
-        `go away.`,
+        `A page on someone else's site could then use a signed-in visitor's browser to act as them. ` +
+        `AI tools often add this setting just to make an error go away.`,
       location: locate(file, hit),
       fix: {
         kind: "manual",
-        description:
-          "Replace the wildcard with an explicit list of the domains your own frontend is " +
-          "served from, read from an environment variable so it differs per environment.",
+        description: "Allow only your own website addresses.",
+        detail:
+          "Replace the CORS wildcard (`*` / `origin: true`) with an explicit list of your frontend's origins, " +
+          "read from an environment variable so it can differ between test and live.",
       },
       learnMore: "/explain/cors",
     }));
@@ -56,18 +55,17 @@ const tokenInLocalStorage: Rule = {
       category: "auth",
       severity: "high",
       confidence: "likely",
-      title: "The login token is stored where any script on the page can read it",
+      title: "Your app keeps the visitor's sign-in pass where any code on the page can read it",
       why:
-        `Browser local storage is readable by every piece of JavaScript running on your ` +
-        `site, including code pulled in from third parties. If any of it is ever ` +
-        `compromised, the stored token can be copied and used to log in as that user. ` +
-        `A cookie marked httpOnly cannot be read by scripts at all.`,
+        `Every piece of code running on your pages can read it, including code from other companies. ` +
+        `If any of that code is ever compromised, the pass can be copied and used to sign in as the visitor.`,
       location: locate(file, hit),
       fix: {
         kind: "manual",
-        description:
-          "Have the server set the token as an httpOnly, Secure, SameSite=Lax cookie, and " +
-          "send requests with `credentials: \"include\"` instead of attaching a header.",
+        description: "Keep the sign-in pass in a cookie that code on the page cannot read.",
+        detail:
+          "Stop storing the token in localStorage: have the server set it as an httpOnly, Secure, " +
+          "SameSite=Lax cookie, and send requests with `credentials: \"include\"` instead of an Authorization header.",
       },
       learnMore: "/explain/token-storage",
     }));
@@ -118,14 +116,15 @@ const loginCookieReadable: Rule = {
         category: "auth",
         severity: "high",
         confidence: "likely",
-        title: `The login cookie \`${String(nameArg.value)}\` can be read by scripts on the page`,
+        title: `The sign-in cookie \`${String(nameArg.value)}\` can be read by any code running on your page`,
         why:
-          "Without httpOnly, any script running on your site -- including one slipped in through a " +
-          "comment or a third-party library -- can copy this cookie and sign in as the visitor.",
+          "Any code on your site -- including some slipped in through a comment or another company's " +
+          "package -- can copy it and sign in as the visitor.",
         location: { path: file.path, line },
         fix: {
           kind: "manual",
-          description: "Set it with `{ httpOnly: true, secure: true, sameSite: \"lax\" }`.",
+          description: "Mark the cookie so that code on the page can't read it.",
+          detail: "Set the cookie with `{ httpOnly: true, secure: true, sameSite: \"lax\" }`.",
         },
         learnMore: "/explain/token-storage",
       });
@@ -154,18 +153,17 @@ const weakJwtSecret: Rule = {
       category: "auth",
       severity: "critical",
       confidence: "certain",
-      title: "Login tokens fall back to a signing key written in the code",
+      title: "If the sign-in secret is missing, your app quietly uses a backup written in the code",
       why:
-        `The signing key is what proves a login token is genuine. This line supplies a ` +
-        `built-in value to use when the real one is missing, so a misconfigured deploy ` +
-        `starts up successfully using a key that is published in your repository. Anyone ` +
-        `who reads it can mint a token for any account, including an administrator's.`,
+        `That backup secret is visible to anyone who can read your code. With it they can sign in ` +
+        `as any account, including an administrator's.`,
       location: locate(file, hit),
       fix: {
         kind: "manual",
         description:
-          "Remove the fallback and exit at startup if the variable is unset, so a " +
-          "misconfigured deploy fails loudly instead of running insecurely.",
+          "Remove the backup secret, so the app refuses to start without the real one instead of running unprotected.",
+        detail:
+          "Delete the `|| \"...\"` / `?? \"...\"` fallback and throw at startup if the secret environment variable is unset.",
       },
       learnMore: "/explain/jwt-secret",
     }));

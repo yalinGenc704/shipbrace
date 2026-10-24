@@ -27,18 +27,27 @@ export interface Risk {
   what: string;
   /** Consequence in plain language, assuming no security knowledge. */
   impact: string;
-  /** The concrete remedy. */
+  /** The concrete remedy, in plain words. */
   fix: string;
+  /** The same remedy as an exact, code-level instruction for an AI assistant. */
+  fixDetail?: string;
+  /**
+   * Set on risks that can be right as they are -- a page meant to be public,
+   * records every signed-in user is meant to see. The dashboard offers "This
+   * is intended" on these only.
+   */
+  mayBeIntended?: boolean;
   location?: CodeLocation;
   /** How the path was proven, shown in supervise mode. */
   evidence?: string;
   /**
-   * `oracle` - a deterministic analyser reproduced the path from the code.
-   * `rule`   - a pattern rule matched.
+   * `oracle`      - a deterministic analyser reproduced the path from the code.
+   * `rule`        - a pattern rule matched.
+   * `route-check` - the list of pages was checked for a sign-in step.
    * Nothing reaches a user with any other provenance; model proposals that the
    * oracle could not confirm are not risks and are not listed here.
    */
-  confirmedBy: "oracle" | "rule";
+  confirmedBy: "oracle" | "rule" | "route-check";
 }
 
 /**
@@ -59,10 +68,18 @@ export interface Unproven {
   why: string;
   /** What to check, or change, to settle it. */
   check: string;
+  /** The same step as an exact, code-level instruction for an AI assistant. */
+  checkDetail?: string;
   location?: CodeLocation;
 }
 
-export type ItemStatus = "pass" | "action-needed" | "needs-your-review";
+/**
+ * `does-not-apply`: the check found the thing it looks at is not in this
+ * project (no Supabase, no passwords). It is not a pass -- nothing was
+ * checked -- and it is not something the user must decide either, so it is
+ * kept out of both counts and shown with its reason.
+ */
+export type ItemStatus = "pass" | "action-needed" | "needs-your-review" | "does-not-apply";
 
 export interface ActionItem {
   id: string;
@@ -161,99 +178,135 @@ const SINK_GRADE: Record<string, Grade> = {
  * nothing, because a reader who cannot evaluate the advice will try to follow
  * it and conclude the tool is wrong about everything else too.
  */
-const SINK_COPY: Record<string, { operation: string; impact: string; fix: string }> = {
+const SINK_COPY: Record<string, { operation: string; impact: string; fix: string; detail: string }> = {
   sql: {
-    operation: "a database query",
+    operation: "a database query (a request your app sends to its database)",
     impact:
       "Someone could read, change, or delete anything in your database -- including other people's accounts and personal information -- by typing carefully chosen text into your site.",
     fix:
-      "Pass the value as a parameter instead of joining it into the query text -- the tagged `sql` template for postgres, or `?` placeholders with an argument array for mysql2. The database then treats it as data that can never be read as a command.",
+      "Send the visitor's text to the database separately from the question your app is asking it, so the database always treats it as plain text and never as part of the question.",
+    detail:
+      "Use query parameters instead of joining the value into the SQL text: the tagged `sql` template for postgres, or `?` placeholders with an argument array for mysql2.",
   },
   shell: {
-    operation: "a command run on your server",
+    operation: "a command run on the computer that hosts your site",
     impact:
       "Someone could run their own commands on the machine hosting your site, which usually means full control of it.",
     fix:
-      "Pass the command and its arguments as a separate array rather than building one string, so the shell never interprets characters inside the value. Better still, use a library that does the job directly instead of running a command at all.",
+      "Never build a computer command out of a visitor's text. Better still, use a ready-made package that does the job without running a command at all.",
+    detail:
+      "Pass the program and its arguments as a separate array (`execFile(cmd, [arg])` or `spawn` without `shell: true`) instead of building one string for `exec`, so the shell never interprets characters inside the value.",
   },
   "unsafe-decoding": {
-    operation: "decoding data in a way that can rebuild running code",
+    operation: "unpacking data with a tool that can turn it into working code",
     impact:
-      "Someone could send data that, once decoded, runs their own instructions on your server -- usually full control of it.",
+      "Someone could send data that, once unpacked, runs their own instructions on your server -- usually full control of it.",
     fix:
-      "Decode with plain JSON.parse, or js-yaml 4's `load` (`safeLoad` in js-yaml 3), which only build plain values. node-serialize and funcster should never see outside data.",
+      "Unpack data with a tool that only ever produces plain data, never code. Stop using node-serialize or funcster for anything that comes from outside.",
+    detail:
+      "Decode with `JSON.parse`, or js-yaml 4's `load` (`safeLoad` in js-yaml 3), which only build plain values. Remove `unserialize` from node-serialize and funcster's `deepDeserialize` on outside data.",
   },
   "mass-assignment": {
-    operation: "saving everything the visitor sent as a whole record",
+    operation: "saving a whole record, with every field the visitor sent",
     impact:
       "The visitor can add fields your form never shows -- for example making themselves an administrator, or saving something under someone else's account -- because every field they send is saved.",
     fix:
-      "Copy only the fields the form is meant to change, by name (`{ name: body.name, email: body.email }`), or check the request against a schema that rejects anything else. Set fields like role or owner on the server.",
+      "Save only the fields the form is meant to change, picked out by name. Set things like admin status or who owns a record in your own code, never from what the visitor sent.",
+    detail:
+      "Copy only the allowed fields (`{ name: body.name, email: body.email }`), or validate the body against a schema that rejects unknown keys. Set fields like role or owner on the server.",
   },
   "xml-entities": {
-    operation: "reading an XML document with outside references switched on",
+    operation: "reading XML (a data file format) with a setting that lets it pull in other files",
     impact:
-      "Someone could send XML that asks your server to fetch one of its own files (passwords, keys, settings) or a private internal address, and get the contents back.",
+      "Someone could upload an XML file that asks your server to open one of its own private files (passwords, keys, settings) or a private internal address, and send the contents back.",
     fix:
-      "Remove `noent: true` (and `dtdload: true`) from the parse options, so references to outside files are never followed. If you do not need XML at all, accept JSON instead.",
+      "Turn off the setting that lets XML files pull in other files. If you don't actually need XML, accept a simpler format such as JSON instead.",
+    detail:
+      "Remove `noent: true` (and `dtdload: true`) from the libxmljs parse options, so external entities are never resolved.",
   },
   "dynamic-code": {
-    operation: "code the application builds and runs on the fly",
+    operation: "code your app builds and runs while it is running",
     impact:
       "Someone could make your application run instructions they wrote, and do anything your application can do.",
     fix:
-      "Stop building code out of values. Whatever this is choosing between can almost always be done with a lookup table or a plain function, neither of which can be talked into running something else.",
+      "Don't let your app turn text into code it runs. There's almost always a simpler way to do the same thing that can't be tricked into running something else.",
+    detail:
+      "Replace `eval`/`new Function`/`vm.run*` on this value with a lookup table or a plain function.",
   },
   filesystem: {
-    operation: "reading or writing a file on the server",
+    operation: "choosing which file on your server to open or change",
     impact:
-      "Someone could open files they were never meant to see -- configuration, keys, other users' uploads -- or overwrite them.",
+      "Someone could open files they were never meant to see -- settings, keys, other people's uploads -- or overwrite them.",
     fix:
-      "Never build a file path straight from a supplied value. Resolve the full path first, then confirm it still sits inside the folder you intended before opening it, and reject it if it does not.",
+      "Never let a visitor's text decide which file is opened. If it has to, check that the final file location is still inside the folder you meant, and refuse anything else.",
+    detail:
+      "Resolve the full path with `path.resolve(base, value)` and reject it unless it starts with the intended base folder plus a separator; better, map visitor input to a fixed list of allowed file names.",
   },
   "outbound-request": {
-    operation: "a request your server makes to another address",
+    operation: "choosing a web address your server then opens",
     impact:
-      "Someone could make your server fetch addresses of their choosing, including private systems on your own network that the outside world cannot normally reach.",
+      "Someone could make your server open addresses of their choosing, including private systems on your own network that the outside world cannot normally reach.",
     fix:
-      "Check the address against a list of destinations you allow before fetching it, and refuse anything pointing at a private network address -- including the cloud metadata address, which hands out credentials.",
+      "Only let your server open addresses from a list you approve, and refuse anything pointing inside your own private network -- including the special internal address hosting companies use to hand your site its passwords.",
+    detail:
+      "Check the URL's host against an allowlist before fetching, and refuse private and link-local ranges (10/8, 172.16/12, 192.168/16, 127/8, 169.254.169.254, ::1, fc00::/7).",
   },
   html: {
-    operation: "content shown on the page",
+    operation: "what is shown on the page",
     impact:
-      "Someone could put their own scripts onto your pages, which run in your visitors' browsers and can steal whatever those visitors are logged into.",
+      "Someone could put their own code onto your pages, which runs in your visitors' browsers and can steal whatever those visitors are signed in to.",
     fix:
-      "If the content is plain text, render it as text and let React escape it for you. If it genuinely has to be HTML, clean it with a library such as DOMPurify before it reaches the page.",
+      "Show visitors' text as plain text. If it really has to include formatting, clean it with a trusted cleaning package first.",
+    detail:
+      "Render the value escaped (`{value}` in React, `<%= %>` not `<%- %>` in EJS, `{{ }}` not `{{{ }}}` in Handlebars). If it must be HTML, pass it through DOMPurify first.",
   },
   nosql: {
-    operation: "a database query",
+    operation: "a database query (a request your app sends to its database)",
     impact:
-      "Someone could send a specially shaped value instead of plain text -- for a password, \"anything except empty\" -- and get past a login or read records that are not theirs, without knowing any password.",
+      "Someone could send a specially shaped value instead of plain text -- for a password, \"anything except empty\" -- and get past a sign-in or read records that are not theirs, without knowing any password.",
     fix:
-      "Turn the value into plain text before it reaches the query, for example `String(req.body.name)`, or check its type with a schema so objects are refused. Never build a `$where` from visitor input.",
+      "Make sure what the visitor sent is plain text before it reaches the database, and refuse anything else.",
+    detail:
+      "Convert the value with `String(req.body.name)` or validate its type with a schema so objects are refused. Never build a `$where` from visitor input.",
   },
   redirect: {
-    operation: "sending the visitor to another address",
+    operation: "choosing where the visitor is sent next",
     impact:
       "Someone could craft a link that looks like it goes to your site but sends visitors to theirs -- useful for convincing people to hand over passwords.",
     fix:
-      "Only redirect to paths within your own site, or check the destination against a list of addresses you allow. Reject anything else rather than following it.",
+      "Only send visitors to pages on your own site, or to addresses on a list you approve. Refuse anything else.",
+    detail:
+      "Accept only relative paths starting with a single `/` (not `//`), or check the destination host against an allowlist before calling `res.redirect`.",
   },
 };
 
+/** Where a visitor's input comes from, written to start a sentence. */
 const SOURCE_COPY: Record<string, string> = {
-  "route-param": "a value taken from the web address",
-  "query-string": "a value from the part of the address after the question mark",
-  "request-body": "data sent by the visitor's browser",
-  header: "a piece of metadata the visitor's browser controls",
-  cookie: "a cookie the visitor's browser controls",
-  "external-response": "the reply from another website",
-  "uploaded-file": "a file the visitor uploaded",
-  "repo-content": "content from a linked repository",
+  "route-param": "Part of the web address",
+  "query-string": "Text in the web address (after the question mark)",
+  "request-body": "Something the visitor sends from their browser",
+  header: "Information the visitor's browser sends with each request",
+  cookie: "A cookie (a small note the visitor's browser stores and sends back)",
+  "external-response": "The reply from another website",
+  "uploaded-file": "A file the visitor uploaded",
+  "repo-content": "Content from a linked GitHub repository",
   // Only settings an outsider fills in are treated as inputs at all.
-  environment: "a build setting filled in from a pull request or issue, which anyone can open",
-  "stored-data": "text another visitor saved earlier (for example a comment or a profile), read back from the database",
+  environment: "Text anyone can write in a GitHub pull request or issue",
+  "stored-data": "Text another visitor saved earlier (for example a comment or a profile), read back from your database",
 };
+
+const lowerFirst = (text: string): string => text.charAt(0).toLowerCase() + text.slice(1);
+
+/**
+ * A page in words a reader without web background follows: "the page /x" for
+ * something you open, "the action /x" for something that saves or changes.
+ * The method (GET, POST) stays in the detailed view, with the file and line.
+ */
+export function pageName(door: { method: string; path: string }): string {
+  return door.method === "GET" ? `the page ${door.path}` : `the action ${door.path}`;
+}
+
+export const upperFirst = (text: string): string => text.charAt(0).toUpperCase() + text.slice(1);
 
 interface ModuleShape {
   id: string;
@@ -287,11 +340,11 @@ const MODULES: ModuleShape[] = [
     rank: 1,
     title: "Who is allowed to do what",
     summary:
-      "The most common serious problem in web applications. It means a page or action that should be restricted can be reached by someone who should not reach it -- often just by editing the address bar. It also covers your server being tricked into fetching addresses a visitor chose, which reaches systems the visitor never could.",
+      "The most common serious problem in web applications. It means a page or action that should be restricted can be reached by someone who should not reach it -- often just by editing the web address. It also covers a visitor tricking your site into opening web addresses they choose, which can reach private systems they could never reach themselves.",
     items: [
       {
         id: "access-control/unguarded-routes",
-        covers: "every route has a sign-in check, or is a page meant to be public",
+        covers: "every page and action asks visitors to sign in, or is a kind of page that is meant to be public (sign-in, health checks, webhooks)",
         title: "Every private page and action requires signing in",
         detector: "route-guard-check",
       },
@@ -299,55 +352,61 @@ const MODULES: ModuleShape[] = [
         id: "access-control/object-ownership",
         title: "Signed-in users can only see their own records",
         question:
-          "If one customer changed a number in the address bar, would they see another customer's data? Automated checks cannot tell whose record is whose -- only you know that.",
+          "If one customer changed a number in the web address, would they see another customer's data? Automated checks cannot tell whose record is whose -- only you know that.",
         detector: null,
       },
       {
         id: "access-control/file-paths",
-        covers: "no visitor input was traced to a file path",
-        title: "File access cannot be steered outside its intended folder",
+        covers: "no visitor input was followed into choosing which file on your server is opened",
+        title: "Visitors cannot trick your site into opening files it shouldn't",
         detector: "taint:filesystem",
+      },
+      {
+        id: "access-control/redirects",
+        covers: "no visitor input was followed into choosing where a visitor is sent next",
+        title: "Links on your site cannot be used to send visitors to someone else's site",
+        detector: "taint:redirect",
       },
       {
         id: "access-control/mass-assignment",
         covers:
-          "no visitor's whole request was traced into saving a record whose table has fields like role, admin or owner; tables whose fields could not be found were not checked",
-        title: "Visitors cannot set fields they should not, like their own role",
+          "no form saves everything a visitor sends straight into records that hold things like admin status, account balance or who owns what; records whose fields could not be found were not checked",
+        title: "Visitors cannot give themselves extra powers by adding hidden form fields",
         detector: "taint:mass-assignment",
       },
       {
         id: "access-control/database-rules",
-        covers: "every table created in this project's Supabase SQL migrations has row level security; tables made in the dashboard were not checked",
-        title: "Database rows the browser can reach are locked by row rules",
+        covers: "every table set up in this project's Supabase files locks each row to the people allowed to see it; tables made by hand in the Supabase dashboard were not checked",
+        title: "Visitors cannot read or change other people's data straight from the browser",
         detector: "supabase:row-level-security",
       },
       {
         id: "access-control/admin-only",
-        covers: "every page with admin in its address checks the visitor's role on the server",
+        covers: "every page with admin in its address checks that the visitor is an administrator",
         title: "Admin pages check that the visitor is an administrator",
         question:
-          "Being signed in is not the same as being an administrator. Confirm every page and action meant for administrators checks the role on the server, not only by hiding links in the browser.",
+          "Being signed in is not the same as being an administrator. Confirm every page and action meant for administrators checks that the visitor is one, and doesn't just hide the links.",
         detector: "routes:admin-check",
       },
       {
         id: "access-control/csrf",
-        covers: "cookie sign-in is protected against requests started by other websites",
+        covers: "the way your site remembers signed-in visitors is protected against actions started from other websites",
         title: "Other websites cannot make signed-in visitors do things",
         question:
-          "If your site signs people in with cookies, a page on another site can submit forms to yours while they are signed in. Confirm changes need a token only your own pages have, or that your login cookie is marked SameSite.",
+          "If your site remembers who is signed in with a cookie (a small note the browser keeps), a page on another site can secretly send actions to yours while they are signed in. Confirm your site turns on protection against this (often called CSRF protection).",
         detector: "server:csrf-protection",
       },
       {
         id: "ssrf/url-allowlist",
-        covers: "no visitor input was traced to an address your server fetches",
-        title: "Visitor-supplied addresses are checked against an allowlist",
+        covers: "no visitor input was followed into a web address your server opens",
+        title: "Visitors cannot make your site open web addresses they choose",
         detector: "taint:outbound-request",
       },
       {
         id: "ssrf/internal-ranges",
-        title: "Requests to private network addresses are blocked",
+        title: "Your site refuses to open addresses inside your own private network",
         question:
-          "Confirm your server refuses to fetch addresses on your own private network, including the cloud metadata address that hands out credentials.",
+          "Confirm your site refuses to open addresses inside your own private network, including the special internal address hosting companies use to hand your site its passwords.",
         detector: null,
       },
     ],
@@ -358,35 +417,40 @@ const MODULES: ModuleShape[] = [
     rank: 2,
     title: "Settings that leave the door open",
     summary:
-      "The code can be correct while the settings around it are not -- an overly permissive sharing rule, a debug mode left on, a default password never changed.",
+      "The code can be correct while the settings around it are not -- a setting that lets any website talk to yours, a test mode left on, a default password never changed.",
     items: [
       {
         id: "config/container-user",
-        covers: "the last stage of each Dockerfile runs as a user other than root",
-        title: "The app's container does not run as the all-powerful root user",
+        covers: "the setup file (Dockerfile) that packages your app runs it as an ordinary user, not with full administrator rights",
+        title: "Your app doesn't run with full control of the computer it's on",
         detector: "docker:non-root-user",
       },
       {
         id: "config/debug-off",
-        covers: "the Dockerfile and compose files used to run the app do not turn on development or debug mode; settings in a hosting dashboard were not checked",
-        title: "Debug mode is off where the app runs for real",
+        covers: "the setup files used to start the live app don't switch on test or debug mode; settings in a hosting service's dashboard were not checked",
+        title: "Test mode is off where the app runs for real",
         detector: "deploy:debug-off",
       },
-      { id: "config/cors", covers: "your API does not accept calls from every website", title: "Only your own sites can call your API", detector: "rules:cors" },
+      {
+        id: "config/cors",
+        covers: "your app doesn't accept behind-the-scenes requests from every website",
+        title: "Only your own website can talk to your app behind the scenes",
+        detector: "rules:cors",
+      },
       {
         id: "config/security-headers",
-        covers: "your server switches on the standard protective headers",
-        title: "Standard protective headers are switched on",
+        covers: "your site asks visitors' browsers to switch on their built-in protections",
+        title: "Your site turns on the browser's built-in safety features",
         question:
-          "Confirm your server sets the standard protective headers. They cost nothing and close a whole class of browser-side attacks.",
+          "Confirm your site asks browsers to switch on their built-in protections (called security headers). It costs nothing and closes a whole group of browser attacks.",
         detector: "server:protective-headers",
       },
       {
         id: "config/exposed-services",
-        covers: "your docker-compose file does not publish the database to the outside",
+        covers: "your setup file (docker-compose) doesn't open the database to the outside world",
         title: "The database is not reachable from the internet",
         question:
-          "Confirm your database does not publish a port to the outside world. It should be reachable only by your own application.",
+          "Confirm your database can only be reached by your own app, not from the internet.",
         detector: "compose:no-public-database",
       },
     ],
@@ -397,14 +461,14 @@ const MODULES: ModuleShape[] = [
     rank: 3,
     title: "Building blocks you did not write",
     summary:
-      "Your application is built from packages written by other people, and built and shipped by automated tools. A flaw or a break-in anywhere along that chain ends up inside your application, even if your own code is perfect.",
+      "Your application is built from packages (code written by other people), and built and published by automated tools. A flaw or a break-in anywhere along that chain ends up inside your application, even if your own code is perfect.",
     items: [
       {
         id: "components/known-vulnerabilities",
-        covers: "every public package in your lockfile against the OSV.dev list of known flaws",
-        title: "No dependency has a known published vulnerability",
+        covers: "every public package your app installs, against OSV.dev's list of known security flaws",
+        title: "None of the packages your app uses has a publicly known security flaw",
         question:
-          "If this could not be checked automatically, run your package manager's audit command (for example npm audit) and review what it reports.",
+          "If this could not be checked automatically, ask your AI assistant to run `npm audit` and fix what it reports.",
         detector: "osv:known-vulnerabilities",
       },
       {
@@ -415,32 +479,32 @@ const MODULES: ModuleShape[] = [
       },
       {
         id: "components/abandoned",
-        title: "No dependency is unmaintained or pulled from an unofficial source",
+        title: "None of your packages is abandoned or comes from an unofficial place",
         question:
-          "A package that has not been updated in years will not be fixed when a flaw is found in it. Check the ones your app depends on most heavily.",
+          "A package that has not been updated in years will not be fixed when a flaw is found in it. Check the ones your app relies on most.",
         detector: null,
       },
       {
         id: "components/pinned",
-        covers: "every package version in package.json is exact",
-        title: "Versions are pinned so builds are reproducible",
+        covers: "every package in package.json is set to one exact version",
+        title: "Your app always installs the exact package versions you tested",
         question:
-          "Confirm your dependency versions are exact rather than ranges, so the code you reviewed is the code that ships.",
+          "Confirm each package is set to one exact version rather than \"this version or newer\", so the code you tested is the code that goes live.",
         detector: "manifest:exact-versions",
       },
       {
         id: "integrity/lockfile",
-        covers: "a lockfile is committed",
-        title: "A lockfile records exactly which package versions are installed",
+        covers: "a lockfile is saved with your code",
+        title: "Your app keeps a record of every package version it installs (a lockfile)",
         question:
-          "Confirm a lockfile is committed. Without one, two installs of the same code can pull different package versions.",
+          "Confirm a lockfile is saved with your code. Without one, two installs of the same code can pull different package versions.",
         detector: "manifest:lockfile-committed",
       },
       {
         id: "integrity/ci-permissions",
-        title: "Automated build steps cannot be modified by contributors",
+        title: "Only people you trust can change the automatic steps that build and publish your site",
         question:
-          "Your build pipeline usually holds deployment credentials. Confirm who is able to change what it runs.",
+          "These automatic steps (for example GitHub Actions) usually hold the passwords to your live site. Check who on GitHub can change them.",
         detector: null,
       },
     ],
@@ -451,25 +515,25 @@ const MODULES: ModuleShape[] = [
     rank: 4,
     title: "Protecting passwords, keys, and personal data",
     summary:
-      "Covers secrets that should never be readable -- API keys, signing keys, passwords -- and sensitive data that should be protected in transit and at rest.",
+      "Covers secrets that should never be readable -- passwords, and the keys that give access to other services -- and private data, both while it is being sent and while it is stored.",
     items: [
       {
         id: "crypto/exposed-secrets",
-        covers: "no keys, passwords, or session secrets are written into your code",
+        covers: "no keys, passwords, or sign-in secrets are written into your code",
         title: "No keys or passwords are written into the code",
         detector: "rules:secrets",
       },
       {
         id: "crypto/password-storage",
-        covers: "passwords are hashed with bcrypt or argon2",
-        title: "Passwords are stored using a slow, modern hash",
+        covers: "passwords are scrambled with bcrypt or argon2, methods built for passwords",
+        title: "Passwords are scrambled in a way that's hard to undo",
         question:
-          "Passwords must never be stored as typed, and never with a fast hash like MD5 or SHA-256. Confirm yours use argon2id or bcrypt -- deliberately slow algorithms that make guessing impractical.",
+          "Passwords must never be saved as typed, or scrambled with a quick method like MD5 or SHA-256. Confirm yours use argon2id or bcrypt, which are slow on purpose so guessing takes too long to be worth it.",
         detector: "auth:slow-password-hash",
       },
       {
         id: "crypto/no-password-hashes-sent",
-        covers: "no route sends whole user records with their password field",
+        covers: "no page sends complete user records, scrambled passwords included, to the browser",
         title: "Stored passwords are never sent back to the browser",
         question:
           "When a page loads user records, confirm the stored password is left out of what is sent -- even scrambled, it can be cracked.",
@@ -490,38 +554,38 @@ const MODULES: ModuleShape[] = [
     rank: 5,
     title: "Visitor input being treated as instructions",
     summary:
-      "Happens when something a visitor types is pasted into a command, a database query, or a page, and gets treated as an instruction rather than as text. This is the category the automated attack analysis targets most directly.",
+      "Happens when something a visitor types is pasted into a command, a database request, or a page, and gets treated as an instruction rather than as text. This is what ShipBrace checks most thoroughly.",
     items: [
       {
         id: "injection/database",
-        covers: "no visitor input was traced into a database query",
-        title: "Database queries keep visitor input as data, not commands",
+        covers: "no visitor input was followed into a database request",
+        title: "Visitors can't change what your database does by typing special text",
         detector: "taint:sql",
       },
       {
         id: "injection/system-commands",
-        covers: "no visitor input was traced into a system command or into code that runs",
-        title: "No system command is built from visitor input",
+        covers: "no visitor input was followed into a computer command or into code your app runs",
+        title: "Visitor input is never run as a command or as code",
         detector: "taint:shell",
       },
       {
         id: "injection/page-content",
-        covers: "no visitor input was traced into a page without escaping",
-        title: "Visitor-supplied content cannot inject scripts into pages",
+        covers: "no visitor input was followed into a page without being made safe first",
+        title: "Visitors can't sneak their own code into your pages",
         detector: "taint:html",
       },
       {
         id: "injection/ai-instructions",
         covers:
-          "within each route function, no visitor's text goes to an Anthropic, OpenAI, Gemini, Vercel AI SDK or LangChain call whose answer then runs a query, command, request or email, or that is given tools; model calls in helper functions and other AI libraries were not followed",
+          "in each page's code, a visitor's text never goes to a well-known AI service (Anthropic, OpenAI, Gemini, Vercel AI SDK, LangChain) whose answer is then used to change data, run commands, open addresses or send messages, or that is given tools; AI code in other places was not followed",
         title: "A visitor's text cannot steer what an AI feature does",
         detector: "rules:prompt-to-action",
       },
       {
         id: "injection/xml-entities",
         covers:
-          "no visitor input was traced into libxmljs with outside references switched on; other XML tools and options set elsewhere were not checked",
-        title: "Uploaded XML cannot make the server read its own files",
+          "no uploaded XML was followed into libxmljs with the setting that pulls in other files switched on; other XML tools, and settings written elsewhere, were not checked",
+        title: "Uploaded XML files can't make your site reveal its own private files",
         detector: "taint:xml-entities",
       },
     ],
@@ -543,30 +607,30 @@ const MODULES: ModuleShape[] = [
       },
       {
         id: "design/rate-limiting",
-        covers: "a rate limiter is in place",
-        title: "Expensive or sensitive actions are rate limited",
+        covers: "something limits how often one person can use your pages and actions",
+        title: "Nobody can repeat an action thousands of times a minute",
         question:
-          "Anything that costs you money, sends a message, or checks a password should refuse to run thousands of times a minute from one source. Confirm which of your actions have a limit.",
+          "Anything that costs you money, sends a message, or checks a password should refuse to run thousands of times a minute for one person. Confirm which of your actions have a limit.",
         detector: "server:rate-limiting-present",
       },
       {
         id: "design/unbounded-lists",
         covers:
-          "no Express or Hono route sends back every row from Mongoose, Sequelize, Prisma or plain-text SQL with no filter or limit; Drizzle, Next.js route handlers and SQL built with values were not checked",
+          "no page sends back every row of a table at once, with no filter or limit (Express or Hono pages using Mongoose, Sequelize, Prisma or plain SQL; Drizzle and Next.js pages were not checked)",
         title: "Lists sent to visitors have a maximum size",
         detector: "rules:unbounded-list",
       },
       {
         id: "design/upload-limits",
-        covers: "every multer upload handler sets a size limit; other upload libraries were not checked",
+        covers: "every upload feature built with multer sets a size limit; other upload tools were not checked",
         title: "Uploads have a size limit",
         detector: "uploads:size-limit",
       },
       {
         id: "design/business-rules",
-        title: "Important rules are enforced on the server, not only in the browser",
+        title: "Important rules are checked by your site, not just in the visitor's browser",
         question:
-          "Anything checked only in the browser can be bypassed entirely -- the browser is the visitor's, not yours. Prices, limits, and permissions must be re-checked on the server.",
+          "Anything checked only in the browser can be skipped entirely -- the browser belongs to the visitor, not to you. Prices, limits, and permissions must be checked again by your site.",
         detector: null,
       },
     ],
@@ -577,34 +641,34 @@ const MODULES: ModuleShape[] = [
     rank: 7,
     title: "Proving who someone is",
     summary:
-      "Covers logging in, staying logged in, and logging out. Weaknesses here let someone become another user, which makes every other permission check meaningless.",
+      "Covers signing in, staying signed in, and signing out. Weaknesses here let someone become another user, which makes every other permission check meaningless.",
     items: [
       {
         id: "auth/session-storage",
-        covers: "login tokens are not kept where page scripts can read them",
-        title: "Login tokens cannot be read by scripts on the page",
+        covers: "the visitor's sign-in pass is never kept where code running on the page can read it",
+        title: "Your sign-in pass can't be stolen by code running on the page",
         detector: "rules:token-storage",
       },
       {
         id: "auth/session-expiry",
-        covers: "login tokens are issued with an expiry",
-        title: "Sessions expire and can be revoked",
+        covers: "sign-in passes are given an expiry time",
+        title: "Sign-ins expire, and signing out really signs you out",
         question:
-          "Confirm a login does not last forever, and that signing out actually invalidates it on the server rather than only in the browser.",
+          "Confirm a sign-in does not last forever, and that signing out really ends it on your site rather than only in the browser.",
         detector: "auth:tokens-expire",
       },
       {
         id: "auth/brute-force",
-        title: "Repeated failed logins are slowed down or blocked",
+        title: "Repeated failed sign-ins are slowed down or blocked",
         question:
-          "Without a limit, someone can try millions of passwords against one account. Confirm repeated failures are slowed, locked, or challenged.",
+          "Without a limit, someone can try millions of passwords against one account. Confirm repeated failures are slowed down, locked, or challenged.",
         detector: null,
       },
       {
         id: "auth/account-recovery",
         title: "Password reset cannot be used to take over an account",
         question:
-          "Reset links must expire, be single-use, and be sent only to the address already on the account. This is the most commonly abused way into an account.",
+          "Reset links must expire, work only once, and be sent only to the email already on the account. This is the most commonly abused way into an account.",
         detector: null,
       },
     ],
@@ -619,36 +683,36 @@ const MODULES: ModuleShape[] = [
     items: [
       {
         id: "integrity/untrusted-deserialization",
-        title: "Data from outside is validated before being used",
+        title: "Data from other services is checked before your app uses it",
         question:
-          "Data arriving from another system is no more trustworthy than data typed by a visitor. Confirm it is checked against an expected shape before use.",
+          "Data arriving from another system is no more trustworthy than something a visitor typed. Confirm it is checked to be what you expect before your app uses it.",
         detector: null,
       },
       {
         id: "integrity/unsafe-decoding",
         covers:
-          "no visitor input was traced into node-serialize, funcster, or js-yaml's unsafe loading; other decoders were not checked",
-        title: "Data from outside is never decoded in a way that can run code",
+          "no visitor input was followed into node-serialize, funcster, or js-yaml's unsafe loading, tools that can turn data into code; other tools were not checked",
+        title: "Data from outside can't turn into code your app runs",
         detector: "taint:unsafe-decoding",
       },
       {
         id: "integrity/webhook-signatures",
-        covers: "every webhook route that reads what it is sent sits in a file that checks message signatures",
+        covers: "every address where another service sends you updates (a webhook) sits in code that checks each message's signature",
         title: "Messages from other services are checked to be genuine",
         detector: "webhooks:signature-checked",
       },
       {
         id: "integrity/third-party-scripts",
-        title: "Scripts loaded from other websites cannot be swapped without you noticing",
+        title: "Code loaded from other websites can't be swapped without you noticing",
         question:
-          "If a page loads a script straight from another site (a CDN), whoever controls that site can change what runs on your pages. Confirm each such script is pinned to an exact version and carries an integrity check, or is served from your own server.",
+          "If your pages load code straight from another website, whoever runs that site can change what runs on yours. Confirm each one is locked to an exact version with a safety check (called subresource integrity), or hosted on your own site.",
         detector: null,
       },
       {
         id: "integrity/client-data",
-        title: "Anything the browser hands back is signed or re-checked",
+        title: "Anything that comes back from the visitor's browser is double-checked",
         question:
-          "Cookies, hidden form fields, and saved settings travel through the visitor's browser, where they can be edited. Confirm anything you rely on -- a role, a price, an account id -- is either signed so edits are detected, or looked up again on the server.",
+          "Cookies, hidden form fields, and saved settings pass through the visitor's browser, where they can be edited. Confirm anything you rely on -- a role, a price, an account number -- is either signed so changes are noticed, or looked up again by your site.",
         detector: null,
       },
     ],
@@ -659,28 +723,28 @@ const MODULES: ModuleShape[] = [
     rank: 9,
     title: "Noticing when something goes wrong",
     summary:
-      "If an attack succeeds and nobody notices, it continues. The average intrusion goes undetected for months. This module is about being able to tell that something happened, and when -- and making sure someone is told.",
+      "If an attack succeeds and nobody notices, it continues. The average break-in goes unnoticed for months. This module is about being able to tell that something happened, and when -- and making sure someone is told.",
     items: [
       {
         id: "logging/auth-events",
-        title: "Logins, failures, and permission denials are recorded",
+        title: "Sign-ins, failed sign-ins, and refused actions are written down",
         question:
-          "Confirm you record who signed in, what failed, and what was refused. Without it there is no way to reconstruct an incident afterwards.",
+          "Confirm your app records who signed in, what failed, and what was refused. Without it there is no way to work out what happened after an incident.",
         detector: null,
       },
       {
         id: "logging/no-secrets",
-        covers: "no password, token, or key is passed to a log call, and database query logging is off",
-        title: "Logs never contain passwords, tokens, or keys",
+        covers: "no password, sign-in pass, or key is written into your app's activity records, and the database tool doesn't record every request",
+        title: "Your app's activity records (logs) never contain passwords or keys",
         question:
-          "Logs are copied, shipped to other services, and read by more people than your database. Confirm nothing sensitive is written into them.",
+          "Activity records are copied, sent to other services, and read by more people than your database. Confirm nothing sensitive is written into them.",
         detector: "logging:no-secrets-logged",
       },
       {
         id: "logging/alerting",
         title: "Someone would actually see an alert",
         question:
-          "A log nobody reads is not monitoring. Decide who gets notified, and for what.",
+          "Records nobody reads aren't monitoring. Decide who gets told when something goes wrong, and for what.",
         detector: null,
       },
     ],
@@ -695,29 +759,64 @@ const MODULES: ModuleShape[] = [
     items: [
       {
         id: "config/error-detail",
-        covers: "no error text is sent back to visitors from your own code, and you have your own error handler",
-        title: "Error messages shown to visitors do not reveal internals",
+        covers: "your own code never sends error details to visitors, and you have your own error page",
+        title: "Error messages don't show visitors how your site is built",
         question:
-          "A stack trace or raw database error tells an attacker how your system is built. Confirm visitors see a short message and the detail goes to your logs instead.",
+          "The technical details of an error (file names, code, database messages) tell an attacker how your site is built. Confirm visitors see a short message, and the detail goes into your private records instead.",
         detector: "server:no-internal-errors-returned",
       },
       {
         id: "errors/fail-closed",
         title: "When a check breaks, the answer is no",
         question:
-          "If a permission check, a payment call, or a sign-in lookup throws an error, the safe outcome is to refuse. Confirm none of your error handlers quietly carry on as if the check had passed.",
+          "If a permission check, a payment, or a sign-in lookup fails with an error, the safe outcome is to refuse. Confirm none of your error handling quietly carries on as if the check had passed.",
         detector: null,
       },
       {
         id: "errors/unhandled",
-        title: "One unexpected request cannot crash or stall the application",
+        title: "One unexpected request cannot crash or freeze the application",
         question:
-          "Confirm unexpected errors are caught and answered with a short message, and that oversized or malformed requests are refused early rather than left to exhaust memory or hang.",
+          "Confirm unexpected errors are caught and answered with a short message, and that oversized or broken requests are refused early instead of using up memory or hanging.",
         detector: null,
       },
     ],
   },
 ];
+
+/**
+ * Review text quotes the reviewed repository -- page addresses, file names,
+ * package names -- and anyone who can push there chooses them. The exact fix
+ * is meant to be pasted into an AI assistant, so invisible characters (which
+ * can hide instructions), line breaks and runaway length are removed from
+ * everything a reader sees or copies.
+ */
+const INVISIBLE = /[\p{Cc}\p{Cf}\u2028\u2029]+/gu;
+const MAX_TEXT = 800;
+
+export function cleanText(text: string): string {
+  const flat = text.replace(INVISIBLE, " ").replace(/ {2,}/g, " ").trim();
+  return flat.length > MAX_TEXT ? `${flat.slice(0, MAX_TEXT - 1)}…` : flat;
+}
+
+function cleanRisk(risk: Risk): Risk {
+  return {
+    ...risk,
+    what: cleanText(risk.what),
+    impact: cleanText(risk.impact),
+    fix: cleanText(risk.fix),
+    ...(risk.fixDetail ? { fixDetail: cleanText(risk.fixDetail) } : {}),
+  };
+}
+
+function cleanLead(lead: Unproven): Unproven {
+  return {
+    ...lead,
+    what: cleanText(lead.what),
+    why: cleanText(lead.why),
+    check: cleanText(lead.check),
+    ...(lead.checkDetail ? { checkDetail: cleanText(lead.checkDetail) } : {}),
+  };
+}
 
 /** Deterministic id from a location, so the same risk keeps its id across scans. */
 function riskId(prefix: string, location?: CodeLocation): string {
@@ -738,23 +837,24 @@ function gradeFromSeverity(severity: Finding["severity"]): Grade {
  */
 function riskFromPath(path: TaintPath): Risk {
   const copy = SINK_COPY[path.sink.kind] ?? {
-    operation: "a sensitive operation",
+    operation: "something your app does with it",
     impact: "Someone could make this behave in ways it was not meant to.",
-    fix:
-      "Check the value before it is used -- confirm it matches the shape you expect, and reject it when it does not.",
+    fix: "Check the value before it is used: confirm it is what you expect, and refuse it when it is not.",
+    detail: "Validate the value against the expected type and format before this line, and reject anything else.",
   };
-  const entry = SOURCE_COPY[path.source.kind] ?? "something a visitor controls";
-  const where = path.door ? `${path.door.method} ${path.door.path}` : path.sink.location.path;
+  const entry = SOURCE_COPY[path.source.kind] ?? "Something a visitor controls";
+  // The file and line are in the detailed view; the sentence names the page,
+  // or the file when the page that leads here is not known.
 
   return {
     id: riskId(`taint/${path.sink.kind}`, path.sink.location),
     grade: SINK_GRADE[path.sink.kind] ?? "medium",
-    what:
-      `On ${where}, ${entry} is used directly in ${copy.operation} at ` +
-      `${path.sink.location.path} line ${path.sink.location.line}, with nothing in between ` +
-      `checking that the value is what you expect.`,
+    what: path.door
+      ? `${entry} on ${pageName(path.door)} is used directly in ${copy.operation}, and nothing checks it first.`
+      : `In ${path.sink.location.path}, ${lowerFirst(entry)} is used directly in ${copy.operation}, and nothing checks it first.`,
     impact: copy.impact,
     fix: copy.fix,
+    fixDetail: copy.detail,
     location: path.sink.location,
     evidence: `${path.source.expression} → ${path.via.join(" → ")} → ${path.sink.expression}`,
     confirmedBy: "oracle",
@@ -769,7 +869,8 @@ function riskFromFinding(finding: Finding): Risk {
       ? `${finding.title} (${finding.location.path} line ${finding.location.line}).`
       : `${finding.title}.`,
     impact: finding.why,
-    fix: finding.fix?.description ?? "Open supervise mode to see the affected code.",
+    fix: finding.fix?.description ?? "Choose \"Show me the code\" at the top to see the code this is about.",
+    ...(finding.fix?.detail ? { fixDetail: finding.fix.detail } : {}),
     ...(finding.location ? { location: finding.location } : {}),
     confirmedBy: "rule",
   };
@@ -784,23 +885,27 @@ export interface OwnershipGap {
 }
 
 function riskFromOwnership(gap: OwnershipGap): Risk {
-  const entry = SOURCE_COPY[gap.source.kind] ?? "something a visitor controls";
-  const at = `${gap.sink.location.path} line ${gap.sink.location.line}`;
+  const entry = lowerFirst(SOURCE_COPY[gap.source.kind] ?? "something a visitor controls");
+  const page = pageName(gap.door);
 
   return {
     id: riskId("access-control/ownership", gap.sink.location),
     grade: "high",
     what:
-      `${gap.door.method} ${gap.door.path} looks up a record using ${entry} (${at}) and never ` +
+      `${upperFirst(page)} finds a saved record using ${entry}, and never ` +
       `checks that the record belongs to the person who is signed in.`,
     impact:
       "If these records belong to individual people -- invoices, messages, orders, profiles -- " +
       "anyone with an account can read or change someone else's just by changing that value. " +
       "This is the most common serious flaw in web applications.",
     fix:
-      "Include the signed-in person in the lookup, for example by adding \"AND owner_id = \" and " +
-      "the signed-in user's id to the query, or check the record's owner before returning it. " +
-      "If every signed-in user is meant to see these records, it is fine as it is -- mark it reviewed.",
+      "When the page looks up the record, make it also check that the record belongs to the signed-in " +
+      "person, and refuse if it does not. If every signed-in user is meant to see these records, this " +
+      "is fine as it is: choose \"This is intended\".",
+    fixDetail:
+      "Add the signed-in user's id to the lookup (for example `WHERE id = $1 AND owner_id = $2` with " +
+      "the session's user id), or load the record and return 403 unless its owner is the signed-in user.",
+    mayBeIntended: true,
     location: gap.sink.location,
     evidence: `${gap.source.expression} → ${gap.via.join(" → ")} → ${gap.sink.expression}`,
     confirmedBy: "oracle",
@@ -843,7 +948,7 @@ const ITEM_FOR_SINK: Record<string, string> = {
   html: "injection/page-content",
   "dynamic-code": "injection/system-commands",
   filesystem: "access-control/file-paths",
-  redirect: "access-control/file-paths",
+  redirect: "access-control/redirects",
   nosql: "injection/database",
   "outbound-request": "ssrf/url-allowlist",
   "xml-entities": "injection/xml-entities",
@@ -874,7 +979,8 @@ function unprovenFromFinding(finding: Finding): Unproven {
       ? `${finding.title} (${finding.location.path} line ${finding.location.line}).`
       : `${finding.title}.`,
     why: finding.why,
-    check: finding.fix?.description ?? "Open the detailed view to see the affected code.",
+    check: finding.fix?.description ?? "Choose \"Show me the code\" at the top to see the code this is about.",
+    ...(finding.fix?.detail ? { checkDetail: finding.fix.detail } : {}),
     ...(finding.location ? { location: finding.location } : {}),
   };
 }
@@ -955,19 +1061,24 @@ export function buildReview(input: ReviewInput): SecurityReview {
     attach("access-control/unguarded-routes", {
       id: riskId("access-control/unguarded", door.location),
       grade: door.method === "GET" ? "medium" : "high",
-      what:
-        `${door.method} ${door.path} (${door.location.path} line ${door.location.line}) has no ` +
-        `sign-in check applied to it.`,
+      what: door.method === "GET"
+        ? `The page ${door.path} can be opened by anyone, without signing in.`
+        : `The action ${door.path} can be used by anyone, without signing in.`,
       impact:
-        `Anyone on the internet can call this address without an account. If it returns or ` +
+        `Anyone on the internet can use this address without an account. If it shows or ` +
         `changes anything that belongs to a particular person, they do not need to be that ` +
         `person to use it.`,
       fix:
-        `If this is meant to be public, mark it reviewed and move on. If not, apply your ` +
-        `sign-in middleware to it -- ideally to the whole route prefix, so routes added later ` +
-        `are protected automatically.`,
+        `If this is meant to be public, nothing needs fixing: choose "This is intended". If not, ` +
+        `make it require signing in. Best: protect the whole section of the site it belongs to, ` +
+        `so pages added there later are protected too.`,
+      fixDetail:
+        `Apply the app's sign-in middleware to ${door.method} ${door.path} ` +
+        `(${door.location.path} line ${door.location.line}), ideally once on the router or path prefix ` +
+        `it sits under rather than route by route.`,
+      mayBeIntended: true,
       location: door.location,
-      confirmedBy: "oracle",
+      confirmedBy: "route-check",
     });
   }
 
@@ -978,15 +1089,16 @@ export function buildReview(input: ReviewInput): SecurityReview {
     title: shape.title,
     summary: shape.summary,
     items: shape.items.map((item): ActionItem => {
-      const risks = (risksByItem.get(item.id) ?? []).sort(byGrade);
-      const unproven = unprovenByItem.get(item.id) ?? [];
+      const risks = (risksByItem.get(item.id) ?? []).sort(byGrade).map(cleanRisk);
+      const unproven = (unprovenByItem.get(item.id) ?? []).map(cleanLead);
       const outcome = input.checks?.get(item.id);
       const blocked = outcome?.status === "not-applicable" ? outcome.reason : undefined;
+      const absent = outcome?.status === "not-applicable" && outcome.absent === true;
       const notice = outcome?.notice;
 
       return {
         ...item,
-        ...(blocked ? { notApplicable: blocked } : {}),
+        ...(blocked ? { notApplicable: cleanText(blocked) } : {}),
         ...(notice ? { notice } : {}),
         risks,
         unproven,
@@ -994,8 +1106,12 @@ export function buildReview(input: ReviewInput): SecurityReview {
         // detector that could not run here is not a pass, and neither is the
         // absence of one -- both hand the item back to the user.
         // An unproven lead is not a pass either: someone has to look at it.
+        // "Doesn't apply" is not a pass either: it only says the thing this
+        // item is about was not found in the project, with the reason shown.
         status: risks.length > 0
           ? "action-needed"
+          : absent && unproven.length === 0
+          ? "does-not-apply"
           : blocked || !item.detector || unproven.length > 0
           ? "needs-your-review"
           : "pass",

@@ -66,7 +66,7 @@ test("with no table definitions the checklist item says it could not judge", asy
   ]));
   const item = review.modules.flatMap((m) => m.items).find((i) => i.id === "access-control/mass-assignment")!;
   assert.equal(item.status, "needs-your-review");
-  assert.match(item.notApplicable ?? "", /No table definitions/);
+  assert.match(item.notApplicable ?? "", /could not be checked/);
 });
 
 test("a whole request saved into a table with a role field is reported", async () => {

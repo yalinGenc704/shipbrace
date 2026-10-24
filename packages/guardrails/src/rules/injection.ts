@@ -28,6 +28,7 @@ interface SinkCopy {
   title: string;
   why: string;
   fix: string;
+  detail: string;
   learnMore: string;
 }
 
@@ -36,72 +37,68 @@ const COPY: Partial<Record<SinkKind, SinkCopy>> = {
     ruleId: "injection/sql-string-building",
     severity: "critical",
     confidence: "likely",
-    title: "A database query is built by pasting values into text",
+    title: "A database request is put together by pasting in text",
     why:
-      "This query is assembled by joining text together. If any part of it comes from " +
-      "something a visitor typed, they can change what the query does -- reading other " +
-      "people's records, or deleting the table. Passing values as parameters instead " +
-      "keeps them as data that can never be read as commands.",
+      "If any of that text comes from a visitor, they can change what the request does -- " +
+      "reading other people's records, or deleting the table.",
     fix:
-      "Use the driver's parameter syntax -- the tagged template `` sql`...${value}` `` " +
-      "for postgres, or `?` placeholders with an argument array for mysql2 -- so the " +
-      "value is sent separately from the query text.",
+      "Send values to the database separately from the request itself, so they are always " +
+      "treated as plain text.",
+    detail:
+      "Use the driver's parameter syntax instead of joining text: the tagged template " +
+      "`` sql`...${value}` `` for postgres, or `?` placeholders with an argument array for mysql2.",
     learnMore: "/explain/sql-injection",
   },
   shell: {
     ruleId: "injection/shell-string-building",
     severity: "critical",
     confidence: "likely",
-    title: "A system command is built by pasting values into text",
+    title: "A computer command is put together by pasting in text",
     why:
-      "This runs a command assembled from text. Shells treat characters like `;` and " +
-      "`|` as instructions, so a value containing them can run a second, " +
-      "attacker-chosen command on your server.",
-    fix:
-      "Pass the command and its arguments as a separate array rather than one string, " +
-      "so the shell never parses the values.",
+      "Some characters (like ; and |) tell the computer to start another command. If the text " +
+      "comes from a visitor, they can run commands of their own on your server.",
+    fix: "Don't build commands out of text. Use a ready-made package that does the job instead, if you can.",
+    detail:
+      "Pass the program and its arguments as a separate array (`execFile(cmd, [arg])`, or `spawn` " +
+      "without `shell: true`) instead of one string, so the shell never parses the values.",
     learnMore: "/explain/command-injection",
   },
   "dynamic-code": {
     ruleId: "injection/shell-string-building",
     severity: "critical",
     confidence: "likely",
-    title: "The application builds and runs code while it is running",
+    title: "Your app turns text into code and runs it",
     why:
-      "This turns a value into code and runs it. If any part of that value comes from " +
-      "outside, whoever supplied it chooses what your application does next.",
-    fix:
-      "Replace it with a lookup table or a plain function. Almost anything built this " +
-      "way can be expressed without turning data into instructions.",
+      "If any of that text comes from outside, whoever supplied it chooses what your app does next.",
+    fix: "Do the same job without turning text into code. There is almost always a simpler way.",
+    detail: "Replace `eval`/`new Function`/`vm.run*` with a lookup table or a plain function.",
     learnMore: "/explain/dynamic-code",
   },
   "unsafe-decoding": {
     ruleId: "integrity/unsafe-decoding",
     severity: "critical",
     confidence: "likely",
-    title: "Data is decoded in a way that can rebuild running code",
+    title: "Data is unpacked with a tool that can turn it into working code",
     why:
-      "This decoder can turn the text it is given back into working functions. If that text " +
-      "ever comes from outside, whoever wrote it chooses what your application runs.",
-    fix:
-      "Use plain JSON.parse for data, or js-yaml 4's load (safeLoad in js-yaml 3), which only build plain values.",
+      "If that data ever comes from outside, whoever wrote it chooses what your app runs.",
+    fix: "Unpack data with a tool that only ever produces plain data, never code.",
+    detail:
+      "Use `JSON.parse` for data, or js-yaml 4's `load` (`safeLoad` in js-yaml 3), which only build plain values.",
     learnMore: "/explain/unsafe-decoding",
   },
   html: {
     ruleId: "injection/unescaped-html",
     severity: "high",
     confidence: "possible",
-    title: "Raw HTML is inserted into the page without escaping",
+    title: "Text is put into the page without being made safe first",
     why:
-      "Pages normally turn special characters in your data into plain text, so text stays " +
-      "text. This line skips that protection for a value. If that value ever contains " +
-      "something a user supplied, their markup -- including scripts that read logged-in " +
-      "sessions -- will run in your visitors' browsers.",
+      "Pages normally show text as plain text, but this line switches that off. If the text " +
+      "ever comes from a visitor, their code runs in other visitors' browsers and can take over their accounts.",
     fix:
-      "Let the page escape the value for you: in React render it as `{value}` instead of " +
-      "using dangerouslySetInnerHTML; on a Hono server use the html`` helper instead of a " +
-      "plain template. If it genuinely must be HTML, clean it with a library such as " +
-      "DOMPurify first.",
+      "Show the value as plain text. If it really has to include formatting, clean it with a trusted cleaning package first.",
+    detail:
+      "Render it escaped: `{value}` in React instead of dangerouslySetInnerHTML; Hono's html`` helper " +
+      "instead of a plain template; `<%= %>` not `<%- %>` in EJS. If it must be HTML, run it through DOMPurify first.",
     learnMore: "/explain/xss",
   },
 };
@@ -130,7 +127,7 @@ const unsafeSinks: Rule = {
         title: copy.title,
         why: copy.why,
         location: sink.location,
-        fix: { kind: "manual", description: copy.fix },
+        fix: { kind: "manual", description: copy.fix, detail: copy.detail },
         learnMore: copy.learnMore,
       });
     }

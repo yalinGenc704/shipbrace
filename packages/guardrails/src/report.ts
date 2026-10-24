@@ -36,7 +36,7 @@ export function renderAuto(findings: Finding[]): AutoReport {
     needsYou: blocking.map((f) => ({
       title: f.title,
       why: f.why,
-      whatToDo: f.fix?.description ?? "Open supervise mode to see the affected code.",
+      whatToDo: f.fix?.description ?? "Choose \"Show me the code\" at the top to see the code this is about.",
     })),
     handledCount: handled,
   };

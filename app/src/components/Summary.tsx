@@ -1,4 +1,4 @@
-import type { ReviewResult } from "@shipbrace/guardrails";
+import type { ReviewResult, Risk } from "@shipbrace/guardrails";
 import { ArcElement, Chart, Legend, Tooltip } from "chart.js";
 import { Download } from "lucide-react";
 import { Doughnut } from "react-chartjs-2";
@@ -18,13 +18,17 @@ export function Summary({
   mode,
   onModeChange,
   outstandingReviews,
+  live,
 }: {
   review: ReviewResult;
   mode: Mode;
   onModeChange: (mode: Mode) => void;
   outstandingReviews: number;
+  /** Risks still to fix: everything except those the reader marked as intended. */
+  live: Risk[];
 }) {
-  const { high, medium, low } = review.summary;
+  const count = (grade: Risk["grade"]) => live.filter((r) => r.grade === grade).length;
+  const [high, medium, low] = [count("high"), count("medium"), count("low")];
   const total = high + medium + low;
 
   return (
@@ -38,7 +42,7 @@ export function Summary({
 
           <dl className="mt-4 flex flex-wrap gap-x-6 gap-y-2">
             <Stat label="Need fixing" value={total} tone={high > 0 ? "danger" : "ok"} />
-            <Stat label="Your call" value={outstandingReviews} tone="review" />
+            <Stat label="Needs your check" value={outstandingReviews} tone="review" />
             <Stat label="Modules clear" value={`${review.summary.clear}/10`} tone="ok" />
           </dl>
         </div>

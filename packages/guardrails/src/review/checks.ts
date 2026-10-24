@@ -4,7 +4,7 @@ import { modelFields } from "../analysis/schemas.ts";
 import { fileChecks } from "./project-files.ts";
 import type { CodeLocation, RepoSnapshot, SourceFile } from "../types.ts";
 import { isSource, isTestPath, redact } from "../util.ts";
-import type { Grade, Risk } from "./modules.ts";
+import { pageName, upperFirst, type Grade, type Risk } from "./modules.ts";
 
 /**
  * Project-level checks.
@@ -27,7 +27,17 @@ import type { Grade, Risk } from "./modules.ts";
 export type CheckOutcome =
   | { status: "pass"; notice?: string }
   | { status: "risks"; risks: Risk[]; notice?: string }
-  | { status: "not-applicable"; reason: string; notice?: string };
+  | {
+    status: "not-applicable";
+    reason: string;
+    notice?: string;
+    /**
+     * The thing checked is not in this project (no Supabase, no passwords),
+     * as opposed to being there but out of the check's sight. The item then
+     * shows as "Doesn't apply here" -- still never a pass.
+     */
+    absent?: boolean;
+  };
 
 export interface ProjectCheck {
   /** Stable name, shown as the detector on a passing item. */
@@ -38,6 +48,13 @@ export interface ProjectCheck {
 }
 
 // --- helpers -----------------------------------------------------------------
+
+/**
+ * Any sign that the app signs people in, however it does it. "Doesn't apply"
+ * is only said of sign-in questions when nothing at all points to sign-in:
+ * the specific detectors know a few libraries, and many others exist.
+ */
+const SIGN_IN_HINT = /\b(?:password|passwd|login|log_in|signin|sign_in|session|cookies?|auth\w*|jwt|token)\b/i;
 
 const sourceFiles = (snapshot: RepoSnapshot): SourceFile[] =>
   snapshot.files.filter((f) => isSource(f.path) && !isTestPath(f.path));
@@ -68,6 +85,8 @@ function risk(
   impact: string,
   fix: string,
   location?: CodeLocation,
+  /** The exact, code-level fix for an AI assistant; `fix` stays plain. */
+  detail?: string,
 ): Risk {
   return {
     id: `${id}@${location?.path ?? "-"}:${location?.line ?? 0}`,
@@ -75,6 +94,7 @@ function risk(
     what,
     impact,
     fix,
+    ...(detail ? { fixDetail: detail } : {}),
     ...(location ? { location } : {}),
     confirmedBy: "rule",
   };
@@ -97,7 +117,7 @@ const exposedServices: ProjectCheck = {
     if (!compose) {
       return {
         status: "not-applicable",
-        reason: "This project has no docker-compose file, so there is nothing to read.",
+        reason: "This project has no docker-compose setup file, so how the database is reached could not be seen. If your database is hosted somewhere, check in its settings that only your app can connect to it.",
       };
     }
 
@@ -114,10 +134,11 @@ const exposedServices: ProjectCheck = {
           risk(
             "check/exposed-database",
             "high",
-            `The "${service}" service in ${compose.path} publishes a port to the host (line ${publishes + 1}).`,
-            "Your database is reachable from outside the application. Databases are constantly scanned for on the public internet, and a weak or default password is enough to lose everything in it. Nothing outside your own application needs to reach it.",
-            `Delete the "ports:" entry from the "${service}" service. Other services in the same compose file can still reach it by name; only the outside world loses access.`,
+            `Your setup file (${compose.path}) opens the "${service}" database to the outside world.`,
+            "Your database can be reached from outside your app. Databases are constantly searched for on the internet, and a weak or default password is enough to lose everything in it. Nothing outside your own app needs to reach it.",
+            "Remove the line that opens the database to the outside. Your app can still reach it; only the rest of the internet loses access.",
             { path: compose.path, line: publishes + 1, excerpt: lines[publishes]!.trim() },
+            `Delete the "ports:" entry from the "${service}" service in ${compose.path}. Other services in the same compose file still reach it by name.`,
           ),
         );
       }
@@ -156,7 +177,7 @@ const securityHeaders: ProjectCheck = {
     if (inventory.doors.length === 0) {
       return {
         status: "not-applicable",
-        reason: "No web routes were found, so there is no server response to add headers to.",
+        reason: "No pages were found in this code, so there was nothing to check. If your app does have pages, confirm it switches on the browser's built-in protections.",
       };
     }
     if (anyMatch(files, /\b(secureHeaders|helmet|Content-Security-Policy)\b/)) {
@@ -164,6 +185,8 @@ const securityHeaders: ProjectCheck = {
     }
 
     const entry = files.find((f) => /\b(new Hono|express\(\))/.test(f.content)) ?? files[0]!;
+    // The advice names the tool for the framework this app actually uses.
+    const hono = /\bnew Hono\b/.test(entry.content);
 
     return {
       status: "risks",
@@ -171,10 +194,13 @@ const securityHeaders: ProjectCheck = {
         risk(
           "check/missing-security-headers",
           "medium",
-          `No protective response headers are configured in ${entry.path}.`,
-          "Browsers offer several protections that only switch on when your server asks for them -- refusing to let your site be framed by someone else's, and refusing to run scripts from places you did not approve. Without them, a small problem elsewhere in the site becomes a much larger one.",
-          "Add Hono's `secureHeaders()` middleware near the top of your server file. It is one line and needs no configuration to be useful.",
+          "Your site doesn't ask visitors' browsers to switch on their built-in protections (security headers).",
+          "Browsers can refuse to show your site inside someone else's page, or to run code from places you did not approve, but only when your site asks. Without that, a small problem elsewhere becomes a much bigger one.",
+          "Add the one standard line that switches these protections on. It needs no setup to be useful.",
           lineOf(entry, /new Hono|express\(\)/),
+          hono
+            ? `Add \`app.use(secureHeaders())\` (from "hono/secure-headers") near the top of ${entry.path}.`
+            : `Install helmet and add \`app.use(helmet())\` right after the app is created in ${entry.path}.`,
         ),
       ],
     };
@@ -189,7 +215,7 @@ const errorDetail: ProjectCheck = {
 
   run(snapshot, inventory) {
     if (inventory.doors.length === 0) {
-      return { status: "not-applicable", reason: "No web routes were found." };
+      return { status: "not-applicable", reason: "No pages were found in this code, so there was nothing to check. If your app does have pages, confirm its error messages stay short." };
     }
 
     const leak = /\.(?:json|text|send)\s*\([^)]*\b(?:err|error|e)\s*\.\s*(?:stack|message)\b/;
@@ -202,10 +228,11 @@ const errorDetail: ProjectCheck = {
         risk(
           "check/error-detail-leak",
           "medium",
-          `${file.path} sends internal error text back to the visitor.`,
-          "The detail inside an error describes how your system is built -- file paths, database structure, library versions. Handing that to whoever triggered the error tells an attacker exactly where to push next.",
-          "Send a short, fixed message to the visitor and write the detail to your server logs instead, where only you can read it.",
+          `${file.path} shows visitors the technical details of errors.`,
+          "Those details describe how your site is built -- file names, database layout, package versions. Showing them to whoever caused the error tells an attacker exactly where to push next.",
+          "Show visitors a short, fixed message, and write the details into your private records instead.",
           lineOf(file, leak),
+          "Replace the `err.message`/`err.stack` in the response with a fixed message, and log the error server-side.",
         ),
       );
     }
@@ -225,7 +252,7 @@ const errorDetail: ProjectCheck = {
       return {
         status: "not-applicable",
         reason:
-          "This app relies on Express's built-in error page, which shows visitors the full internal error -- file paths and code -- unless the server runs with NODE_ENV=production. Confirm it does, or add an error handler of your own that sends a short message.",
+          "Your app uses Express's default error page, which shows visitors the full technical error unless the live site runs in production mode (NODE_ENV=production). Confirm it does, or add your own short error page.",
       };
     }
     return { status: "pass" };
@@ -240,7 +267,7 @@ const pinnedVersions: ProjectCheck = {
 
   run(snapshot) {
     if (snapshot.manifests.size === 0) {
-      return { status: "not-applicable", reason: "No package.json was found in this project." };
+      return { status: "not-applicable", reason: "No package list (package.json) was found, so this could not be checked.", absent: true };
     }
 
     const risks: Risk[] = [];
@@ -271,10 +298,11 @@ const pinnedVersions: ProjectCheck = {
         risk(
           "check/unpinned-dependencies",
           "low",
-          `${path} accepts a range of versions for ${loose.length} package${loose.length === 1 ? "" : "s"} (${loose.slice(0, 3).join(", ")}${loose.length > 3 ? ", …" : ""}).`,
-          "A range means two installs of the same code can pull different versions of somebody else's package. The version you reviewed and the version that ends up running for your visitors are then not guaranteed to be the same.",
-          "Replace the leading ^ or ~ with the exact version you want, and let your lockfile and a scheduled update process handle upgrades deliberately.",
+          `${loose.length} package${loose.length === 1 ? " is" : "s are"} allowed to update to newer versions on their own (${loose.slice(0, 3).map((d) => d.replace(/@[^@]*$/, "")).join(", ")}${loose.length > 3 ? ", …" : ""}).`,
+          "Two installs of the same code can then pull different versions of somebody else's code. The version you tested and the version your visitors get are no longer guaranteed to match.",
+          "Set each package to one exact version, and update packages on purpose when you choose to.",
           { path, line: 1 },
+          `In ${path}, replace each version range with the exact installed version (remove the leading ^ or ~; replace "latest" or "*"): ${loose.slice(0, 8).join(", ")}${loose.length > 8 ? ", …" : ""}.`,
         ),
       );
     }
@@ -298,7 +326,7 @@ const massAssignmentTables: ProjectCheck = {
       return {
         status: "not-applicable",
         reason:
-          "No table definitions were found (Prisma, SQL, Mongoose, Sequelize or Drizzle), so whether saving a whole form lets visitors set fields like a role could not be judged.",
+          "We couldn't find where your app describes what its saved records contain (Prisma, SQL, Mongoose, Sequelize or Drizzle), so this could not be checked. Confirm no form saves everything a visitor sends straight into a record.",
       };
     }
     return { status: "pass" };
@@ -348,7 +376,10 @@ const webhookSignatures: ProjectCheck = {
         inventory.sources.some((s) => s.doorId === door.id && s.kind === "request-body"),
     );
     if (hooks.length === 0) {
-      return { status: "not-applicable", reason: "No webhook route that reads what it is sent was found." };
+      return {
+        status: "not-applicable",
+        reason: "We didn't find an address where other services send this app updates (a webhook). If it has one, confirm each message's signature is checked before the app acts on it.",
+      };
     }
 
     const files = sourceFiles(snapshot);
@@ -359,7 +390,7 @@ const webhookSignatures: ProjectCheck = {
       return {
         status: "not-applicable",
         reason:
-          "Some code checks message signatures or a shared secret, but not plainly in the same file as every webhook route, so whether each one is checked could not be confirmed.",
+          "Some of your code checks that messages from other services are genuine, but not next to every address that receives them, so we couldn't confirm each one is covered. Check each webhook verifies its messages.",
       };
     }
 
@@ -369,10 +400,11 @@ const webhookSignatures: ProjectCheck = {
         risk(
           "integrity/webhook-unsigned",
           "high",
-          `${door.method} ${door.path} (${door.location.path} line ${door.location.line}) acts on what it is sent, and nothing in this project checks that a message really came from the service that is meant to send it.`,
+          `The address ${door.path}, where another service sends your app updates, believes any message it gets. Nothing checks that the message really came from that service.`,
           "Anyone who finds this address can send a made-up message -- a payment that never happened, an order marked paid -- and the app will act on it.",
-          "Check the signature the service sends with every message before doing anything: for Stripe, `stripe.webhooks.constructEvent(rawBody, signature, secret)`; for GitHub, an HMAC of the raw body compared with `crypto.timingSafeEqual`. Refuse the message if it does not match.",
+          "Check the signature the service attaches to every message before doing anything, and ignore messages without a valid one.",
           door.location,
+          `In ${door.method} ${door.path} (${door.location.path} line ${door.location.line}), verify the signature before acting: for Stripe, \`stripe.webhooks.constructEvent(rawBody, signature, secret)\`; for GitHub, an HMAC-SHA256 of the raw body compared with \`crypto.timingSafeEqual\`. Return 400 if it does not match.`,
         )
       ),
     };
@@ -402,7 +434,7 @@ const xmlLibraries: ProjectCheck = {
     return {
       status: "not-applicable",
       reason:
-        `This project uses ${[...new Set(others)].join(", ")}, which this check cannot follow. Confirm it is never given a visitor's XML with outside references (entity loading) switched on.`,
+        `This app uses ${[...new Set(others)].join(", ")} to read XML, which this check cannot follow. Confirm it never reads a visitor's XML with the setting that pulls in other files (entity loading) switched on.`,
     };
   },
 };
@@ -425,12 +457,28 @@ const aiLibraries: ProjectCheck = {
       Object.keys({ ...(m.dependencies as object | undefined), ...(m.devDependencies as object | undefined) })
         .some((name) => AI_LIBRARY.test(name))
     );
-    return uses
-      ? { status: "pass" }
+    if (uses) return { status: "pass" };
+    // An app can call an AI service directly over the web. Only when nothing
+    // in the code names one is the item said not to apply.
+    // Any AI provider, by package name or by text in the code. Absence is only
+    // claimed when none of them shows up anywhere.
+    const AI_HINT = /openai|anthropic|claude|gemini|generativelanguage|mistral|groq|cohere|bedrock|ollama|replicate|huggingface|openrouter|together-ai|deepseek|langchain|llamaindex|ai-sdk|\bllm\b|chat\/completions|messages\.create|generateText|streamText/i;
+    const mentionsAi =
+      [...snapshot.manifests.values()].some((m) =>
+        Object.keys({ ...(m.dependencies as object | undefined), ...(m.devDependencies as object | undefined) })
+          .some((name) => AI_HINT.test(name))
+      ) || anyMatch(sourceFiles(snapshot), AI_HINT);
+    return mentionsAi
+      ? {
+        status: "not-applicable",
+        reason:
+          "This app seems to use an AI service in a way this check can't follow. Confirm a visitor's text can't make the AI's answer change data, run commands or send messages.",
+      }
       : {
         status: "not-applicable",
         reason:
-          "No AI library this check recognises (Anthropic, OpenAI, Gemini, Vercel AI SDK, LangChain) is listed in package.json. If the app sends visitors' text to an AI model, confirm the model's answer is checked before it is used to do anything.",
+          "This app doesn't seem to use an AI service. If it does send visitors' text to an AI in some way, confirm the AI's answer is checked before it is used to do anything.",
+        absent: true,
       };
   },
 };
@@ -443,7 +491,7 @@ const lockfilePresent: ProjectCheck = {
 
   run(snapshot) {
     if (snapshot.manifests.size === 0) {
-      return { status: "not-applicable", reason: "No package.json was found in this project." };
+      return { status: "not-applicable", reason: "No package list (package.json) was found, so there are no package versions to record.", absent: true };
     }
     const lock = fileNamed(
       snapshot,
@@ -457,10 +505,11 @@ const lockfilePresent: ProjectCheck = {
         risk(
           "check/missing-lockfile",
           "medium",
-          "No lockfile is committed to this repository.",
-          "A lockfile records the exact version of every package your app installs, including the packages your packages depend on. Without one, a build next week can quietly pull different code than the build you tested, and you would have no record of what changed.",
-          "Run your package manager's install once and commit the lockfile it produces alongside your code.",
+          "Your code is saved without a lockfile (a record of every package version your app installs).",
+          "Without one, an install next week can quietly pull different code than the one you tested. You would have no record of what changed.",
+          "Ask your AI assistant to create the lockfile and save it with your code.",
           { path: "package.json", line: 1 },
+          "Run `npm install` (or your package manager's install) and commit the resulting package-lock.json, pnpm-lock.yaml, yarn.lock or bun.lock.",
         ),
       ],
     };
@@ -480,10 +529,13 @@ const passwordStorage: ProjectCheck = {
     if (!handlesPasswords) {
       return {
         status: "not-applicable",
-        reason: "This application does not appear to handle passwords.",
+        reason: "This app doesn't seem to handle passwords.",
+        absent: true,
       };
     }
     if (anyMatch(files, /\b(argon2|bcrypt|scrypt|Bun\.password)\b/i)) return { status: "pass" };
+    // Bun's built-in hashing is only worth suggesting to apps that run on Bun.
+    const bun = snapshot.files.some((f) => /(^|\/)bun\.lockb?$/.test(f.path)) || anyMatch(files, /\bBun\./);
 
     const fast = /\bcreateHash\s*\(\s*['"`](md5|sha1|sha256|sha512)['"`]/i;
     const offender = files.find((f) => fast.test(f.content));
@@ -495,10 +547,11 @@ const passwordStorage: ProjectCheck = {
           risk(
             "check/fast-password-hash",
             "high",
-            `${offender.path} scrambles passwords with a fast algorithm.`,
-            "Fast algorithms are designed to run millions of times a second, which is exactly what someone guessing passwords wants. If your database is ever copied, common passwords are recovered from it in minutes.",
-            "Use argon2id or bcrypt instead. They are deliberately slow, which costs you nothing on a single login and makes mass guessing impractical.",
+            `${offender.path} scrambles passwords with a quick method that is easy to undo by guessing.`,
+            "Quick methods can try millions of guesses a second, which is exactly what someone cracking passwords wants. If your database is ever copied, common passwords are recovered in minutes.",
+            "Switch to a scrambling method built for passwords (argon2id or bcrypt). It is slow on purpose, which you won't notice but makes mass guessing impractical.",
             lineOf(offender, fast),
+            "Replace the `createHash` password hashing with argon2id (the `argon2` package) or bcrypt, and rehash each user's password at their next sign-in.",
           ),
         ],
       };
@@ -510,9 +563,13 @@ const passwordStorage: ProjectCheck = {
         risk(
           "check/unknown-password-hash",
           "high",
-          "Passwords are handled here, but no recognised password-scrambling library is used.",
-          "If passwords are stored as they were typed, anyone who obtains a copy of your database has every account immediately -- including on other sites, because people reuse passwords.",
-          "Store passwords with argon2id or bcrypt. On Bun, `Bun.password.hash(value, { algorithm: \"argon2id\" })` is built in and needs no extra package.",
+          "Your app handles passwords, but we couldn't find a password-scrambling tool being used.",
+          "If passwords are saved as typed, anyone who gets a copy of your database has every account at once. People reuse passwords, so their accounts on other sites are at risk too.",
+          "Save passwords scrambled with a method built for passwords (argon2id or bcrypt).",
+          undefined,
+          bun
+            ? "Hash passwords with `Bun.password.hash(value, { algorithm: \"argon2id\" })` and check them with `Bun.password.verify`."
+            : "Hash passwords with argon2id (the `argon2` package) or bcrypt before saving, and compare with its verify function at sign-in.",
         ),
       ],
     };
@@ -530,10 +587,25 @@ const sessionExpiry: ProjectCheck = {
     const signer = files.find((f) => /\b(SignJWT|jwt\.sign|sign\s*\()/.test(f.content));
 
     if (!signer) {
-      return {
-        status: "not-applicable",
-        reason: "No login tokens are issued by this application.",
-      };
+      // Sessions kept in a cookie are sign-ins too; only their expiry is out of sight.
+      const sessions = anyMatch(files, /\b(?:express-session|cookie-session)\b|\b(?:session|cookieSession)\s*\(\s*\{/);
+      return sessions
+        ? {
+          status: "not-applicable",
+          reason:
+            "Your app keeps people signed in with a session this check can't read the expiry of. Confirm sessions end after a while, and that signing out ends them on your site too.",
+        }
+        : anyMatch(files, SIGN_IN_HINT)
+        ? {
+          status: "not-applicable",
+          reason:
+            "We couldn't see how this app keeps people signed in, so this couldn't be checked. Confirm sign-ins end after a while, and that signing out ends them on your site too.",
+        }
+        : {
+          status: "not-applicable",
+          reason: "This app doesn't seem to sign people in, so there are no sign-ins to expire.",
+          absent: true,
+        };
     }
     if (/\b(setExpirationTime|expiresIn|exp\s*:)/.test(signer.content)) return { status: "pass" };
 
@@ -543,10 +615,11 @@ const sessionExpiry: ProjectCheck = {
         risk(
           "check/tokens-never-expire",
           "high",
-          `${signer.path} issues login tokens with no expiry time.`,
-          "A token that never expires works forever. If one is ever copied -- from a shared computer, a browser extension, a leaked log -- that person stays logged in as the account indefinitely, and changing the password does not stop them.",
-          "Give access tokens a short life (fifteen minutes is typical) and refresh them, so a copied one stops working quickly.",
+          `${signer.path} hands out sign-in passes that never expire.`,
+          "Anyone who copies one -- from a shared computer, a browser add-on, a leaked log -- stays signed in as that person forever. Changing the password does not stop them.",
+          "Make sign-ins expire after a short time (15 minutes is common), renewing them while the person is active.",
           lineOf(signer, /SignJWT|jwt\.sign/),
+          "Set an expiry when signing tokens (`expiresIn: \"15m\"` for jsonwebtoken, `.setExpirationTime(\"15m\")` for jose) and issue a refresh token to renew them.",
         ),
       ],
     };
@@ -561,7 +634,7 @@ const rateLimiting: ProjectCheck = {
 
   run(snapshot, inventory) {
     if (inventory.doors.length === 0) {
-      return { status: "not-applicable", reason: "No web routes were found." };
+      return { status: "not-applicable", reason: "No pages were found in this code, so there was nothing to check. If your app does have pages, confirm sign-in and paid actions have a limit." };
     }
     if (anyMatch(sourceFiles(snapshot), /\b(rateLimit|rate_limit|rateLimiter|throttle|slowDown)\b/i)) {
       return { status: "pass" };
@@ -573,9 +646,11 @@ const rateLimiting: ProjectCheck = {
         risk(
           "check/no-rate-limiting",
           "medium",
-          `None of the ${inventory.doors.length} route${inventory.doors.length === 1 ? "" : "s"} in this application limits how often it can be called.`,
-          "Without a limit, one person can call any address thousands of times a minute -- guessing passwords, running up costs on anything you pay per use, or simply making the site unavailable for everyone else.",
-          "Add a rate-limiting middleware to your routes, with a stricter limit on signing in and on anything that costs money to run.",
+          `None of your ${inventory.doors.length} page${inventory.doors.length === 1 ? "" : "s"} and actions limits how often one person can use it.`,
+          "One person can then use any of them thousands of times a minute -- guessing passwords, running up costs on anything you pay for per use, or slowing the site down for everyone.",
+          "Add a limit on how often one person can use each action, with a stricter one on signing in and on anything that costs you money.",
+          undefined,
+          "Add rate-limiting middleware (express-rate-limit for Express, hono-rate-limiter for Hono) to all routes, with a tighter limit on sign-in and costly routes.",
         ),
       ],
     };
@@ -619,7 +694,7 @@ const logsWithoutSecrets: ProjectCheck = {
   run(snapshot) {
     const files = sourceFiles(snapshot);
     if (files.length === 0) {
-      return { status: "not-applicable", reason: "No application code was found." };
+      return { status: "not-applicable", reason: "No app code was found, so there was nothing to check." };
     }
 
     const risks: Risk[] = [];
@@ -632,10 +707,11 @@ const logsWithoutSecrets: ProjectCheck = {
         risk(
           "check/secret-in-logs",
           "high",
-          `${file.path} writes a password, token, or key into the logs.`,
-          "Logs travel further than almost anything else you store -- shipped to other services, copied into support tickets, readable by more people than your database. A secret written into one has to be treated as public.",
-          "Remove the value from the log line, or log only a description of it. If it has already run in production, treat that credential as exposed and replace it.",
+          `${file.path} writes a password, sign-in pass, or key into your app's activity records (logs).`,
+          "Activity records travel further than almost anything else you store: they are sent to other services and read by more people than your database. A secret written into one has to be treated as public.",
+          "Stop writing the secret into the records. If this has already run on your live site, replace that password or key.",
           where,
+          "Remove the secret-named value from this console call (log a description instead), and rotate the credential if this code has run in production.",
         ),
       );
     }
@@ -651,10 +727,11 @@ const logsWithoutSecrets: ProjectCheck = {
           risk(
             "check/orm-query-logging",
             "medium",
-            `${file.path} sets up Sequelize without turning off its query logging, so every database query -- with the values in it -- is written to the logs.`,
-            "Queries carry the data they read and write: password hashes, emails, addresses. Logs are copied and shared far more widely than your database, so that data leaks out through them.",
-            "Add `logging: false` to the Sequelize options (or send it to a logger that leaves values out).",
+            `Your database tool (Sequelize, set up in ${file.path}) writes every database request, with the data in it, into your app's activity records.`,
+            "Those requests carry scrambled passwords, emails and addresses. Activity records are shared far more widely than your database, so that data leaks out through them.",
+            "Turn off that recording in the database tool's settings.",
             lineOf(file, /new\s+Sequelize/),
+            `Add \`logging: false\` to the options passed to \`new Sequelize(...)\` in ${file.path}.`,
           ),
         );
         break;
@@ -682,10 +759,11 @@ const sessionSecret: ProjectCheck = {
         risk(
           "check/session-secret-in-code",
           "high",
-          `${file.path} writes the secret that signs login sessions directly into the code.`,
-          "Anyone who has seen the code -- or guesses a common example value like the ones in tutorials -- can forge a login session for any user without a password.",
-          "Read the secret from your settings (an environment variable such as SESSION_SECRET), set it to a long random value, and change it now, since the current one has been in the code.",
+          `${file.path} has the secret that protects everyone's sign-in written right into the code.`,
+          "Anyone who has seen the code -- or guesses a common example value from tutorials -- can pretend to be any user without a password.",
+          "Move the secret into your hosting service's secret settings, set it to a long random value, and change it now, because everyone who has seen the code knows the old one.",
           lineOf(file, /\bsecret\s*:|cookieParser\s*\(/),
+          "Read the secret from an environment variable (`process.env.SESSION_SECRET`), refuse to start if it is unset, and set it to a new long random value.",
         ),
       );
     }
@@ -702,8 +780,14 @@ const csrfProtection: ProjectCheck = {
   run(snapshot, inventory) {
     const files = sourceFiles(snapshot);
     const changes = inventory.doors.filter((d) => ["POST", "PUT", "PATCH", "DELETE"].includes(d.method));
+    if (inventory.doors.length === 0) {
+      return {
+        status: "not-applicable",
+        reason: "No pages or actions were found in this code, so this could not be checked. If your app has actions that change things, confirm other websites can't trigger them for a signed-in visitor.",
+      };
+    }
     if (changes.length === 0) {
-      return { status: "not-applicable", reason: "No routes change anything, so there is nothing for another site to trigger." };
+      return { status: "not-applicable", reason: "None of this app's actions change anything, so there is nothing another site could trigger.", absent: true };
     }
 
     // The browser sends cookies along automatically; that is what makes this possible.
@@ -711,7 +795,8 @@ const csrfProtection: ProjectCheck = {
     if (!cookieLogin) {
       return {
         status: "not-applicable",
-        reason: "No cookie-based sign-in was found. If this app signs people in with cookies some other way, confirm other sites cannot submit forms to it on their behalf.",
+        reason: "We couldn't see how this app remembers signed-in visitors. If it uses cookies, confirm other websites can't send actions to it for them.",
+        ...(anyMatch(files, SIGN_IN_HINT) ? {} : { absent: true }),
       };
     }
 
@@ -726,10 +811,11 @@ const csrfProtection: ProjectCheck = {
         risk(
           "check/no-csrf-protection",
           "medium",
-          `This app signs people in with cookies and has ${changes.length} route${changes.length === 1 ? "" : "s"} that change things, but nothing stops another website from sending those requests on a visitor's behalf.`,
-          "A page on any other site can quietly submit a form to yours while your visitor is signed in -- changing their email, placing an order, deleting data -- and your server cannot tell it apart from the visitor doing it.",
-          "Set your login cookie with `sameSite: \"lax\"` (or \"strict\"), and add CSRF protection middleware -- `csrf()` from hono/csrf, or csrf-csrf for Express -- to routes that change data.",
+          `Your site remembers who is signed in, and ${changes.length} of its actions change things (saving, editing, deleting). Nothing stops another website from secretly triggering them for a signed-in visitor.`,
+          "A page on any other site can quietly send an action to yours while your visitor is signed in -- changing their email, placing an order, deleting data. Your site can't tell it apart from the visitor doing it.",
+          "Turn on protection against this (often called CSRF protection), and make the sign-in cookie only travel with visits from your own site.",
           lineOf(files.find((f) => /session\s*\(|setCookie|res\.cookie/.test(f.content)) ?? files[0]!, /session\s*\(|setCookie|res\.cookie/),
+          "Set the session cookie with `sameSite: \"lax\"` (or \"strict\"), and add CSRF middleware to every route that changes data: `csrf()` from hono/csrf on Hono, or csrf-csrf / csrf-sync on Express.",
         ),
       ],
     };
@@ -759,7 +845,7 @@ const adminOnly: ProjectCheck = {
     if (adminRoutes.length === 0) {
       return {
         status: "not-applicable",
-        reason: "No pages with \"admin\" in their address were found. If some pages are meant for administrators only, confirm each one checks the visitor's role on the server.",
+        reason: "No pages with \"admin\" in their address were found. If some pages are meant for administrators only, confirm each one checks that the visitor is one.",
       };
     }
 
@@ -773,12 +859,13 @@ const adminOnly: ProjectCheck = {
         risk(
           "check/admin-without-role-check",
           sendsData ? "high" : "medium",
-          `${door.method} ${door.path} (${door.location.path} line ${door.location.line}) is an admin page, but nothing on the server checks that the visitor is an administrator.`,
+          `The admin page ${door.path} doesn't check that the visitor is an administrator. Any signed-in user can open it.`,
           sendsData
-            ? "Any signed-in user -- or anyone, if signing in is not required -- can call it and get data meant only for administrators. Hiding the admin menu in the browser does not stop them; they only need the address."
-            : "Anyone who reaches this page sees what administrators see. A check that only hides links in the browser can be skipped by typing the address.",
-          "Add a check on the server that the signed-in user has the admin role -- a middleware such as `requireAdmin` on every admin route, or a test of the role at the top of the handler that refuses everyone else.",
+            ? "It hands out data meant only for administrators. Hiding the admin menu doesn't stop anyone: they only need the address."
+            : "Anyone who reaches it sees what administrators see. Hiding the link doesn't help, because the address can be typed.",
+          "Make the page check that the signed-in person is an administrator, and turn everyone else away.",
           door.location,
+          `Add an admin-role check to ${door.method} ${door.path} (${door.location.path} line ${door.location.line}): a \`requireAdmin\` middleware on every admin route, or a role test at the top of the handler that returns 403 for everyone else.`,
         ),
       );
     }
@@ -799,7 +886,12 @@ const passwordHashesSent: ProjectCheck = {
     // Only a project whose user records actually carry a password.
     const hasPasswordField = anyMatch(files, /\bpassword\w*\s*:\s*(?:\{|DataTypes|Sequelize|String|text\(|varchar|type\b)/i);
     if (!hasPasswordField) {
-      return { status: "not-applicable", reason: "No user records with a password field were found in this code." };
+      // Records can hold passwords without a written description (MongoDB), so
+      // not finding one is not proof there are none.
+      return {
+        status: "not-applicable",
+        reason: "We couldn't find a description of user records with a password, so this couldn't be checked. If your app stores passwords, confirm pages that load users leave the password out.",
+      };
     }
     // Any sign that the password is removed before records leave counts --
     // in the model (a default scope, toJSON) or at the lookup.
@@ -827,10 +919,11 @@ const passwordHashesSent: ProjectCheck = {
             risk(
               "check/password-hash-in-response",
               "high",
-              `${door.method} ${door.path} (${door.location.path} line ${door.location.line}) sends whole user records back, password field included.`,
-              "Even scrambled, stored passwords can be cracked offline once someone has them -- quickly for common passwords -- and people reuse passwords across sites.",
-              "Leave the password out when loading users for a response (for example `attributes: { exclude: [\"password\"] }` in Sequelize, `.select(\"-password\")` in Mongoose), or send only the fields the page needs.",
+              `${upperFirst(pageName(door))} sends complete user records to the browser, including their scrambled passwords.`,
+              "Once someone has them, scrambled passwords can be cracked at leisure -- common ones quickly. People reuse passwords, so other sites are at risk too.",
+              "Send only the details the page needs (like name and email), never the password.",
               door.location,
+              `In ${door.method} ${door.path} (${door.location.path} line ${door.location.line}), leave the password out of the users sent back: \`attributes: { exclude: ["password"] }\` in Sequelize, \`.select("-password")\` in Mongoose, or map to the fields the page needs.`,
             ),
           );
         }

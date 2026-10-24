@@ -11,8 +11,8 @@ import type { Risk } from "./modules.ts";
  * item never passes on a question nobody asked.
  */
 
-function risk(id: string, grade: Risk["grade"], what: string, impact: string, fix: string, path: string, line: number): Risk {
-  return { id: `${id}@${path}:${line}`, grade, what, impact, fix, location: { path, line }, confirmedBy: "rule" };
+function risk(id: string, grade: Risk["grade"], what: string, impact: string, fix: string, path: string, line: number, detail?: string): Risk {
+  return { id: `${id}@${path}:${line}`, grade, what, impact, fix, ...(detail ? { fixDetail: detail } : {}), location: { path, line }, confirmedBy: "rule" };
 }
 
 // --- Supabase: tables the browser can reach need row rules -------------------
@@ -31,18 +31,22 @@ export const supabaseRowRules: ProjectCheck = {
   itemId: "access-control/database-rules",
 
   run(snapshot) {
+    // Any Supabase package (supabase-js, ssr, auth helpers), in either list, or
+    // an import of one in the code.
     const usesSupabase = snapshot.files.some((f) => SUPABASE_PROJECT.test(f.path)) ||
       [...snapshot.manifests.values()].some((m) =>
-        Object.keys({ ...(m.dependencies as object | undefined) }).includes("@supabase/supabase-js")
-      );
+        Object.keys({ ...(m.dependencies as object | undefined), ...(m.devDependencies as object | undefined) })
+          .some((name) => name.startsWith("@supabase/"))
+      ) ||
+      snapshot.files.some((f) => isSource(f.path) && /from\s+["']@supabase\/|require\(\s*["']@supabase\//.test(f.content));
     if (!usesSupabase) {
-      return { status: "not-applicable", reason: "This project does not use Supabase, so there are no browser-reachable tables to check." };
+      return { status: "not-applicable", reason: "This app doesn't use Supabase, the only database this item is about.", absent: true };
     }
     const sql = snapshot.files.filter((f) => f.path.endsWith(".sql") && !isTestPath(f.path));
     if (sql.length === 0) {
       return {
         status: "not-applicable",
-        reason: "No SQL migrations were found, so whether each table has row rules could not be checked. Open the Supabase dashboard and confirm every table shows RLS enabled.",
+        reason: "Your Supabase table setup files weren't found, so this could not be checked. Open your Supabase dashboard and confirm every table shows Row Level Security as enabled.",
       };
     }
 
@@ -71,18 +75,19 @@ export const supabaseRowRules: ProjectCheck = {
         risks.push(risk(
           "check/supabase-no-rls",
           "high",
-          `The table \`${table}\` (${file.path} line ${line}) has no row level security, and this project uses Supabase.`,
-          "Supabase lets the browser query the database with a public key. Without row rules, anyone visiting the site can read, change or delete every row in this table.",
-          `Add \`alter table public.${table} enable row level security;\` in a migration, then write policies that allow each user only their own rows.`,
+          `Anyone visiting your site can read, change or delete everything in the \`${table}\` table. It has no lock on who may see each row (Row Level Security).`,
+          "Supabase lets visitors' browsers talk to your database directly. Without that lock, every row in this table is open to all of them.",
+          "Turn on Row Level Security for this table, and add rules that let each person reach only their own rows.",
           file.path,
           line,
+          `Add \`alter table public.${table} enable row level security;\` in a new migration, then create policies limiting each user to their own rows (for example \`using (auth.uid() = user_id)\`).`,
         ));
       }
     }
 
     const buckets = [...all.matchAll(/insert\s+into\s+storage\.buckets[^;]*?values\s*\(\s*'([^']+)'[^;]*?\btrue\b/gi)].map((m) => m[1]!);
     const notice = buckets.length > 0
-      ? `Public storage bucket${buckets.length === 1 ? "" : "s"}: ${buckets.join(", ")}. Anyone with a file's address can download it -- fine for pictures meant to be seen, not for private documents.`
+      ? `Public file storage: ${buckets.join(", ")}. Anyone with a file's address can download it -- fine for pictures meant to be seen, not for private documents.`
       : undefined;
     if (risks.length > 0) return { status: "risks", risks, ...(notice ? { notice } : {}) };
     return { status: "pass", ...(notice ? { notice } : {}) };
@@ -125,7 +130,7 @@ export const containerUser: ProjectCheck = {
 
   run(snapshot) {
     const files = snapshot.files.filter((f) => DOCKERFILE.test(f.path) && deployed(f.path));
-    if (files.length === 0) return { status: "not-applicable", reason: "No Dockerfile was found, so there is no container to check." };
+    if (files.length === 0) return { status: "not-applicable", reason: "This app isn't packaged with a Dockerfile, so there is no container to check.", absent: true };
 
     const risks: Risk[] = [];
     for (const file of files) {
@@ -147,11 +152,12 @@ export const containerUser: ProjectCheck = {
       risks.push(risk(
         "check/container-root",
         "medium",
-        `${file.path} runs the app as root (${user ? "USER root" : "no USER line for the final stage"}).`,
-        "If someone finds a way to run a command through the app, they can change anything inside the container, and breaking out of it to the machine beneath is much easier.",
-        "Add `USER node` (on Node images) or create an unprivileged user, after copying files and installing packages, so the app itself runs without root.",
+        `Your app's setup file (${file.path}) runs it with full administrator rights on its machine (as "root").`,
+        "If someone finds a way to run a command through your app, they can change anything around it. Breaking out to the computer underneath is also much easier.",
+        "Run the app as an ordinary user with limited rights.",
         file.path,
         line ?? stages.at(-1)!.start + 1,
+        `In ${file.path}, add \`USER node\` (on Node images) or create an unprivileged user, after copying files and installing packages in the final stage${user ? ", replacing USER root" : ""}.`,
       ));
     }
     return risks.length > 0 ? { status: "risks", risks } : { status: "pass" };
@@ -175,7 +181,7 @@ export const debugOff: ProjectCheck = {
   run(snapshot) {
     const files = snapshot.files.filter((f) => (DOCKERFILE.test(f.path) || COMPOSE.test(f.path)) && deployed(f.path));
     if (files.length === 0) {
-      return { status: "not-applicable", reason: "No Dockerfile or compose file was found, so how the app is started could not be checked." };
+      return { status: "not-applicable", reason: "We couldn't see how your live site is started. If you use a hosting service (Vercel, Netlify, Render and similar), check its settings show production mode." };
     }
     const DEBUG = /\bNODE_ENV\s*[=:]\s*["']?development\b|\bDEBUG\s*[=:]\s*["']?(?:true|1|\*)["']?\s*$/im;
     const risks: Risk[] = [];
@@ -189,11 +195,12 @@ export const debugOff: ProjectCheck = {
       risks.push(risk(
         "check/debug-on",
         "medium",
-        `${f.path} starts the app in development or debug mode.`,
-        "Development mode shows visitors full error details -- file paths and code -- and turns on extra logging that can include private data.",
-        "Set NODE_ENV=production (and remove DEBUG settings) in the files used to run the app for real; keep development settings in a separate file for local use.",
+        `${f.path} starts your live app in test (development or debug) mode.`,
+        "Test mode shows visitors full error details -- file names and code -- and records extra activity that can include private data.",
+        "Switch the live app to production mode, and keep test settings in a separate file for your own computer.",
         f.path,
         offset + at + 1,
+        `In ${f.path}, set NODE_ENV=production and remove DEBUG settings; move development settings to a compose.dev.yaml or .env.local that is not used to deploy.`,
       ));
     }
     return risks.length > 0 ? { status: "risks", risks } : { status: "pass" };
@@ -232,15 +239,16 @@ export const uploadLimits: ProjectCheck = {
         risks.push(risk(
           "check/upload-no-limit",
           "medium",
-          `The upload handler set up in ${file.path} line ${line} accepts files of any size.`,
-          "One visitor can upload a file large enough to fill the server's disk or memory and stop the site for everyone.",
-          "Pass a size limit: `multer({ dest, limits: { fileSize: 5 * 1024 * 1024 } })` (5 MB), and pick the smallest size your feature needs.",
+          `An upload feature (in ${file.path}) accepts files of any size.`,
+          "One visitor can upload a file big enough to fill the server's storage or memory, and stop the site for everyone.",
+          "Set a size limit on uploads, as small as your feature allows.",
           file.path,
           line,
+          `In ${file.path} line ${line}, pass a limit: \`multer({ dest, limits: { fileSize: 5 * 1024 * 1024 } })\` (5 MB).`,
         ));
       });
     }
-    if (!found) return { status: "not-applicable", reason: "No multer upload handler was found; other upload libraries were not checked." };
+    if (!found) return { status: "not-applicable", reason: "We didn't find an upload feature we know how to check (only multer is checked). If visitors can upload files, confirm there's a size limit." };
     return risks.length > 0 ? { status: "risks", risks } : { status: "pass" };
   },
 };
@@ -284,7 +292,7 @@ export const suspiciousPackages: ProjectCheck = {
   itemId: "components/suspicious-packages",
 
   run(snapshot) {
-    if (snapshot.manifests.size === 0) return { status: "not-applicable", reason: "No package.json was found in this project." };
+    if (snapshot.manifests.size === 0) return { status: "not-applicable", reason: "No package list (package.json) was found, so there are no package names to check.", absent: true };
     const local = new Set([...snapshot.manifests.values()].map((m) => m.name).filter(Boolean));
     const deps = new Map<string, "dependency" | "dev">();
     for (const manifest of snapshot.manifests.values()) {
@@ -328,7 +336,7 @@ export const suspiciousPackages: ProjectCheck = {
     if (lookalikes.length > 0) {
       return {
         status: "not-applicable",
-        reason: `These packages are named one letter away from popular ones: ${lookalikes.join(", ")}. Misspelled names are a common way malware gets installed; confirm each is the package you meant.`,
+        reason: `These packages are named one letter away from popular ones: ${lookalikes.join(", ")}. Misspelled names are a common way harmful code gets installed, so confirm each is the package you meant.`,
         ...(notice ? { notice } : {}),
       };
     }

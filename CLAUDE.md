@@ -74,7 +74,7 @@ everywhere:
 # PostgreSQL 18 (Homebrew, not started at login). Databases: shipbrace, shipbrace_test.
 LC_ALL=en_US.UTF-8 /opt/homebrew/opt/postgresql@18/bin/pg_ctl -D /opt/homebrew/var/postgresql@18 -l /opt/homebrew/var/log/postgresql@18.log start
 
-# all tests (expect 290 pass). Without TEST_DATABASE_URL the 6 database tests
+# all tests (expect 303 pass). Without TEST_DATABASE_URL the 6 database tests
 # are skipped and say so; it must name a database ending in _test (it is wiped).
 # CI (.github/workflows/ci.yml) runs typecheck, lint, tests and build on every push.
 TEST_DATABASE_URL=postgres:///shipbrace_test npm test
@@ -122,7 +122,12 @@ the server with the AI step, start it with an extra `--env-file` that sets
 
 - **No false "pass".** A checklist item may report `pass` only if a detector
   actually ran. No detector, or one that could not run (`not-applicable`), hands
-  the item back to the user. There is a test for this.
+  the item back to the user. There is a test for this. The one exception to
+  "hands back" is `absent: true` on a not-applicable outcome, shown as
+  "Doesn't apply" (status `does-not-apply`, never a pass, out of every count):
+  only when the thing checked is clearly not in the project. Where it could
+  exist out of the check's sight (unknown framework, unusual address, a
+  library the check does not know), do not set `absent`.
 - **Only proof is a risk.** Anything styled as a risk must be traced or be the
   problem itself. Unproven pattern hits are leads (`unproven`), never risks.
 - **No warnings on correct code.** Several fixed bugs were warnings about code
@@ -132,6 +137,17 @@ the server with the AI step, start it with an extra `--env-file` that sets
   defect. When in doubt, return `undecidable`, never `valid` and never "safe".
 - **Redact at the boundary.** Excerpts pass through `redact()` before a finding
   exists, so a reported secret is never copied into logs or the UI.
+- **Report text for people who do not read code (2026-10-23).** Every
+  explanation (what, why, fix, reasons, questions) is at most three sentences
+  (`test/wording.test.ts`), names pages ("the page /x", "the action /x"),
+  not GET/POST or files, and keeps code out of `fix`: the code-level step goes
+  in `fixDetail` (`Fix.detail`, `checkDetail`), shown as "Exact fix (paste
+  into your AI assistant)". Repo-derived text is passed through `cleanText`
+  (no invisible characters or line breaks, capped) because it is copied into
+  AI assistants. Risks that can be right as they are (open pages, ownership)
+  carry `mayBeIntended`; the dashboard's "This is intended" mark is per
+  browser, keyed by risk id plus its text, and never changes the GitHub check
+  or saved counts.
 - **Plain language in user-facing text.** Tests forbid the words taint, sink,
   sanitiz*, CWE, and payload in risk explanations.
 - **Pin exact versions** in generated apps. Verify package versions against the
@@ -324,7 +340,11 @@ the server with the AI step, start it with an extra `--env-file` that sets
   across files. It does not follow method calls (`obj.fn(x)`), and a helper
   name defined twice, unknown code, or destructured parameters make the
   claim `undecidable` (never `no-path`).
-- 16 of 49 checklist items have no detector and are left to the user (counted 2026-10-20). The
+- **Known gap (2026-10-23):** a site-wide `app.use(session(...))` (or any
+  middleware not in `NOT_A_GUARD`) counts as a sign-in check for every route,
+  so such Express apps get no open-page warnings. Juice Shop's open redirect
+  is guarded by a bypassable allowlist and its redirect item shows a pass.
+- 16 of 50 checklist items have no detector and are left to the user (counted 2026-10-23; the open-redirect item was split out of file paths). The
   checklist follows OWASP Top 10:2025; the four items added for its new
   categories (A03 supply chain, A10 exceptional conditions) have no detector yet.
 - **GitHub App works end to end (first live run 2026-10-01):** App ID 5157570

@@ -120,10 +120,10 @@ test("a flawed package becomes a graded risk with a concrete fix and the source 
 
   assert.equal(item?.status, "action-needed");
   assert.equal(item?.notice, OSV_NOTICE);
-  const lodash = item?.risks.find((r) => r.what.startsWith("lodash"));
+  const lodash = item?.risks.find((r) => r.what.includes("lodash"));
   assert.equal(lodash?.grade, "high");
   assert.match(lodash?.fix ?? "", /4\.17\.21/);
-  const minimist = item?.risks.find((r) => r.what.startsWith("minimist"));
+  const minimist = item?.risks.find((r) => r.what.includes("minimist"));
   assert.equal(minimist?.grade, "medium");
   assert.match(minimist?.what ?? "", /another package you use brings it in/);
   assert.match(minimist?.evidence ?? "", /CC-BY 4\.0/);

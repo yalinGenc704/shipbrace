@@ -13,8 +13,9 @@ import { utils, writeFile } from "xlsx";
 
 const STATUS = {
   "action-needed": "Needs fixing",
-  "needs-your-review": "Your call",
+  "needs-your-review": "Needs your check",
   pass: "Checked",
+  "does-not-apply": "Doesn't apply",
 } as const;
 
 /**
@@ -43,6 +44,7 @@ export function downloadReview(review: ReviewResult, filename = "security-review
           "What's happening": risk.what,
           "Why this matters": risk.impact,
           "What to do": risk.fix,
+          "Exact fix (for your AI assistant)": risk.fixDetail ?? "",
           Where: risk.location ? `${risk.location.path} line ${risk.location.line}` : "",
         });
       }
@@ -53,6 +55,7 @@ export function downloadReview(review: ReviewResult, filename = "security-review
           "What's happening": lead.what,
           "Why this matters": lead.why,
           "What to do": lead.check,
+          "Exact fix (for your AI assistant)": lead.checkDetail ?? "",
           Where: lead.location ? `${lead.location.path} line ${lead.location.line}` : "",
         });
       }
@@ -65,7 +68,10 @@ export function downloadReview(review: ReviewResult, filename = "security-review
               ? `Checked: ${item.covers ?? "an automated check ran and found nothing"}.`
               : (item.notApplicable ?? item.question ?? ""),
           "Why this matters": "",
-          "What to do": item.status === "pass" ? "" : "Check this yourself and mark it as checked.",
+          "What to do": item.status === "pass" || item.status === "does-not-apply"
+            ? ""
+            : "Check this yourself and mark it as checked.",
+          "Exact fix (for your AI assistant)": "",
           Where: "",
         });
       }
@@ -74,7 +80,7 @@ export function downloadReview(review: ReviewResult, filename = "security-review
 
   const safe = rows.map((row) => Object.fromEntries(Object.entries(row).map(([k, v]) => [k, asText(v)])));
   const sheet = utils.json_to_sheet(safe);
-  sheet["!cols"] = [{ wch: 34 }, { wch: 44 }, { wch: 14 }, { wch: 22 }, { wch: 70 }, { wch: 60 }, { wch: 60 }, { wch: 32 }];
+  sheet["!cols"] = [{ wch: 34 }, { wch: 44 }, { wch: 14 }, { wch: 22 }, { wch: 70 }, { wch: 60 }, { wch: 60 }, { wch: 60 }, { wch: 32 }];
 
   const book = utils.book_new();
   utils.book_append_sheet(book, sheet, "Security review");

@@ -1,13 +1,14 @@
 import type { Grade, ItemStatus } from "@shipbrace/guardrails";
-import { AlertTriangle, Check, CircleHelp, Loader2, ShieldCheck } from "lucide-react";
+import { AlertTriangle, Check, CircleHelp, CircleSlash, Loader2, ShieldCheck } from "lucide-react";
 import type { ReactNode } from "react";
 
 /**
  * Status vocabulary, in the words a non-technical reader needs.
  *
  * Note the deliberate asymmetry: a failed check says what to do ("Needs
- * fixing"), an unchecked item says whose job it is ("Your call"), and a passed
- * check names the thing that checked it. Nothing says "secure" -- no scanner
+ * fixing"), an unchecked item says whose job it is ("Needs your check"), a
+ * passed check names the thing that checked it, and an item about something
+ * the app does not have says so ("Doesn't apply") without looking like a pass. Nothing says "secure" -- no scanner
  * can promise that, and a badge that implies it would be the most damaging
  * thing on the page.
  */
@@ -18,7 +19,7 @@ const STATUS: Record<ItemStatus, { label: string; className: string; icon: React
     icon: <AlertTriangle className="size-3.5" aria-hidden />,
   },
   "needs-your-review": {
-    label: "Your call",
+    label: "Needs your check",
     className: "bg-review-bg text-review",
     icon: <CircleHelp className="size-3.5" aria-hidden />,
   },
@@ -26,6 +27,11 @@ const STATUS: Record<ItemStatus, { label: string; className: string; icon: React
     label: "Checked",
     className: "bg-ok-bg text-ok",
     icon: <ShieldCheck className="size-3.5" aria-hidden />,
+  },
+  "does-not-apply": {
+    label: "Doesn't apply",
+    className: "bg-surface text-ink-soft",
+    icon: <CircleSlash className="size-3.5" aria-hidden />,
   },
 };
 

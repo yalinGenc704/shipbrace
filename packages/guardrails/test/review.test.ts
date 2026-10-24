@@ -152,7 +152,7 @@ test("every risk carries what, impact, fix, and a grade", async () => {
     assert.ok(risk.impact.length > 20, `impact too thin: ${risk.impact}`);
     assert.ok(risk.fix.length > 20, `fix too thin: ${risk.fix}`);
     assert.ok(["high", "medium", "low"].includes(risk.grade));
-    assert.ok(["oracle", "rule"].includes(risk.confirmedBy));
+    assert.ok(["oracle", "rule", "route-check"].includes(risk.confirmedBy));
   }
 });
 
@@ -332,7 +332,7 @@ test("a sign-in check named on the route itself counts as protection", async () 
     .find((m) => m.id === "access-control")
     ?.items.find((i) => i.id === "access-control/unguarded-routes");
   // The upload handler is not a sign-in check, so that route is still open.
-  assert.deepEqual(item?.risks.map((r) => r.what.split(" (")[0]), ["POST /upload"]);
+  assert.deepEqual(item?.risks.map((r) => r.what), ["The action /upload can be used by anyone, without signing in."]);
 });
 
 test("a model that refuses leaves the rules' findings intact and says so", async () => {

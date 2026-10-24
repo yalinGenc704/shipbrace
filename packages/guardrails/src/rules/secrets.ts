@@ -92,20 +92,21 @@ const hardcodedCredential: Rule = {
             ? `Something shaped like ${vendor} appears in a test file`
             : `${vendor} is written directly into your code`,
           why: inTest
-            ? `This looks like ${vendor}, but it sits in a test file where invented values ` +
-              `are normal. Worth a glance to confirm it is made up: a real key pasted into ` +
-              `a test is exposed exactly as if it were in the application itself.`
-            : `This file contains what looks like ${vendor}. Anyone who can read the ` +
-              `repository can use it as you. Because git keeps history, deleting the line ` +
-              `later does not undo the exposure -- the key has to be revoked and reissued.`,
+            ? `Test files often contain made-up values, so this is worth a glance to confirm it is one. ` +
+              `A real key in a test is exposed exactly as if it were in the app itself.`
+            : `Anyone who can read your code can use it as you. Deleting the line later doesn't help, ` +
+              `because GitHub keeps every old version -- the key has to be cancelled and replaced.`,
           location: locate(file, hit),
           fix: {
             kind: "manual",
             description: inTest
-              ? `Confirm the value is invented. If it is real, revoke it with the provider ` +
-                `and replace it in the test with an obviously fake value.`
-              : `Revoke this credential with the provider first, then issue a new one and ` +
-                `store it as an environment variable instead of committing it.`,
+              ? `Confirm the value is made up. If it is real, cancel it on the provider's website ` +
+                `and put an obviously fake value in the test.`
+              : `First cancel this key on the provider's website (it is already exposed), then make a ` +
+                `new one and keep it in your hosting service's secret settings, not in the code.`,
+            detail: inTest
+              ? "If the value is a real credential, revoke it with the provider and replace it with a clearly fake placeholder."
+              : "Revoke the credential with the provider, issue a new one, read it from an environment variable, and remove the literal from the code.",
           },
           learnMore: "/explain/hardcoded-credential",
         });
@@ -137,19 +138,19 @@ const committedDotenv: Rule = {
       category: "secrets",
       severity: "critical",
       confidence: "certain",
-      title: "Your environment file with real values is committed to git",
+      title: "Your file of passwords and keys (.env) is saved to GitHub with your code",
       why:
-        `\`${file.path}\` holds ${populated.length} configured value(s) and is tracked by git. ` +
-        `Environment files are where passwords and API keys live, and this one will be ` +
-        `pushed to GitHub with the rest of your code.`,
+        `\`${file.path}\` holds ${populated.length} setting(s), and files like it are where passwords and keys live. ` +
+        `Anyone who can see your code can read them.`,
       // The name only: every value in a committed .env is presumed secret,
       // whatever it is called.
       location: { path: file.path, line: populated[0]!.line, excerpt: `${populated[0]!.match[1]}=[redacted]` },
       fix: {
         kind: "manual",
-        description:
-          `Add \`${file.path}\` to .gitignore, remove it from tracking with ` +
-          `\`git rm --cached ${file.path}\`, and rotate every credential it contained.`,
+        description: "Take the file out of GitHub, then change every password and key that was in it.",
+        detail:
+          `Add \`${file.path}\` to .gitignore, stop tracking it with \`git rm --cached ${file.path}\`, ` +
+          `and rotate every credential it contained.`,
       },
       learnMore: "/explain/committed-dotenv",
     }];
@@ -201,17 +202,18 @@ const secretInClientBundle: Rule = {
         category: "secrets",
         severity: "critical",
         confidence: "likely",
-        title: `\`${name}\` is bundled into code that runs in the browser`,
+        title: `\`${name}\` is sent to every visitor's browser, where anyone can read it`,
         why:
-          `Variables with this prefix are copied into the JavaScript sent to every visitor, ` +
-          `so \`${name}\` is readable by anyone who opens developer tools. Values that ` +
-          `grant access must be used on the server, where the browser cannot see them.`,
+          `Settings whose names start this way are copied into the code every visitor downloads. ` +
+          `Keys that give access to something must stay on your server, where browsers can't see them.`,
         location: locate(file, hit),
         fix: {
           kind: "manual",
           description:
-            `Rename it without the public prefix, move the call that uses it into a server ` +
-            `route, and have the browser call that route instead of the service directly.`,
+            "Move the code that uses this key to your server, and have the page ask your server instead of the service directly. Then replace the key.",
+          detail:
+            `Rename \`${name}\` without the public prefix, move the call that uses it into a server route, ` +
+            `have the browser call that route, and rotate the key since it has been public.`,
         },
         learnMore: "/explain/client-exposed-env",
       }];
@@ -226,16 +228,18 @@ const secretInClientBundle: Rule = {
       category: "secrets",
       severity: "critical",
       confidence: "likely",
-      title: "Supabase's service-role key is used in code that runs in the browser",
+      title: "Your Supabase master key is in code sent to visitors' browsers",
       why:
-        "The service-role key ignores every row rule in your database. In browser code anyone " +
-        "can copy it and read or change every row of every table.",
+        "This key (the service-role key) ignores every access rule in your database. Anyone can copy " +
+        "it from the browser and read or change everything.",
       location: { path: file.path, line: hit.line },
       fix: {
         kind: "manual",
         description:
-          "Use the anon key in the browser, with row level security on every table. Keep the " +
-          "service-role key on the server only, and rotate it now in the Supabase dashboard.",
+          "Use the public key in the browser and keep the master key on your server only. Replace the master key now in Supabase.",
+        detail:
+          "Use the anon key in browser code with row level security on every table; move service-role usage " +
+          "to server-only code and rotate the service-role key in the Supabase dashboard.",
       },
       learnMore: "/explain/client-exposed-env",
     }));

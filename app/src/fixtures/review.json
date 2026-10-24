@@ -5,52 +5,58 @@
       "owasp": "A01:2025",
       "rank": 1,
       "title": "Who is allowed to do what",
-      "summary": "The most common serious problem in web applications. It means a page or action that should be restricted can be reached by someone who should not reach it -- often just by editing the address bar. It also covers your server being tricked into fetching addresses a visitor chose, which reaches systems the visitor never could.",
+      "summary": "The most common serious problem in web applications. It means a page or action that should be restricted can be reached by someone who should not reach it -- often just by editing the web address. It also covers a visitor tricking your site into opening web addresses they choose, which can reach private systems they could never reach themselves.",
       "items": [
         {
           "id": "access-control/unguarded-routes",
-          "covers": "every route has a sign-in check, or is a page meant to be public",
+          "covers": "every page and action asks visitors to sign in, or is a kind of page that is meant to be public (sign-in, health checks, webhooks)",
           "title": "Every private page and action requires signing in",
           "detector": "route-guard-check",
           "risks": [
             {
               "id": "access-control/unguarded@server/src/api.ts:12",
               "grade": "high",
-              "what": "POST /api/admin/purge (server/src/api.ts line 12) has no sign-in check applied to it.",
-              "impact": "Anyone on the internet can call this address without an account. If it returns or changes anything that belongs to a particular person, they do not need to be that person to use it.",
-              "fix": "If this is meant to be public, mark it reviewed and move on. If not, apply your sign-in middleware to it -- ideally to the whole route prefix, so routes added later are protected automatically.",
+              "what": "The action /api/admin/purge can be used by anyone, without signing in.",
+              "impact": "Anyone on the internet can use this address without an account. If it shows or changes anything that belongs to a particular person, they do not need to be that person to use it.",
+              "fix": "If this is meant to be public, nothing needs fixing: choose \"This is intended\". If not, make it require signing in. Best: protect the whole section of the site it belongs to, so pages added there later are protected too.",
+              "fixDetail": "Apply the app's sign-in middleware to POST /api/admin/purge (server/src/api.ts line 12), ideally once on the router or path prefix it sits under rather than route by route.",
+              "mayBeIntended": true,
               "location": {
                 "path": "server/src/api.ts",
                 "line": 12,
                 "excerpt": "app.post(\"/api/admin/purge\", async (c) => {"
               },
-              "confirmedBy": "oracle"
+              "confirmedBy": "route-check"
             },
             {
               "id": "access-control/unguarded@server/src/api.ts:6",
               "grade": "medium",
-              "what": "GET /api/reports/:id (server/src/api.ts line 6) has no sign-in check applied to it.",
-              "impact": "Anyone on the internet can call this address without an account. If it returns or changes anything that belongs to a particular person, they do not need to be that person to use it.",
-              "fix": "If this is meant to be public, mark it reviewed and move on. If not, apply your sign-in middleware to it -- ideally to the whole route prefix, so routes added later are protected automatically.",
+              "what": "The page /api/reports/:id can be opened by anyone, without signing in.",
+              "impact": "Anyone on the internet can use this address without an account. If it shows or changes anything that belongs to a particular person, they do not need to be that person to use it.",
+              "fix": "If this is meant to be public, nothing needs fixing: choose \"This is intended\". If not, make it require signing in. Best: protect the whole section of the site it belongs to, so pages added there later are protected too.",
+              "fixDetail": "Apply the app's sign-in middleware to GET /api/reports/:id (server/src/api.ts line 6), ideally once on the router or path prefix it sits under rather than route by route.",
+              "mayBeIntended": true,
               "location": {
                 "path": "server/src/api.ts",
                 "line": 6,
                 "excerpt": "app.get(\"/api/reports/:id\", async (c) => {"
               },
-              "confirmedBy": "oracle"
+              "confirmedBy": "route-check"
             },
             {
               "id": "access-control/unguarded@server/src/api.ts:18",
               "grade": "medium",
-              "what": "GET /api/preview (server/src/api.ts line 18) has no sign-in check applied to it.",
-              "impact": "Anyone on the internet can call this address without an account. If it returns or changes anything that belongs to a particular person, they do not need to be that person to use it.",
-              "fix": "If this is meant to be public, mark it reviewed and move on. If not, apply your sign-in middleware to it -- ideally to the whole route prefix, so routes added later are protected automatically.",
+              "what": "The page /api/preview can be opened by anyone, without signing in.",
+              "impact": "Anyone on the internet can use this address without an account. If it shows or changes anything that belongs to a particular person, they do not need to be that person to use it.",
+              "fix": "If this is meant to be public, nothing needs fixing: choose \"This is intended\". If not, make it require signing in. Best: protect the whole section of the site it belongs to, so pages added there later are protected too.",
+              "fixDetail": "Apply the app's sign-in middleware to GET /api/preview (server/src/api.ts line 18), ideally once on the router or path prefix it sits under rather than route by route.",
+              "mayBeIntended": true,
               "location": {
                 "path": "server/src/api.ts",
                 "line": 18,
                 "excerpt": "app.get(\"/api/preview\", async (c) => {"
               },
-              "confirmedBy": "oracle"
+              "confirmedBy": "route-check"
             }
           ],
           "unproven": [],
@@ -59,7 +65,7 @@
         {
           "id": "access-control/object-ownership",
           "title": "Signed-in users can only see their own records",
-          "question": "If one customer changed a number in the address bar, would they see another customer's data? Automated checks cannot tell whose record is whose -- only you know that.",
+          "question": "If one customer changed a number in the web address, would they see another customer's data? Automated checks cannot tell whose record is whose -- only you know that.",
           "detector": null,
           "risks": [],
           "unproven": [],
@@ -67,26 +73,56 @@
         },
         {
           "id": "access-control/file-paths",
-          "covers": "no visitor input was traced to a file path",
-          "title": "File access cannot be steered outside its intended folder",
+          "covers": "no visitor input was followed into choosing which file on your server is opened",
+          "title": "Visitors cannot trick your site into opening files it shouldn't",
           "detector": "taint:filesystem",
           "risks": [],
           "unproven": [],
           "status": "pass"
         },
         {
+          "id": "access-control/redirects",
+          "covers": "no visitor input was followed into choosing where a visitor is sent next",
+          "title": "Links on your site cannot be used to send visitors to someone else's site",
+          "detector": "taint:redirect",
+          "risks": [],
+          "unproven": [],
+          "status": "pass"
+        },
+        {
+          "id": "access-control/mass-assignment",
+          "covers": "no form saves everything a visitor sends straight into records that hold things like admin status, account balance or who owns what; records whose fields could not be found were not checked",
+          "title": "Visitors cannot give themselves extra powers by adding hidden form fields",
+          "detector": "taint:mass-assignment",
+          "notApplicable": "We couldn't find where your app describes what its saved records contain (Prisma, SQL, Mongoose, Sequelize or Drizzle), so this could not be checked. Confirm no form saves everything a visitor sends straight into a record.",
+          "risks": [],
+          "unproven": [],
+          "status": "needs-your-review"
+        },
+        {
+          "id": "access-control/database-rules",
+          "covers": "every table set up in this project's Supabase files locks each row to the people allowed to see it; tables made by hand in the Supabase dashboard were not checked",
+          "title": "Visitors cannot read or change other people's data straight from the browser",
+          "detector": "supabase:row-level-security",
+          "notApplicable": "This app doesn't use Supabase, the only database this item is about.",
+          "risks": [],
+          "unproven": [],
+          "status": "does-not-apply"
+        },
+        {
           "id": "access-control/admin-only",
-          "covers": "every page with admin in its address checks the visitor's role on the server",
+          "covers": "every page with admin in its address checks that the visitor is an administrator",
           "title": "Admin pages check that the visitor is an administrator",
-          "question": "Being signed in is not the same as being an administrator. Confirm every page and action meant for administrators checks the role on the server, not only by hiding links in the browser.",
+          "question": "Being signed in is not the same as being an administrator. Confirm every page and action meant for administrators checks that the visitor is one, and doesn't just hide the links.",
           "detector": "routes:admin-check",
           "risks": [
             {
               "id": "check/admin-without-role-check@server/src/api.ts:12",
               "grade": "high",
-              "what": "POST /api/admin/purge (server/src/api.ts line 12) is an admin page, but nothing on the server checks that the visitor is an administrator.",
-              "impact": "Any signed-in user -- or anyone, if signing in is not required -- can call it and get data meant only for administrators. Hiding the admin menu in the browser does not stop them; they only need the address.",
-              "fix": "Add a check on the server that the signed-in user has the admin role -- a middleware such as `requireAdmin` on every admin route, or a test of the role at the top of the handler that refuses everyone else.",
+              "what": "The admin page /api/admin/purge doesn't check that the visitor is an administrator. Any signed-in user can open it.",
+              "impact": "It hands out data meant only for administrators. Hiding the admin menu doesn't stop anyone: they only need the address.",
+              "fix": "Make the page check that the signed-in person is an administrator, and turn everyone else away.",
+              "fixDetail": "Add an admin-role check to POST /api/admin/purge (server/src/api.ts line 12): a `requireAdmin` middleware on every admin route, or a role test at the top of the handler that returns 403 for everyone else.",
               "location": {
                 "path": "server/src/api.ts",
                 "line": 12,
@@ -100,27 +136,28 @@
         },
         {
           "id": "access-control/csrf",
-          "covers": "cookie sign-in is protected against requests started by other websites",
+          "covers": "the way your site remembers signed-in visitors is protected against actions started from other websites",
           "title": "Other websites cannot make signed-in visitors do things",
-          "question": "If your site signs people in with cookies, a page on another site can submit forms to yours while they are signed in. Confirm changes need a token only your own pages have, or that your login cookie is marked SameSite.",
+          "question": "If your site remembers who is signed in with a cookie (a small note the browser keeps), a page on another site can secretly send actions to yours while they are signed in. Confirm your site turns on protection against this (often called CSRF protection).",
           "detector": "server:csrf-protection",
-          "notApplicable": "No cookie-based sign-in was found. If this app signs people in with cookies some other way, confirm other sites cannot submit forms to it on their behalf.",
+          "notApplicable": "We couldn't see how this app remembers signed-in visitors. If it uses cookies, confirm other websites can't send actions to it for them.",
           "risks": [],
           "unproven": [],
-          "status": "needs-your-review"
+          "status": "does-not-apply"
         },
         {
           "id": "ssrf/url-allowlist",
-          "covers": "no visitor input was traced to an address your server fetches",
-          "title": "Visitor-supplied addresses are checked against an allowlist",
+          "covers": "no visitor input was followed into a web address your server opens",
+          "title": "Visitors cannot make your site open web addresses they choose",
           "detector": "taint:outbound-request",
           "risks": [
             {
               "id": "taint/outbound-request@server/src/api.ts:20",
               "grade": "medium",
-              "what": "On GET /api/preview, a value from the part of the address after the question mark is used directly in a request your server makes to another address at server/src/api.ts line 20, with nothing in between checking that the value is what you expect.",
-              "impact": "Someone could make your server fetch addresses of their choosing, including private systems on your own network that the outside world cannot normally reach.",
-              "fix": "Check the address against a list of destinations you allow before fetching it, and refuse anything pointing at a private network address -- including the cloud metadata address, which hands out credentials.",
+              "what": "Text in the web address (after the question mark) on the page /api/preview is used directly in choosing a web address your server then opens, and nothing checks it first.",
+              "impact": "Someone could make your server open addresses of their choosing, including private systems on your own network that the outside world cannot normally reach.",
+              "fix": "Only let your server open addresses from a list you approve, and refuse anything pointing inside your own private network -- including the special internal address hosting companies use to hand your site its passwords.",
+              "fixDetail": "Check the URL's host against an allowlist before fetching, and refuse private and link-local ranges (10/8, 172.16/12, 192.168/16, 127/8, 169.254.169.254, ::1, fc00::/7).",
               "location": {
                 "path": "server/src/api.ts",
                 "line": 20,
@@ -135,8 +172,8 @@
         },
         {
           "id": "ssrf/internal-ranges",
-          "title": "Requests to private network addresses are blocked",
-          "question": "Confirm your server refuses to fetch addresses on your own private network, including the cloud metadata address that hands out credentials.",
+          "title": "Your site refuses to open addresses inside your own private network",
+          "question": "Confirm your site refuses to open addresses inside your own private network, including the special internal address hosting companies use to hand your site its passwords.",
           "detector": null,
           "risks": [],
           "unproven": [],
@@ -149,12 +186,32 @@
       "owasp": "A02:2025",
       "rank": 2,
       "title": "Settings that leave the door open",
-      "summary": "The code can be correct while the settings around it are not -- an overly permissive sharing rule, a debug mode left on, a default password never changed.",
+      "summary": "The code can be correct while the settings around it are not -- a setting that lets any website talk to yours, a test mode left on, a default password never changed.",
       "items": [
         {
+          "id": "config/container-user",
+          "covers": "the setup file (Dockerfile) that packages your app runs it as an ordinary user, not with full administrator rights",
+          "title": "Your app doesn't run with full control of the computer it's on",
+          "detector": "docker:non-root-user",
+          "notApplicable": "This app isn't packaged with a Dockerfile, so there is no container to check.",
+          "risks": [],
+          "unproven": [],
+          "status": "does-not-apply"
+        },
+        {
+          "id": "config/debug-off",
+          "covers": "the setup files used to start the live app don't switch on test or debug mode; settings in a hosting service's dashboard were not checked",
+          "title": "Test mode is off where the app runs for real",
+          "detector": "deploy:debug-off",
+          "notApplicable": "We couldn't see how your live site is started. If you use a hosting service (Vercel, Netlify, Render and similar), check its settings show production mode.",
+          "risks": [],
+          "unproven": [],
+          "status": "needs-your-review"
+        },
+        {
           "id": "config/cors",
-          "covers": "your API does not accept calls from every website",
-          "title": "Only your own sites can call your API",
+          "covers": "your app doesn't accept behind-the-scenes requests from every website",
+          "title": "Only your own website can talk to your app behind the scenes",
           "detector": "rules:cors",
           "risks": [],
           "unproven": [],
@@ -162,17 +219,18 @@
         },
         {
           "id": "config/security-headers",
-          "covers": "your server switches on the standard protective headers",
-          "title": "Standard protective headers are switched on",
-          "question": "Confirm your server sets the standard protective headers. They cost nothing and close a whole class of browser-side attacks.",
+          "covers": "your site asks visitors' browsers to switch on their built-in protections",
+          "title": "Your site turns on the browser's built-in safety features",
+          "question": "Confirm your site asks browsers to switch on their built-in protections (called security headers). It costs nothing and closes a whole group of browser attacks.",
           "detector": "server:protective-headers",
           "risks": [
             {
               "id": "check/missing-security-headers@server/src/api.ts:4",
               "grade": "medium",
-              "what": "No protective response headers are configured in server/src/api.ts.",
-              "impact": "Browsers offer several protections that only switch on when your server asks for them -- refusing to let your site be framed by someone else's, and refusing to run scripts from places you did not approve. Without them, a small problem elsewhere in the site becomes a much larger one.",
-              "fix": "Add Hono's `secureHeaders()` middleware near the top of your server file. It is one line and needs no configuration to be useful.",
+              "what": "Your site doesn't ask visitors' browsers to switch on their built-in protections (security headers).",
+              "impact": "Browsers can refuse to show your site inside someone else's page, or to run code from places you did not approve, but only when your site asks. Without that, a small problem elsewhere becomes a much bigger one.",
+              "fix": "Add the one standard line that switches these protections on. It needs no setup to be useful.",
+              "fixDetail": "Add `app.use(secureHeaders())` (from \"hono/secure-headers\") near the top of server/src/api.ts.",
               "location": {
                 "path": "server/src/api.ts",
                 "line": 4,
@@ -186,11 +244,11 @@
         },
         {
           "id": "config/exposed-services",
-          "covers": "your docker-compose file does not publish the database to the outside",
+          "covers": "your setup file (docker-compose) doesn't open the database to the outside world",
           "title": "The database is not reachable from the internet",
-          "question": "Confirm your database does not publish a port to the outside world. It should be reachable only by your own application.",
+          "question": "Confirm your database can only be reached by your own app, not from the internet.",
           "detector": "compose:no-public-database",
-          "notApplicable": "This project has no docker-compose file, so there is nothing to read.",
+          "notApplicable": "This project has no docker-compose setup file, so how the database is reached could not be seen. If your database is hosted somewhere, check in its settings that only your app can connect to it.",
           "risks": [],
           "unproven": [],
           "status": "needs-your-review"
@@ -202,23 +260,33 @@
       "owasp": "A03:2025",
       "rank": 3,
       "title": "Building blocks you did not write",
-      "summary": "Your application is built from packages written by other people, and built and shipped by automated tools. A flaw or a break-in anywhere along that chain ends up inside your application, even if your own code is perfect.",
+      "summary": "Your application is built from packages (code written by other people), and built and published by automated tools. A flaw or a break-in anywhere along that chain ends up inside your application, even if your own code is perfect.",
       "items": [
         {
           "id": "components/known-vulnerabilities",
-          "covers": "every public package in your lockfile against the OSV.dev list of known flaws",
-          "title": "No dependency has a known published vulnerability",
-          "question": "If this could not be checked automatically, run your package manager's audit command (for example npm audit) and review what it reports.",
+          "covers": "every public package your app installs, against OSV.dev's list of known security flaws",
+          "title": "None of the packages your app uses has a publicly known security flaw",
+          "question": "If this could not be checked automatically, ask your AI assistant to run `npm audit` and fix what it reports.",
           "detector": "osv:known-vulnerabilities",
-          "notApplicable": "Checking packages against the public list of known flaws is switched off. Run your package manager's audit command instead.",
+          "notApplicable": "Checking packages against the public list of known flaws is switched off. Ask your AI assistant to run your package manager's audit command instead.",
           "risks": [],
           "unproven": [],
           "status": "needs-your-review"
         },
         {
+          "id": "components/suspicious-packages",
+          "covers": "no package is named one letter away from one of about 100 popular packages",
+          "title": "No package looks like a misspelled copy of a popular one",
+          "detector": "manifest:package-names",
+          "notApplicable": "No package list (package.json) was found, so there are no package names to check.",
+          "risks": [],
+          "unproven": [],
+          "status": "does-not-apply"
+        },
+        {
           "id": "components/abandoned",
-          "title": "No dependency is unmaintained or pulled from an unofficial source",
-          "question": "A package that has not been updated in years will not be fixed when a flaw is found in it. Check the ones your app depends on most heavily.",
+          "title": "None of your packages is abandoned or comes from an unofficial place",
+          "question": "A package that has not been updated in years will not be fixed when a flaw is found in it. Check the ones your app relies on most.",
           "detector": null,
           "risks": [],
           "unproven": [],
@@ -226,30 +294,30 @@
         },
         {
           "id": "components/pinned",
-          "covers": "every package version in package.json is exact",
-          "title": "Versions are pinned so builds are reproducible",
-          "question": "Confirm your dependency versions are exact rather than ranges, so the code you reviewed is the code that ships.",
+          "covers": "every package in package.json is set to one exact version",
+          "title": "Your app always installs the exact package versions you tested",
+          "question": "Confirm each package is set to one exact version rather than \"this version or newer\", so the code you tested is the code that goes live.",
           "detector": "manifest:exact-versions",
-          "notApplicable": "No package.json was found in this project.",
+          "notApplicable": "No package list (package.json) was found, so this could not be checked.",
           "risks": [],
           "unproven": [],
-          "status": "needs-your-review"
+          "status": "does-not-apply"
         },
         {
           "id": "integrity/lockfile",
-          "covers": "a lockfile is committed",
-          "title": "A lockfile records exactly which package versions are installed",
-          "question": "Confirm a lockfile is committed. Without one, two installs of the same code can pull different package versions.",
+          "covers": "a lockfile is saved with your code",
+          "title": "Your app keeps a record of every package version it installs (a lockfile)",
+          "question": "Confirm a lockfile is saved with your code. Without one, two installs of the same code can pull different package versions.",
           "detector": "manifest:lockfile-committed",
-          "notApplicable": "No package.json was found in this project.",
+          "notApplicable": "No package list (package.json) was found, so there are no package versions to record.",
           "risks": [],
           "unproven": [],
-          "status": "needs-your-review"
+          "status": "does-not-apply"
         },
         {
           "id": "integrity/ci-permissions",
-          "title": "Automated build steps cannot be modified by contributors",
-          "question": "Your build pipeline usually holds deployment credentials. Confirm who is able to change what it runs.",
+          "title": "Only people you trust can change the automatic steps that build and publish your site",
+          "question": "These automatic steps (for example GitHub Actions) usually hold the passwords to your live site. Check who on GitHub can change them.",
           "detector": null,
           "risks": [],
           "unproven": [],
@@ -262,11 +330,11 @@
       "owasp": "A04:2025",
       "rank": 4,
       "title": "Protecting passwords, keys, and personal data",
-      "summary": "Covers secrets that should never be readable -- API keys, signing keys, passwords -- and sensitive data that should be protected in transit and at rest.",
+      "summary": "Covers secrets that should never be readable -- passwords, and the keys that give access to other services -- and private data, both while it is being sent and while it is stored.",
       "items": [
         {
           "id": "crypto/exposed-secrets",
-          "covers": "no keys, passwords, or session secrets are written into your code",
+          "covers": "no keys, passwords, or sign-in secrets are written into your code",
           "title": "No keys or passwords are written into the code",
           "detector": "rules:secrets",
           "risks": [
@@ -274,8 +342,9 @@
               "id": "secrets/hardcoded-credential@server/src/api.ts:24",
               "grade": "high",
               "what": "an LLM provider API key is written directly into your code (server/src/api.ts line 24).",
-              "impact": "This file contains what looks like an LLM provider API key. Anyone who can read the repository can use it as you. Because git keeps history, deleting the line later does not undo the exposure -- the key has to be revoked and reissued.",
-              "fix": "Revoke this credential with the provider first, then issue a new one and store it as an environment variable instead of committing it.",
+              "impact": "Anyone who can read your code can use it as you. Deleting the line later doesn't help, because GitHub keeps every old version -- the key has to be cancelled and replaced.",
+              "fix": "First cancel this key on the provider's website (it is already exposed), then make a new one and keep it in your hosting service's secret settings, not in the code.",
+              "fixDetail": "Revoke the credential with the provider, issue a new one, read it from an environment variable, and remove the literal from the code.",
               "location": {
                 "path": "server/src/api.ts",
                 "line": 24,
@@ -290,22 +359,22 @@
         },
         {
           "id": "crypto/password-storage",
-          "covers": "passwords are hashed with bcrypt or argon2",
-          "title": "Passwords are stored using a slow, modern hash",
-          "question": "Passwords must never be stored as typed, and never with a fast hash like MD5 or SHA-256. Confirm yours use argon2id or bcrypt -- deliberately slow algorithms that make guessing impractical.",
+          "covers": "passwords are scrambled with bcrypt or argon2, methods built for passwords",
+          "title": "Passwords are scrambled in a way that's hard to undo",
+          "question": "Passwords must never be saved as typed, or scrambled with a quick method like MD5 or SHA-256. Confirm yours use argon2id or bcrypt, which are slow on purpose so guessing takes too long to be worth it.",
           "detector": "auth:slow-password-hash",
-          "notApplicable": "This application does not appear to handle passwords.",
+          "notApplicable": "This app doesn't seem to handle passwords.",
           "risks": [],
           "unproven": [],
-          "status": "needs-your-review"
+          "status": "does-not-apply"
         },
         {
           "id": "crypto/no-password-hashes-sent",
-          "covers": "no route sends whole user records with their password field",
+          "covers": "no page sends complete user records, scrambled passwords included, to the browser",
           "title": "Stored passwords are never sent back to the browser",
           "question": "When a page loads user records, confirm the stored password is left out of what is sent -- even scrambled, it can be cracked.",
           "detector": "routes:no-password-in-responses",
-          "notApplicable": "No user records with a password field were found in this code.",
+          "notApplicable": "We couldn't find a description of user records with a password, so this couldn't be checked. If your app stores passwords, confirm pages that load users leave the password out.",
           "risks": [],
           "unproven": [],
           "status": "needs-your-review"
@@ -326,20 +395,21 @@
       "owasp": "A05:2025",
       "rank": 5,
       "title": "Visitor input being treated as instructions",
-      "summary": "Happens when something a visitor types is pasted into a command, a database query, or a page, and gets treated as an instruction rather than as text. This is the category the automated attack analysis targets most directly.",
+      "summary": "Happens when something a visitor types is pasted into a command, a database request, or a page, and gets treated as an instruction rather than as text. This is what ShipBrace checks most thoroughly.",
       "items": [
         {
           "id": "injection/database",
-          "covers": "no visitor input was traced into a database query",
-          "title": "Database queries keep visitor input as data, not commands",
+          "covers": "no visitor input was followed into a database request",
+          "title": "Visitors can't change what your database does by typing special text",
           "detector": "taint:sql",
           "risks": [
             {
               "id": "taint/sql@server/src/api.ts:8",
               "grade": "high",
-              "what": "On GET /api/reports/:id, a value taken from the web address is used directly in a database query at server/src/api.ts line 8, with nothing in between checking that the value is what you expect.",
+              "what": "Part of the web address on the page /api/reports/:id is used directly in a database query (a request your app sends to its database), and nothing checks it first.",
               "impact": "Someone could read, change, or delete anything in your database -- including other people's accounts and personal information -- by typing carefully chosen text into your site.",
-              "fix": "Pass the value as a parameter instead of joining it into the query text -- the tagged `sql` template for postgres, or `?` placeholders with an argument array for mysql2. The database then treats it as data that can never be read as a command.",
+              "fix": "Send the visitor's text to the database separately from the question your app is asking it, so the database always treats it as plain text and never as part of the question.",
+              "fixDetail": "Use query parameters instead of joining the value into the SQL text: the tagged `sql` template for postgres, or `?` placeholders with an argument array for mysql2.",
               "location": {
                 "path": "server/src/api.ts",
                 "line": 8,
@@ -354,16 +424,17 @@
         },
         {
           "id": "injection/system-commands",
-          "covers": "no visitor input was traced into a system command or into code that runs",
-          "title": "No system command is built from visitor input",
+          "covers": "no visitor input was followed into a computer command or into code your app runs",
+          "title": "Visitor input is never run as a command or as code",
           "detector": "taint:shell",
           "risks": [
             {
               "id": "taint/shell@server/src/api.ts:14",
               "grade": "high",
-              "what": "On POST /api/admin/purge, data sent by the visitor's browser is used directly in a command run on your server at server/src/api.ts line 14, with nothing in between checking that the value is what you expect.",
+              "what": "Something the visitor sends from their browser on the action /api/admin/purge is used directly in a command run on the computer that hosts your site, and nothing checks it first.",
               "impact": "Someone could run their own commands on the machine hosting your site, which usually means full control of it.",
-              "fix": "Pass the command and its arguments as a separate array rather than building one string, so the shell never interprets characters inside the value. Better still, use a library that does the job directly instead of running a command at all.",
+              "fix": "Never build a computer command out of a visitor's text. Better still, use a ready-made package that does the job without running a command at all.",
+              "fixDetail": "Pass the program and its arguments as a separate array (`execFile(cmd, [arg])` or `spawn` without `shell: true`) instead of building one string for `exec`, so the shell never interprets characters inside the value.",
               "location": {
                 "path": "server/src/api.ts",
                 "line": 14,
@@ -378,16 +449,17 @@
         },
         {
           "id": "injection/page-content",
-          "covers": "no visitor input was traced into a page without escaping",
-          "title": "Visitor-supplied content cannot inject scripts into pages",
+          "covers": "no visitor input was followed into a page without being made safe first",
+          "title": "Visitors can't sneak their own code into your pages",
           "detector": "taint:html",
           "risks": [],
           "unproven": [
             {
               "id": "injection/unescaped-html@app/src/Profile.tsx:4",
-              "what": "Raw HTML is inserted into the page without escaping (app/src/Profile.tsx line 4).",
-              "why": "Pages normally turn special characters in your data into plain text, so text stays text. This line skips that protection for a value. If that value ever contains something a user supplied, their markup -- including scripts that read logged-in sessions -- will run in your visitors' browsers.",
-              "check": "Let the page escape the value for you: in React render it as `{value}` instead of using dangerouslySetInnerHTML; on a Hono server use the html`` helper instead of a plain template. If it genuinely must be HTML, clean it with a library such as DOMPurify first.",
+              "what": "Text is put into the page without being made safe first (app/src/Profile.tsx line 4).",
+              "why": "Pages normally show text as plain text, but this line switches that off. If the text ever comes from a visitor, their code runs in other visitors' browsers and can take over their accounts.",
+              "check": "Show the value as plain text. If it really has to include formatting, clean it with a trusted cleaning package first.",
+              "checkDetail": "Render it escaped: `{value}` in React instead of dangerouslySetInnerHTML; Hono's html`` helper instead of a plain template; `<%= %>` not `<%- %>` in EJS. If it must be HTML, run it through DOMPurify first.",
               "location": {
                 "path": "app/src/Profile.tsx",
                 "line": 4,
@@ -396,6 +468,25 @@
             }
           ],
           "status": "needs-your-review"
+        },
+        {
+          "id": "injection/ai-instructions",
+          "covers": "in each page's code, a visitor's text never goes to a well-known AI service (Anthropic, OpenAI, Gemini, Vercel AI SDK, LangChain) whose answer is then used to change data, run commands, open addresses or send messages, or that is given tools; AI code in other places was not followed",
+          "title": "A visitor's text cannot steer what an AI feature does",
+          "detector": "rules:prompt-to-action",
+          "notApplicable": "This app seems to use an AI service in a way this check can't follow. Confirm a visitor's text can't make the AI's answer change data, run commands or send messages.",
+          "risks": [],
+          "unproven": [],
+          "status": "needs-your-review"
+        },
+        {
+          "id": "injection/xml-entities",
+          "covers": "no uploaded XML was followed into libxmljs with the setting that pulls in other files switched on; other XML tools, and settings written elsewhere, were not checked",
+          "title": "Uploaded XML files can't make your site reveal its own private files",
+          "detector": "taint:xml-entities",
+          "risks": [],
+          "unproven": [],
+          "status": "pass"
         }
       ]
     },
@@ -417,17 +508,18 @@
         },
         {
           "id": "design/rate-limiting",
-          "covers": "a rate limiter is in place",
-          "title": "Expensive or sensitive actions are rate limited",
-          "question": "Anything that costs you money, sends a message, or checks a password should refuse to run thousands of times a minute from one source. Confirm which of your actions have a limit.",
+          "covers": "something limits how often one person can use your pages and actions",
+          "title": "Nobody can repeat an action thousands of times a minute",
+          "question": "Anything that costs you money, sends a message, or checks a password should refuse to run thousands of times a minute for one person. Confirm which of your actions have a limit.",
           "detector": "server:rate-limiting-present",
           "risks": [
             {
               "id": "check/no-rate-limiting@-:0",
               "grade": "medium",
-              "what": "None of the 3 routes in this application limits how often it can be called.",
-              "impact": "Without a limit, one person can call any address thousands of times a minute -- guessing passwords, running up costs on anything you pay per use, or simply making the site unavailable for everyone else.",
-              "fix": "Add a rate-limiting middleware to your routes, with a stricter limit on signing in and on anything that costs money to run.",
+              "what": "None of your 3 pages and actions limits how often one person can use it.",
+              "impact": "One person can then use any of them thousands of times a minute -- guessing passwords, running up costs on anything you pay for per use, or slowing the site down for everyone.",
+              "fix": "Add a limit on how often one person can use each action, with a stricter one on signing in and on anything that costs you money.",
+              "fixDetail": "Add rate-limiting middleware (express-rate-limit for Express, hono-rate-limiter for Hono) to all routes, with a tighter limit on sign-in and costly routes.",
               "confirmedBy": "rule"
             }
           ],
@@ -435,9 +527,28 @@
           "status": "action-needed"
         },
         {
+          "id": "design/unbounded-lists",
+          "covers": "no page sends back every row of a table at once, with no filter or limit (Express or Hono pages using Mongoose, Sequelize, Prisma or plain SQL; Drizzle and Next.js pages were not checked)",
+          "title": "Lists sent to visitors have a maximum size",
+          "detector": "rules:unbounded-list",
+          "risks": [],
+          "unproven": [],
+          "status": "pass"
+        },
+        {
+          "id": "design/upload-limits",
+          "covers": "every upload feature built with multer sets a size limit; other upload tools were not checked",
+          "title": "Uploads have a size limit",
+          "detector": "uploads:size-limit",
+          "notApplicable": "We didn't find an upload feature we know how to check (only multer is checked). If visitors can upload files, confirm there's a size limit.",
+          "risks": [],
+          "unproven": [],
+          "status": "needs-your-review"
+        },
+        {
           "id": "design/business-rules",
-          "title": "Important rules are enforced on the server, not only in the browser",
-          "question": "Anything checked only in the browser can be bypassed entirely -- the browser is the visitor's, not yours. Prices, limits, and permissions must be re-checked on the server.",
+          "title": "Important rules are checked by your site, not just in the visitor's browser",
+          "question": "Anything checked only in the browser can be skipped entirely -- the browser belongs to the visitor, not to you. Prices, limits, and permissions must be checked again by your site.",
           "detector": null,
           "risks": [],
           "unproven": [],
@@ -450,12 +561,12 @@
       "owasp": "A07:2025",
       "rank": 7,
       "title": "Proving who someone is",
-      "summary": "Covers logging in, staying logged in, and logging out. Weaknesses here let someone become another user, which makes every other permission check meaningless.",
+      "summary": "Covers signing in, staying signed in, and signing out. Weaknesses here let someone become another user, which makes every other permission check meaningless.",
       "items": [
         {
           "id": "auth/session-storage",
-          "covers": "login tokens are not kept where page scripts can read them",
-          "title": "Login tokens cannot be read by scripts on the page",
+          "covers": "the visitor's sign-in pass is never kept where code running on the page can read it",
+          "title": "Your sign-in pass can't be stolen by code running on the page",
           "detector": "rules:token-storage",
           "risks": [],
           "unproven": [],
@@ -463,19 +574,19 @@
         },
         {
           "id": "auth/session-expiry",
-          "covers": "login tokens are issued with an expiry",
-          "title": "Sessions expire and can be revoked",
-          "question": "Confirm a login does not last forever, and that signing out actually invalidates it on the server rather than only in the browser.",
+          "covers": "sign-in passes are given an expiry time",
+          "title": "Sign-ins expire, and signing out really signs you out",
+          "question": "Confirm a sign-in does not last forever, and that signing out really ends it on your site rather than only in the browser.",
           "detector": "auth:tokens-expire",
-          "notApplicable": "No login tokens are issued by this application.",
+          "notApplicable": "This app doesn't seem to sign people in, so there are no sign-ins to expire.",
           "risks": [],
           "unproven": [],
-          "status": "needs-your-review"
+          "status": "does-not-apply"
         },
         {
           "id": "auth/brute-force",
-          "title": "Repeated failed logins are slowed down or blocked",
-          "question": "Without a limit, someone can try millions of passwords against one account. Confirm repeated failures are slowed, locked, or challenged.",
+          "title": "Repeated failed sign-ins are slowed down or blocked",
+          "question": "Without a limit, someone can try millions of passwords against one account. Confirm repeated failures are slowed down, locked, or challenged.",
           "detector": null,
           "risks": [],
           "unproven": [],
@@ -484,7 +595,7 @@
         {
           "id": "auth/account-recovery",
           "title": "Password reset cannot be used to take over an account",
-          "question": "Reset links must expire, be single-use, and be sent only to the address already on the account. This is the most commonly abused way into an account.",
+          "question": "Reset links must expire, work only once, and be sent only to the email already on the account. This is the most commonly abused way into an account.",
           "detector": null,
           "risks": [],
           "unproven": [],
@@ -501,17 +612,36 @@
       "items": [
         {
           "id": "integrity/untrusted-deserialization",
-          "title": "Data from outside is validated before being used",
-          "question": "Data arriving from another system is no more trustworthy than data typed by a visitor. Confirm it is checked against an expected shape before use.",
+          "title": "Data from other services is checked before your app uses it",
+          "question": "Data arriving from another system is no more trustworthy than something a visitor typed. Confirm it is checked to be what you expect before your app uses it.",
           "detector": null,
           "risks": [],
           "unproven": [],
           "status": "needs-your-review"
         },
         {
+          "id": "integrity/unsafe-decoding",
+          "covers": "no visitor input was followed into node-serialize, funcster, or js-yaml's unsafe loading, tools that can turn data into code; other tools were not checked",
+          "title": "Data from outside can't turn into code your app runs",
+          "detector": "taint:unsafe-decoding",
+          "risks": [],
+          "unproven": [],
+          "status": "pass"
+        },
+        {
+          "id": "integrity/webhook-signatures",
+          "covers": "every address where another service sends you updates (a webhook) sits in code that checks each message's signature",
+          "title": "Messages from other services are checked to be genuine",
+          "detector": "webhooks:signature-checked",
+          "notApplicable": "We didn't find an address where other services send this app updates (a webhook). If it has one, confirm each message's signature is checked before the app acts on it.",
+          "risks": [],
+          "unproven": [],
+          "status": "needs-your-review"
+        },
+        {
           "id": "integrity/third-party-scripts",
-          "title": "Scripts loaded from other websites cannot be swapped without you noticing",
-          "question": "If a page loads a script straight from another site (a CDN), whoever controls that site can change what runs on your pages. Confirm each such script is pinned to an exact version and carries an integrity check, or is served from your own server.",
+          "title": "Code loaded from other websites can't be swapped without you noticing",
+          "question": "If your pages load code straight from another website, whoever runs that site can change what runs on yours. Confirm each one is locked to an exact version with a safety check (called subresource integrity), or hosted on your own site.",
           "detector": null,
           "risks": [],
           "unproven": [],
@@ -519,8 +649,8 @@
         },
         {
           "id": "integrity/client-data",
-          "title": "Anything the browser hands back is signed or re-checked",
-          "question": "Cookies, hidden form fields, and saved settings travel through the visitor's browser, where they can be edited. Confirm anything you rely on -- a role, a price, an account id -- is either signed so edits are detected, or looked up again on the server.",
+          "title": "Anything that comes back from the visitor's browser is double-checked",
+          "question": "Cookies, hidden form fields, and saved settings pass through the visitor's browser, where they can be edited. Confirm anything you rely on -- a role, a price, an account number -- is either signed so changes are noticed, or looked up again by your site.",
           "detector": null,
           "risks": [],
           "unproven": [],
@@ -533,12 +663,12 @@
       "owasp": "A09:2025",
       "rank": 9,
       "title": "Noticing when something goes wrong",
-      "summary": "If an attack succeeds and nobody notices, it continues. The average intrusion goes undetected for months. This module is about being able to tell that something happened, and when -- and making sure someone is told.",
+      "summary": "If an attack succeeds and nobody notices, it continues. The average break-in goes unnoticed for months. This module is about being able to tell that something happened, and when -- and making sure someone is told.",
       "items": [
         {
           "id": "logging/auth-events",
-          "title": "Logins, failures, and permission denials are recorded",
-          "question": "Confirm you record who signed in, what failed, and what was refused. Without it there is no way to reconstruct an incident afterwards.",
+          "title": "Sign-ins, failed sign-ins, and refused actions are written down",
+          "question": "Confirm your app records who signed in, what failed, and what was refused. Without it there is no way to work out what happened after an incident.",
           "detector": null,
           "risks": [],
           "unproven": [],
@@ -546,9 +676,9 @@
         },
         {
           "id": "logging/no-secrets",
-          "covers": "no password, token, or key is passed to a log call, and database query logging is off",
-          "title": "Logs never contain passwords, tokens, or keys",
-          "question": "Logs are copied, shipped to other services, and read by more people than your database. Confirm nothing sensitive is written into them.",
+          "covers": "no password, sign-in pass, or key is written into your app's activity records, and the database tool doesn't record every request",
+          "title": "Your app's activity records (logs) never contain passwords or keys",
+          "question": "Activity records are copied, sent to other services, and read by more people than your database. Confirm nothing sensitive is written into them.",
           "detector": "logging:no-secrets-logged",
           "risks": [],
           "unproven": [],
@@ -557,7 +687,7 @@
         {
           "id": "logging/alerting",
           "title": "Someone would actually see an alert",
-          "question": "A log nobody reads is not monitoring. Decide who gets notified, and for what.",
+          "question": "Records nobody reads aren't monitoring. Decide who gets told when something goes wrong, and for what.",
           "detector": null,
           "risks": [],
           "unproven": [],
@@ -574,9 +704,9 @@
       "items": [
         {
           "id": "config/error-detail",
-          "covers": "no error text is sent back to visitors from your own code, and you have your own error handler",
-          "title": "Error messages shown to visitors do not reveal internals",
-          "question": "A stack trace or raw database error tells an attacker how your system is built. Confirm visitors see a short message and the detail goes to your logs instead.",
+          "covers": "your own code never sends error details to visitors, and you have your own error page",
+          "title": "Error messages don't show visitors how your site is built",
+          "question": "The technical details of an error (file names, code, database messages) tell an attacker how your site is built. Confirm visitors see a short message, and the detail goes into your private records instead.",
           "detector": "server:no-internal-errors-returned",
           "risks": [],
           "unproven": [],
@@ -585,7 +715,7 @@
         {
           "id": "errors/fail-closed",
           "title": "When a check breaks, the answer is no",
-          "question": "If a permission check, a payment call, or a sign-in lookup throws an error, the safe outcome is to refuse. Confirm none of your error handlers quietly carry on as if the check had passed.",
+          "question": "If a permission check, a payment, or a sign-in lookup fails with an error, the safe outcome is to refuse. Confirm none of your error handling quietly carries on as if the check had passed.",
           "detector": null,
           "risks": [],
           "unproven": [],
@@ -593,8 +723,8 @@
         },
         {
           "id": "errors/unhandled",
-          "title": "One unexpected request cannot crash or stall the application",
-          "question": "Confirm unexpected errors are caught and answered with a short message, and that oversized or malformed requests are refused early rather than left to exhaust memory or hang.",
+          "title": "One unexpected request cannot crash or freeze the application",
+          "question": "Confirm unexpected errors are caught and answered with a short message, and that oversized or broken requests are refused early instead of using up memory or hanging.",
           "detector": null,
           "risks": [],
           "unproven": [],
@@ -620,7 +750,7 @@
     "pairedConfirmed": 0,
     "proposalsMade": 0,
     "proposalsConfirmed": 0,
-    "durationMs": 13.899084000000002,
+    "durationMs": 14.484791999999999,
     "model": {
       "status": "not-used"
     }

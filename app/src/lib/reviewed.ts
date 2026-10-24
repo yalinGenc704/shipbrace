@@ -3,7 +3,9 @@ import { useCallback, useEffect, useState } from "react";
 const KEY = "shipbrace.reviewed.v1";
 
 /**
- * Which "your call" items the user has ticked off.
+ * Which "needs your check" items the user has ticked off, and which risks
+ * they marked as intended (a public page, records everyone may see). Risk ids
+ * contain "@" and item ids never do, so both live in one set.
  *
  * This lives in browser storage on purpose: it is a per-person convenience that
  * should survive a refresh, and losing it costs nothing but a few ticks. It is

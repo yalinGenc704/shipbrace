@@ -122,8 +122,8 @@ export function installedDependencies(
     const other = snapshot.files.some((f) => /(^|\/)(bun\.lockb|pnpm-lock\.yaml|yarn\.lock)$/.test(f.path));
     return {
       reason: other
-        ? "This project's lockfile format cannot be read yet (only package-lock.json and bun.lock can). Run your package manager's audit command instead."
-        : "No lockfile was found, so there is no exact record of which package versions are installed. Commit one, and this check can run.",
+        ? "Your lockfile's format can't be read yet (only package-lock.json and bun.lock can). Ask your AI assistant to run your package manager's audit command instead."
+        : "Without a lockfile there's no exact record of which package versions your app installs, so they couldn't be checked. Save one with your code and this check can run.",
     };
   }
 
@@ -139,7 +139,7 @@ export function installedDependencies(
         seen.set(keyOf(d), existing ? { ...existing, direct: existing.direct || d.direct } : d);
       }
     } catch {
-      return { reason: `${lock.path} could not be read, so installed versions are unknown.` };
+      return { reason: `${lock.path} could not be read, so the installed versions are unknown.` };
     }
   }
   return { dependencies: [...seen.values()] };
@@ -165,21 +165,27 @@ function riskFor(dep: Dependency, advisories: Advisory[], notice: string): Risk 
     id: `components/known-vulnerability@${dep.name}@${dep.version}`,
     grade: worst,
     what:
-      `${dep.name} version ${dep.version} has ${count} (${listed}).` +
-      (dep.direct ? "" : " Your app does not list it directly; another package you use brings it in."),
+      `The package ${dep.name} (version ${dep.version}) has ${count}.` +
+      (dep.direct ? "" : " Your app doesn't use it directly; another package you use brings it in."),
     impact:
-      "Flaws in published packages are listed publicly, so anyone looking for vulnerable sites " +
-      "knows exactly what to try against apps that still use this version. You inherit the flaw " +
-      "even though your own code is fine.",
+      "Flaws in packages are listed publicly, so anyone looking for weak sites knows exactly what " +
+      "to try against apps still using this version. You inherit the flaw even though your own code is fine.",
     fix: notLookedUp && !target
-      ? `Some of these advisories were not looked up in full, so a fixed version is not known here. Run your package manager's audit command for ${dep.name}.`
+      ? `A fixed version isn't known here. Ask your AI assistant to run your package manager's audit command for ${dep.name}.`
       : dep.direct
       ? target
-        ? `Update ${dep.name} to version ${target} or later, then run your tests.`
-        : `No fixed version is published yet. Check whether you can stop using ${dep.name}, or watch for an update.`
+        ? `Update ${dep.name} to version ${target} or later, then check your app still works.`
+        : `No fixed version exists yet. See whether you can stop using ${dep.name}, or watch for an update.`
       : target
-      ? `Update the package that brings in ${dep.name}, so that it uses version ${target} or later. If no update is available yet, your package manager can force that version ("overrides" in package.json).`
-      : `No fixed version of ${dep.name} is published yet. Check whether the package that brings it in has an alternative.`,
+      ? `Update the package that brings in ${dep.name}, so it uses version ${target} or later.`
+      : `No fixed version of ${dep.name} exists yet. See whether the package that brings it in has an alternative.`,
+    ...(target
+      ? {
+        fixDetail: dep.direct
+          ? `Set ${dep.name} to ${target} (or later) in package.json, reinstall, and commit the lockfile. Advisories: ${listed}.`
+          : `Upgrade the dependency that pulls in ${dep.name} so it resolves to ${target} or later; if none exists, add "overrides": { "${dep.name}": "${target}" } to package.json. Advisories: ${listed}.`,
+      }
+      : { fixDetail: `Advisories: ${listed}.` }),
     evidence: `${advisories.map((a) => `${a.id}: ${a.summary}`).join(" | ")} | ${notice}`,
     confirmedBy: "rule",
   };
@@ -214,13 +220,13 @@ export async function checkKnownVulnerabilities(
     return {
       status: "not-applicable",
       reason:
-        "Checking packages against the public list of known flaws is switched off. Run your package manager's audit command instead.",
+        "Checking packages against the public list of known flaws is switched off. Ask your AI assistant to run your package manager's audit command instead.",
     };
   }
   const installed = installedDependencies(snapshot);
   if ("reason" in installed) return { status: "not-applicable", reason: installed.reason };
   if (installed.dependencies.length === 0) {
-    return { status: "not-applicable", reason: "The lockfile lists no public packages to check." };
+    return { status: "not-applicable", reason: "Your lockfile lists no public packages to check.", absent: true };
   }
 
   let found: Map<string, Advisory[]>;

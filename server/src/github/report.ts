@@ -32,6 +32,20 @@ export interface CheckOutput {
 }
 
 const LEVEL = { high: "failure", medium: "warning", low: "notice" } as const;
+
+/**
+ * Review text quotes the reviewed repository (file paths, page addresses),
+ * which anyone who can push there controls. In the markdown summary it must
+ * not open links or images or end a code span early.
+ */
+const inline = (text: string): string =>
+  text
+    .replace(/[\r\n]+/g, " ")
+    // Only outside code spans: inside one, a backslash would show literally.
+    .split(/(`[^`]*`)/)
+    .map((part, i) => (i % 2 === 1 ? part : part.replace(/([\\[\]!<>])/g, "\\$1")))
+    .join("");
+const codeSpan = (text: string): string => `\`${text.replace(/[\r\n]+/g, " ").replace(/`/g, "'")}\``;
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 export function checkOutput(review: ReviewResult, skipped?: { overLimit: number; tooLarge: number; treeTruncated: boolean }): CheckOutput {
@@ -55,17 +69,22 @@ export function checkOutput(review: ReviewResult, skipped?: { overLimit: number;
   );
 
   for (const module of review.modules) {
-    const risks = module.items.flatMap((item) => item.risks);
+    const order = { high: 0, medium: 1, low: 2 } as const;
+    const risks = module.items.flatMap((item) => item.risks).sort((x, y) => order[x.grade] - order[y.grade]);
     if (risks.length === 0) continue;
     lines.push(`### ${module.owasp} · ${module.title}`, "");
     for (const risk of risks) {
+      // The sentence names the page; the file and line are added here, since a
+      // check has no "show me the code" view.
+      const where = risk.location ? ` (${codeSpan(risk.location.path)} line ${risk.location.line})` : "";
       lines.push(
-        `**${risk.grade.toUpperCase()} RISK.** ${risk.what}`,
+        `**${risk.grade.toUpperCase()} RISK.** ${inline(risk.what)}${where}`,
         "",
         `*Why this matters:* ${risk.impact}`,
         "",
         `*What to do:* ${risk.fix}`,
         "",
+        ...(risk.fixDetail ? [`*Exact fix (paste into your AI assistant):* ${inline(risk.fixDetail)}`, ""] : []),
       );
     }
   }
@@ -94,7 +113,8 @@ export function checkOutput(review: ReviewResult, skipped?: { overLimit: number;
           end_line: risk.location.line,
           annotation_level: LEVEL[risk.grade],
           title: `${risk.grade.toUpperCase()} RISK · ${item.title}`,
-          message: `${risk.what}\n\nWhy this matters: ${risk.impact}\n\nWhat to do: ${risk.fix}`,
+          message: `${risk.what}\n\nWhy this matters: ${risk.impact}\n\nWhat to do: ${risk.fix}` +
+            (risk.fixDetail ? `\n\nExact fix (paste into your AI assistant): ${risk.fixDetail}` : ""),
         });
       }
       for (const lead of item.unproven) {
@@ -105,7 +125,8 @@ export function checkOutput(review: ReviewResult, skipped?: { overLimit: number;
           end_line: lead.location.line,
           annotation_level: "notice",
           title: "Worth a look, not proven",
-          message: `${lead.what}\n\nIf a visitor's input does reach it: ${lead.why}\n\nWhat to check: ${lead.check}`,
+          message: `${lead.what}\n\nIf a visitor's input does reach it: ${lead.why}\n\nWhat to check: ${lead.check}` +
+            (lead.checkDetail ? `\n\nExact fix (paste into your AI assistant): ${lead.checkDetail}` : ""),
         });
       }
     }

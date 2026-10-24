@@ -50,7 +50,13 @@ export interface CodeLocation {
  * patch stays reviewable; anything structural is left to a human or the LLM.
  */
 export interface Fix {
+  /** The next step in plain words, for someone who does not read code. */
   description: string;
+  /**
+   * The same step as an exact, code-level instruction, shown as "Exact fix
+   * (paste into your AI assistant)". Kept apart so the plain part stays plain.
+   */
+  detail?: string;
   kind: "replace" | "insert-file" | "manual";
   path?: string;
   find?: string;

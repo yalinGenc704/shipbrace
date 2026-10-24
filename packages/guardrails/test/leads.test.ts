@@ -71,8 +71,18 @@ test("whole-table lists: template SQL counts, admin routes do not", () => {
   assert.equal(unbounded("app.get('/users', requireAdmin, async (req, res) => { res.json(await User.findAll()); });"), 0);
 });
 
-test("with no known AI library the AI item says it could not check", async () => {
+test("with no sign of AI at all the AI item says it does not apply, never that it passed", async () => {
   const review = await runSecurityReview(snapshotFromFiles([{ path: "package.json", content: JSON.stringify({ name: "x", dependencies: { hono: "4.0.0" } }) }]));
+  const item = review.modules.flatMap((m) => m.items).find((i) => i.id === "injection/ai-instructions")!;
+  assert.equal(item.status, "does-not-apply");
+  assert.ok(item.notApplicable);
+});
+
+test("an AI service called directly, without a known library, goes back to the user", async () => {
+  const review = await runSecurityReview(snapshotFromFiles([
+    { path: "package.json", content: JSON.stringify({ name: "x", dependencies: { hono: "4.0.0" } }) },
+    { path: "src/chat.ts", content: 'export const ask = (q: string) => fetch("https://api.openai.com/v1/chat/completions", { method: "POST", body: q });' },
+  ]));
   const item = review.modules.flatMap((m) => m.items).find((i) => i.id === "injection/ai-instructions")!;
   assert.equal(item.status, "needs-your-review");
 });
