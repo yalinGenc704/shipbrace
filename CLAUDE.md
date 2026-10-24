@@ -558,8 +558,8 @@ repository with CI and a README screenshot, a dead-code cleanup, and the
 Claude Code setup above (2026-10-18).
 
 **The smarter checker (agreed 2026-10-18, widened and built 2026-10-20),**
-roadmap item 6 below. Steps 1-5 are committed and tried on the practice
-apps (see Current state); not yet pushed or deployed.
+roadmap item 6 below. Steps 1-5 are done, tried on the practice apps (see
+Current state) and deployed (2026-10-21).
 Every new check gets benchmark cases (a real problem and a safe look-alike),
 keeps zero false alarms, is tried on the practice apps, and fills a checklist
 item only once it can actually run ("no false pass"). In order:
