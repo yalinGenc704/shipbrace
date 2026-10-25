@@ -1,4 +1,4 @@
-import { dottedName, locationOf, parseFile, walk, type Node } from "../analysis/ast.ts";
+import { codeOnly, codeOnlyLines, dottedName, locationOf, parseFile, walk, type Node } from "../analysis/ast.ts";
 import type { Inventory } from "../analysis/inventory.ts";
 import { modelFields } from "../analysis/schemas.ts";
 import { fileChecks } from "./project-files.ts";
@@ -65,9 +65,21 @@ const fileNamed = (snapshot: RepoSnapshot, re: RegExp): SourceFile | undefined =
 const anyMatch = (files: SourceFile[], re: RegExp): boolean =>
   files.some((f) => re.test(f.content));
 
-function lineOf(file: SourceFile, re: RegExp): CodeLocation {
+/**
+ * Like `anyMatch`, but only real code counts: not comments, and not sentences
+ * or sample code inside quotes (see `codeOnly`). For patterns that look for a
+ * danger. Patterns that look for a protection keep using `anyMatch`, so a
+ * protection mentioned anywhere still counts, as it always has.
+ */
+const anyCodeMatch = (files: SourceFile[], re: RegExp): boolean =>
+  files.some((f) => re.test(codeOnly(f)));
+
+/** `lineOf` for a danger: the first line where the pattern matches real code. */
+const codeLineOf = (file: SourceFile, re: RegExp): CodeLocation => lineOf(file, re, codeOnlyLines(file));
+
+function lineOf(file: SourceFile, re: RegExp, searched?: string[]): CodeLocation {
   const lines = file.content.split(/\r?\n/);
-  const index = lines.findIndex((line) => re.test(line));
+  const index = (searched ?? lines).findIndex((line) => re.test(line));
 
   return {
     path: file.path,
@@ -184,9 +196,9 @@ const securityHeaders: ProjectCheck = {
       return { status: "pass" };
     }
 
-    const entry = files.find((f) => /\b(new Hono|express\(\))/.test(f.content)) ?? files[0]!;
+    const entry = files.find((f) => /\b(new Hono|express\(\))/.test(codeOnly(f))) ?? files[0]!;
     // The advice names the tool for the framework this app actually uses.
-    const hono = /\bnew Hono\b/.test(entry.content);
+    const hono = /\bnew Hono\b/.test(codeOnly(entry));
 
     return {
       status: "risks",
@@ -197,7 +209,7 @@ const securityHeaders: ProjectCheck = {
           "Your site doesn't ask visitors' browsers to switch on their built-in protections (security headers).",
           "Browsers can refuse to show your site inside someone else's page, or to run code from places you did not approve, but only when your site asks. Without that, a small problem elsewhere becomes a much bigger one.",
           "Add the one standard line that switches these protections on. It needs no setup to be useful.",
-          lineOf(entry, /new Hono|express\(\)/),
+          codeLineOf(entry, /new Hono|express\(\)/),
           hono
             ? `Add \`app.use(secureHeaders())\` (from "hono/secure-headers") near the top of ${entry.path}.`
             : `Install helmet and add \`app.use(helmet())\` right after the app is created in ${entry.path}.`,
@@ -222,7 +234,7 @@ const errorDetail: ProjectCheck = {
     const risks: Risk[] = [];
 
     for (const file of sourceFiles(snapshot)) {
-      if (!leak.test(file.content)) continue;
+      if (!leak.test(codeOnly(file))) continue;
 
       risks.push(
         risk(
@@ -231,7 +243,7 @@ const errorDetail: ProjectCheck = {
           `${file.path} shows visitors the technical details of errors.`,
           "Those details describe how your site is built -- file names, database layout, package versions. Showing them to whoever caused the error tells an attacker exactly where to push next.",
           "Show visitors a short, fixed message, and write the details into your private records instead.",
-          lineOf(file, leak),
+          codeLineOf(file, leak),
           "Replace the `err.message`/`err.stack` in the response with a fixed message, and log the error server-side.",
         ),
       );
@@ -246,7 +258,7 @@ const errorDetail: ProjectCheck = {
      * used to be, on an app that does leak.
      */
     const files = sourceFiles(snapshot);
-    const usesExpress = anyMatch(files, /\bexpress\s*\(\s*\)/);
+    const usesExpress = anyCodeMatch(files, /\bexpress\s*\(\s*\)/);
     const ownHandler = anyMatch(files, /\.use\s*\(\s*(?:async\s*)?(?:function\s*\w*\s*)?\(\s*\w+\s*,\s*\w+\s*,\s*\w+\s*,\s*\w+\s*\)/);
     if (usesExpress && !ownHandler) {
       return {
@@ -524,13 +536,21 @@ const passwordStorage: ProjectCheck = {
 
   run(snapshot) {
     const files = sourceFiles(snapshot);
-    const handlesPasswords = anyMatch(files, /\bpassword\w*\b/i);
+    const passwordWord = /\bpassword\w*\b/i;
 
-    if (!handlesPasswords) {
+    if (!anyMatch(files, passwordWord)) {
       return {
         status: "not-applicable",
         reason: "This app doesn't seem to handle passwords.",
         absent: true,
+      };
+    }
+    // Only in messages or comments: could be anything, so it goes back to the
+    // user rather than becoming an alarm about how passwords are stored.
+    if (!anyCodeMatch(files, passwordWord)) {
+      return {
+        status: "not-applicable",
+        reason: "Passwords are only mentioned in this app's text, not in code we could follow. If it does store passwords, confirm they are scrambled with argon2id or bcrypt.",
       };
     }
     if (anyMatch(files, /\b(argon2|bcrypt|scrypt|Bun\.password)\b/i)) return { status: "pass" };
@@ -538,7 +558,7 @@ const passwordStorage: ProjectCheck = {
     const bun = snapshot.files.some((f) => /(^|\/)bun\.lockb?$/.test(f.path)) || anyMatch(files, /\bBun\./);
 
     const fast = /\bcreateHash\s*\(\s*['"`](md5|sha1|sha256|sha512)['"`]/i;
-    const offender = files.find((f) => fast.test(f.content));
+    const offender = files.find((f) => fast.test(codeOnly(f)));
 
     if (offender) {
       return {
@@ -550,7 +570,7 @@ const passwordStorage: ProjectCheck = {
             `${offender.path} scrambles passwords with a quick method that is easy to undo by guessing.`,
             "Quick methods can try millions of guesses a second, which is exactly what someone cracking passwords wants. If your database is ever copied, common passwords are recovered in minutes.",
             "Switch to a scrambling method built for passwords (argon2id or bcrypt). It is slow on purpose, which you won't notice but makes mass guessing impractical.",
-            lineOf(offender, fast),
+            codeLineOf(offender, fast),
             "Replace the `createHash` password hashing with argon2id (the `argon2` package) or bcrypt, and rehash each user's password at their next sign-in.",
           ),
         ],
@@ -584,7 +604,7 @@ const sessionExpiry: ProjectCheck = {
 
   run(snapshot) {
     const files = sourceFiles(snapshot);
-    const signer = files.find((f) => /\b(SignJWT|jwt\.sign|sign\s*\()/.test(f.content));
+    const signer = files.find((f) => /\b(SignJWT|jwt\.sign|sign\s*\()/.test(codeOnly(f)));
 
     if (!signer) {
       // Sessions kept in a cookie are sign-ins too; only their expiry is out of sight.
@@ -618,7 +638,7 @@ const sessionExpiry: ProjectCheck = {
           `${signer.path} hands out sign-in passes that never expire.`,
           "Anyone who copies one -- from a shared computer, a browser add-on, a leaked log -- stays signed in as that person forever. Changing the password does not stop them.",
           "Make sign-ins expire after a short time (15 minutes is common), renewing them while the person is active.",
-          lineOf(signer, /SignJWT|jwt\.sign/),
+          codeLineOf(signer, /SignJWT|jwt\.sign/),
           "Set an expiry when signing tokens (`expiresIn: \"15m\"` for jsonwebtoken, `.setExpirationTime(\"15m\")` for jose) and issue a refresh token to renew them.",
         ),
       ],
@@ -721,7 +741,7 @@ const logsWithoutSecrets: ProjectCheck = {
      * end up in the logs.
      */
     for (const file of files) {
-      for (const match of file.content.matchAll(/new\s+Sequelize\s*\(([\s\S]{0,600}?)\)\s*;?/g)) {
+      for (const match of codeOnly(file).matchAll(/new\s+Sequelize\s*\(([\s\S]{0,600}?)\)\s*;?/g)) {
         if (/\blogging\s*:/.test(match[1] ?? "")) continue;
         risks.push(
           risk(
@@ -730,7 +750,7 @@ const logsWithoutSecrets: ProjectCheck = {
             `Your database tool (Sequelize, set up in ${file.path}) writes every database request, with the data in it, into your app's activity records.`,
             "Those requests carry scrambled passwords, emails and addresses. Activity records are shared far more widely than your database, so that data leaks out through them.",
             "Turn off that recording in the database tool's settings.",
-            lineOf(file, /new\s+Sequelize/),
+            codeLineOf(file, /new\s+Sequelize/),
             `Add \`logging: false\` to the options passed to \`new Sequelize(...)\` in ${file.path}.`,
           ),
         );
@@ -754,7 +774,7 @@ const sessionSecret: ProjectCheck = {
       /\b(?:session|expressSession|cookieSession)\s*\(\s*\{[^}]*?\bsecret\s*:\s*(['"`])[^'"`]+\1|\bcookieParser\s*\(\s*(['"`])[^'"`]+\2/;
 
     for (const file of files) {
-      if (!inline.test(file.content)) continue;
+      if (!inline.test(codeOnly(file))) continue;
       risks.push(
         risk(
           "check/session-secret-in-code",
@@ -762,7 +782,7 @@ const sessionSecret: ProjectCheck = {
           `${file.path} has the secret that protects everyone's sign-in written right into the code.`,
           "Anyone who has seen the code -- or guesses a common example value from tutorials -- can pretend to be any user without a password.",
           "Move the secret into your hosting service's secret settings, set it to a long random value, and change it now, because everyone who has seen the code knows the old one.",
-          lineOf(file, /\bsecret\s*:|cookieParser\s*\(/),
+          codeLineOf(file, /\bsecret\s*:|cookieParser\s*\(/),
           "Read the secret from an environment variable (`process.env.SESSION_SECRET`), refuse to start if it is unset, and set it to a new long random value.",
         ),
       );
@@ -791,7 +811,7 @@ const csrfProtection: ProjectCheck = {
     }
 
     // The browser sends cookies along automatically; that is what makes this possible.
-    const cookieLogin = anyMatch(files, /\b(?:express-session|cookie-session)\b|\b(?:session|cookieSession)\s*\(\s*\{|\bsetCookie\s*\(|res\.cookie\s*\(/);
+    const cookieLogin = anyCodeMatch(files, /\b(?:express-session|cookie-session)\b|\b(?:session|cookieSession)\s*\(\s*\{|\bsetCookie\s*\(|res\.cookie\s*\(/);
     if (!cookieLogin) {
       return {
         status: "not-applicable",
@@ -814,7 +834,7 @@ const csrfProtection: ProjectCheck = {
           `Your site remembers who is signed in, and ${changes.length} of its actions change things (saving, editing, deleting). Nothing stops another website from secretly triggering them for a signed-in visitor.`,
           "A page on any other site can quietly send an action to yours while your visitor is signed in -- changing their email, placing an order, deleting data. Your site can't tell it apart from the visitor doing it.",
           "Turn on protection against this (often called CSRF protection), and make the sign-in cookie only travel with visits from your own site.",
-          lineOf(files.find((f) => /session\s*\(|setCookie|res\.cookie/.test(f.content)) ?? files[0]!, /session\s*\(|setCookie|res\.cookie/),
+          codeLineOf(files.find((f) => /session\s*\(|setCookie|res\.cookie/.test(codeOnly(f))) ?? files[0]!, /session\s*\(|setCookie|res\.cookie/),
           "Set the session cookie with `sameSite: \"lax\"` (or \"strict\"), and add CSRF middleware to every route that changes data: `csrf()` from hono/csrf on Hono, or csrf-csrf / csrf-sync on Express.",
         ),
       ],
@@ -884,7 +904,7 @@ const passwordHashesSent: ProjectCheck = {
   run(snapshot, inventory) {
     const files = sourceFiles(snapshot);
     // Only a project whose user records actually carry a password.
-    const hasPasswordField = anyMatch(files, /\bpassword\w*\s*:\s*(?:\{|DataTypes|Sequelize|String|text\(|varchar|type\b)/i);
+    const hasPasswordField = anyCodeMatch(files, /\bpassword\w*\s*:\s*(?:\{|DataTypes|Sequelize|String|text\(|varchar|type\b)/i);
     if (!hasPasswordField) {
       // Records can hold passwords without a written description (MongoDB), so
       // not finding one is not proof there are none.

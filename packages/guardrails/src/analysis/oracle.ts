@@ -211,7 +211,7 @@ export function analyseTaint(inventory: Inventory): TaintPath[] {
 
   for (const whole of scopesFor(inventory)) {
     for (const sink of whole.sinks) {
-      // Safe by construction -- a tagged sql template parameterises everything.
+      // Safe by construction: a tagged sql template, or only fixed text pasted in.
       if (sink.inherentlySafe) continue;
       const scope = { ...whole, sanitizers: whole.sanitizers.filter((s) => guardsAgainst(s, sink.kind)) };
 

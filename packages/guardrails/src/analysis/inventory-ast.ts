@@ -21,6 +21,7 @@ import type {
   SourceKind,
   StoreAccess,
 } from "./inventory.ts";
+import { isFixedText } from "./fixed-text.ts";
 import { visitorInputChecker } from "./oracle.ts";
 import { modelFields } from "./schemas.ts";
 
@@ -1573,8 +1574,11 @@ function sinkFor(
     const tagged = parent?.type === "TaggedTemplateExpression" && parent.quasi === node;
     const tag = tagged ? dottedName(parent.tag) ?? "" : "";
     const safe = tagged && (SAFE_TAG.test(tag) || isTransactionTag(tag, parents));
+    // Only placeholders or fixed SQL pasted in (`IN (${ids.map(() => "?").join(",")})`):
+    // nothing a visitor sends reaches the statement itself.
+    const onlyFixed = expressions.every((e) => isFixedText(parsed, e));
 
-    return make("sql", expressions.flatMap((e) => identifiersIn(e)), safe);
+    return make("sql", expressions.flatMap((e) => identifiersIn(e)), safe || onlyFixed);
   }
 
   /**
@@ -1598,7 +1602,7 @@ function sinkFor(
     const fixed = parts.filter((p) => isStringLiteral(p)).map((p) => String(p.value)).join("");
     const moving = parts.filter((p) => !isStringLiteral(p));
     if (moving.length === 0 || !SQL_STATEMENT.test(fixed) || !startsAQuery(fixed)) return undefined;
-    return make("sql", moving.flatMap((p) => identifiersIn(p)));
+    return make("sql", moving.flatMap((p) => identifiersIn(p)), moving.every((p) => isFixedText(parsed, p)));
   }
 
   if (node.type === "JSXAttribute") {

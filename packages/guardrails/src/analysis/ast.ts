@@ -35,6 +35,8 @@ export interface ParsedFile {
   errors: string[];
   /** Byte offset of the first character of each line, for cheap line lookup. */
   lineStarts: number[];
+  /** Where each comment sits, for telling code apart from text about code. */
+  comments: Array<{ start: number; end: number }>;
 }
 
 function lineStartsOf(source: string): number[] {
@@ -68,6 +70,7 @@ export function parseFile(file: SourceFile): ParsedFile | null {
       program: result.program as unknown as Node,
       errors: fatal.map((e) => e.message),
       lineStarts: lineStartsOf(file.content),
+      comments: (result.comments ?? []).map((c) => ({ start: c.start, end: c.end })),
     };
   } catch {
     return null;
@@ -192,3 +195,66 @@ export const contains = (outer: Node, inner: Node): boolean =>
 export function isStringLiteral(node: unknown): node is Node & { value: string } {
   return isNode(node) && node.type === "Literal" && typeof node.value === "string";
 }
+
+/**
+ * The file's text with comments and quoted prose blanked out to spaces, so a
+ * pattern run over it matches only real code. Offsets and line breaks are kept,
+ * so a match still points at the right line of the original.
+ *
+ * Quoted text is blanked only when it holds a space or a line break: that is a
+ * sentence, or sample code kept as text (`"Replace \`origin: true\` with..."`,
+ * a benchmark app in a template). A single word stays, because that is how
+ * code names things: a package (`"express-session"`), a hash (`'md5'`), a
+ * header (`"Content-Security-Policy"`).
+ *
+ * Meant for patterns that look for a danger. A pattern looking for a
+ * protection should keep reading the whole file: a mention of one anywhere is
+ * a reason to ask rather than to raise an alarm. A file that does not parse is
+ * returned unchanged, which is how it was read before.
+ */
+export function codeOnly(file: SourceFile): string {
+  const cached = codeOnlyCache.get(file);
+  if (cached !== undefined) return cached;
+
+  const parsed = parseFile(file);
+  let text = file.content;
+  if (parsed) {
+    const ranges: Array<{ start: number; end: number }> = [...parsed.comments];
+    walk(parsed.program, (node) => {
+      if (node.type === "Literal" && typeof node.value === "string" && /\s/.test(node.value)) {
+        ranges.push({ start: node.start + 1, end: node.end - 1 });
+      } else if (node.type === "TemplateLiteral") {
+        // The text pieces are found from the template's own span and its
+        // expressions: the parser's spans for the pieces differ between .ts
+        // and .js files, and their `raw` text drops the \r of a \r\n.
+        const expressions = (node.expressions ?? []) as Node[];
+        let from = node.start + 1;
+        for (let i = 0; i <= expressions.length; i++) {
+          const expression = expressions[i];
+          const to = expression ? parsed.source.lastIndexOf("${", expression.start) : node.end - 1;
+          if (to > from && /\s/.test(parsed.source.slice(from, to))) ranges.push({ start: from, end: to });
+          if (expression) from = parsed.source.indexOf("}", expression.end) + 1;
+        }
+      }
+    });
+    // Rebuilt piece by piece; offsets are UTF-16 units, as string indexes are.
+    ranges.sort((a, b) => a.start - b.start);
+    const pieces: string[] = [];
+    let at = 0;
+    for (const { start, end } of ranges) {
+      if (end <= at) continue;
+      const from = Math.max(start, at);
+      pieces.push(text.slice(at, from), text.slice(from, end).replace(/[^\r\n]/g, " "));
+      at = end;
+    }
+    pieces.push(text.slice(at));
+    text = pieces.join("");
+  }
+  codeOnlyCache.set(file, text);
+  return text;
+}
+
+const codeOnlyCache = new WeakMap<SourceFile, string>();
+
+/** The code-only text of each line, aligned with the original lines. */
+export const codeOnlyLines = (file: SourceFile): string[] => codeOnly(file).split(/\r?\n/);

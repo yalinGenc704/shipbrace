@@ -502,7 +502,7 @@ export function verifyClaim(claim: Claim, whole: Inventory): VerifiedClaim {
       ...(door ? { door } : {}),
       verdict: safeOnes.length > 0 ? "blocked" : "not-found",
       reason: safeOnes.length > 0
-        ? `The only ${claim.sink} operation there is parameterised, so values cannot alter it.`
+        ? `The only ${claim.sink} operation there is parameterised or built only from fixed text, so values cannot alter it.`
         : `No ${claim.sink} operation found${door ? ` on ${door.path}` : ""}.`,
     };
   }

@@ -1,6 +1,21 @@
-import type { Finding, Rule } from "../types.ts";
-import { dottedName, isStringLiteral, parseFile, walk, type Node } from "../analysis/ast.ts";
-import { isSource, isTestPath, locate, scanLines } from "../util.ts";
+import type { Finding, Rule, SourceFile } from "../types.ts";
+import { codeOnlyLines, dottedName, isStringLiteral, parseFile, walk, type Node } from "../analysis/ast.ts";
+import { isSource, isTestPath, locate, scanLines, type LineHit } from "../util.ts";
+
+/**
+ * Lines where `re` matches real code, not a comment or a sentence in quotes.
+ * Each rule here looks for a danger, so text about the danger -- a message
+ * telling someone to remove `origin: true`, sample code kept as text -- must
+ * not count as the danger itself. `inCode` is the part that must be real code,
+ * when the rest of the pattern reads inside quotes (a key named 'auth token').
+ */
+function codeHits(file: SourceFile, re: RegExp, inCode: RegExp = re): LineHit[] {
+  const code = codeOnlyLines(file);
+  return scanLines(file, re).filter((hit) => {
+    inCode.lastIndex = 0;
+    return inCode.test(code[hit.line - 1] ?? "");
+  });
+}
 
 /**
  * `origin: "*"` plus credentials is the combination an LLM produces when told
@@ -15,7 +30,7 @@ const permissiveCors: Rule = {
   check(file) {
     const re = /origin\s*:\s*(['"`]\*['"`]|true)|Access-Control-Allow-Origin['"`]?\s*[,:]\s*['"`]\*/;
 
-    return scanLines(file, re).map((hit): Finding => ({
+    return codeHits(file, re).map((hit): Finding => ({
       ruleId: permissiveCors.id,
       category: "auth",
       severity: "high",
@@ -50,7 +65,7 @@ const tokenInLocalStorage: Rule = {
   check(file) {
     const re = /localStorage\.setItem\(\s*['"`][^'"`]*(token|jwt|auth|session|refresh)[^'"`]*['"`]/i;
 
-    return scanLines(file, re).map((hit): Finding => ({
+    return codeHits(file, re, /localStorage\.setItem\s*\(/).map((hit): Finding => ({
       ruleId: tokenInLocalStorage.id,
       category: "auth",
       severity: "high",
@@ -148,7 +163,7 @@ const weakJwtSecret: Rule = {
     // JWT_SECRET read from env with a hardcoded `||` / `??` fallback.
     const re = /(?:JWT_SECRET|TOKEN_SECRET|AUTH_SECRET)\s*(?:\]|\))?\s*(?:\|\||\?\?)\s*['"`]([^'"`]+)['"`]/i;
 
-    return scanLines(file, re).map((hit): Finding => ({
+    return codeHits(file, re).map((hit): Finding => ({
       ruleId: weakJwtSecret.id,
       category: "auth",
       severity: "critical",

@@ -266,13 +266,14 @@ test("one problem on one line is reported once, preferring the traced path", asy
 });
 
 test("a line only the pattern check flags is a lead, never a risk", async () => {
-  // A fixed table name: built by pasting, but nothing a visitor sends reaches it.
+  // A table name from the app's own settings: built by pasting, and no visitor
+  // input can be traced to it, but the settings themselves were not reviewed.
   const review = await runSecurityReview(
     snap(
       "server/src/a.ts",
       [
         'app.get("/api/stats", async (c) => {',
-        '  const table = "daily_stats";',
+        "  const table = settings.statsTable;",
         "  return c.json(await db.query(`SELECT * FROM ${table}`));",
         "});",
       ].join("\n"),

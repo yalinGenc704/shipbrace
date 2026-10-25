@@ -34,7 +34,8 @@ review     → ten OWASP Top 10:2025 modules for the user
 
 | Path | What it is |
 | --- | --- |
-| `packages/guardrails/src/analysis/ast.ts` | oxc-parser wrapper and tree helpers |
+| `packages/guardrails/src/analysis/ast.ts` | oxc-parser wrapper and tree helpers; `codeOnly` (a file with comments and quoted prose blanked) |
+| `packages/guardrails/src/analysis/fixed-text.ts` | Proves a value pasted into a query is fixed text (`?` marks, a fixed `const`) |
 | `packages/guardrails/src/analysis/inventory-ast.ts` | **The inventory in use.** Routes, sources, sinks, sanitizers, assignments, functions, call sites |
 | `packages/guardrails/src/analysis/verify.ts` | **The verifier.** Decides one claim, following values across functions and files |
 | `packages/guardrails/src/analysis/oracle.ts` | Enumerating pass (`analyseTaint`), scoped to one route handler |
@@ -74,7 +75,7 @@ everywhere:
 # PostgreSQL 18 (Homebrew, not started at login). Databases: shipbrace, shipbrace_test.
 LC_ALL=en_US.UTF-8 /opt/homebrew/opt/postgresql@18/bin/pg_ctl -D /opt/homebrew/var/postgresql@18 -l /opt/homebrew/var/log/postgresql@18.log start
 
-# all tests (expect 303 pass). Without TEST_DATABASE_URL the 6 database tests
+# all tests (expect 321 pass). Without TEST_DATABASE_URL the 6 database tests
 # are skipped and say so; it must name a database ending in _test (it is wiped).
 # CI (.github/workflows/ci.yml) runs typecheck, lint, tests and build on every push.
 TEST_DATABASE_URL=postgres:///shipbrace_test npm test
@@ -135,6 +136,18 @@ the server with the AI step, start it with an extra `--env-file` that sets
   argument array). These teach users to ignore the tool. Treat one as a defect.
 - **Precision over coverage.** Missing a real path is a gap; inventing one is a
   defect. When in doubt, return `undecidable`, never `valid` and never "safe".
+- **Text about code is not code (2026-10-25).** A pattern that looks for a
+  danger runs on `codeOnly(file)` (`analysis/ast.ts`): comments and quoted
+  text holding a space are blanked, single-word strings (package names,
+  `'md5'`, header names) are kept. Use `codeHits` in `rules/auth.ts` and
+  `anyCodeMatch`/`codeLineOf` in `review/checks.ts`. A pattern that looks for
+  a protection keeps reading the whole file (`anyMatch`), so a mention of one
+  anywhere never turns into a new alarm. Found by reviewing ShipBrace itself:
+  its advice strings, `bench/cases.ts` sample apps and a test's Supabase
+  example gave 11 false alarms. A query whose pasted pieces are all fixed
+  text (`?` per item, a fixed `const`, `$${i + 1}`) is safe
+  (`analysis/fixed-text.ts`); a name bound twice, a `let`, or anything
+  else is not.
 - **Redact at the boundary.** Excerpts pass through `redact()` before a finding
   exists, so a reported secret is never copied into logs or the UI.
 - **Report text for people who do not read code (2026-10-23).** Every
@@ -228,6 +241,10 @@ the server with the AI step, start it with an extra `--env-file` that sets
   header; otherwise handed back. A bare `.verify(` (such as `jwt.verify`)
   does not count.
 - **Project file checks (2026-10-20, `review/project-files.ts`).** Supabase
+  (detected from packages, its folder, or an import in real code; since
+  2026-10-25 not in tests or quoted text, and when `supabase/` SQL creates
+  tables only that SQL is judged, so another database in the same
+  repository is left alone)
   tables (from SQL migrations, comments and `$$` bodies ignored) without
   row level security (`access-control/database-rules`; public buckets are a
   notice); the final Dockerfile stage running as root, following `FROM
@@ -426,6 +443,13 @@ the server with the AI step, start it with an extra `--env-file` that sets
   in the checker that day: a fetch whose *public* origin is fixed in the code
   is not request forgery (internal hosts still are), and `/webhook(s)`,
   `/callback`, `/oauth` routes are public by design.
+- **Self-review (2026-10-25, from the dashboard):** 13 "needs fixing", 2
+  were package warnings (see `CLAUDE.local.md`). The other 11 and 8 of 9 query notes came from reading
+  text about code as code; fixed the same day (see "Text about code is not
+  code"). Still a note: `cloud/src/accounts.ts` building `SET col = ?` from
+  a fixed list of column names (proving the list fixed needs more than one
+  expression). `crypto/no-password-hashes-sent` went from pass to handed
+  back: ShipBrace has no password fields, it had passed on benchmark text.
 - **Security audit of ShipBrace (2026-10-18, `security-auditor`).** `npm
   audit`: 0 known vulnerabilities. Fixed the same day: `redact()` now hides
   unquoted credential values in environment files, Stripe/GitHub/Google key
@@ -478,7 +502,12 @@ the server with the AI step, start it with an extra `--env-file` that sets
   audited. Pasting an organisation repository the App is not on, as a
   non-admin, says only its owners can allow it.
 - **The query check trusts tagged templates by name** (`SAFE_TAG`: `sql`, `db`,
-  `query`), plus transaction tags (see above, 2026-10-20).
+  `query`), plus transaction tags (see above, 2026-10-20), and since
+  2026-10-25 queries whose pasted pieces are all fixed text (`isFixedText`):
+  `.map(() => "?").join(",")`, `$${i + 1}` on a plain array, a `const` of
+  fixed text declared once in an enclosing block, a choice between fixed
+  pieces. Known gap: a name holding a lodash/Immutable wrapper, whose `.map`
+  passes keys, is trusted like an array.
 
 ## Claude Code setup for this project (2026-10-18)
 

@@ -118,7 +118,9 @@ export interface Sink {
   doorId?: string;
   /**
    * True when the construct is safe by design regardless of its operands --
-   * a tagged `sql` template parameterises everything interpolated into it.
+   * a tagged `sql` template parameterises everything interpolated into it, and
+   * a query whose pasted pieces are all fixed text (`?` marks, a fixed
+   * constant; see `fixed-text.ts`) has nothing a visitor can change.
    */
   inherentlySafe: boolean;
   /** For mass assignment: the fields a visitor could set that they must not. */

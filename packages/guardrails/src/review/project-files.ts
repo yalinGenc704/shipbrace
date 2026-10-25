@@ -1,4 +1,4 @@
-import { dottedName, parseFile, walk, type Node } from "../analysis/ast.ts";
+import { codeOnly, dottedName, parseFile, walk, type Node } from "../analysis/ast.ts";
 import { isSource, isTestPath } from "../util.ts";
 import type { ProjectCheck } from "./checks.ts";
 import type { Risk } from "./modules.ts";
@@ -19,6 +19,15 @@ function risk(id: string, grade: Risk["grade"], what: string, impact: string, fi
 
 const SUPABASE_PROJECT = /(?:^|\/)supabase\/(?:config\.toml|migrations\/)/;
 
+const CREATES_TABLE = /CREATE\s+(?:UNLOGGED\s+)?TABLE\b/i;
+
+// Comments and function bodies (between $$ quotes) are not statements run
+// by the migration, so a `create table` inside one does not count.
+const bare = (text: string): string =>
+  text.replace(/\$(\w*)\$[\s\S]*?\$\1\$/g, (m) => m.replace(/[^\n]/g, " "))
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
+    .replace(/--[^\n]*/g, (m) => " ".repeat(m.length));
+
 /**
  * With Supabase the browser talks to the database directly, using a key that
  * is public by design. Any table in the `public` schema without row level
@@ -32,17 +41,27 @@ export const supabaseRowRules: ProjectCheck = {
 
   run(snapshot) {
     // Any Supabase package (supabase-js, ssr, auth helpers), in either list, or
-    // an import of one in the code.
+    // an import of one in the code. Not in tests, and not in sample code kept
+    // as text: a checker's own test that imports Supabase inside a string does
+    // not make the checker a Supabase app.
     const usesSupabase = snapshot.files.some((f) => SUPABASE_PROJECT.test(f.path)) ||
       [...snapshot.manifests.values()].some((m) =>
         Object.keys({ ...(m.dependencies as object | undefined), ...(m.devDependencies as object | undefined) })
           .some((name) => name.startsWith("@supabase/"))
       ) ||
-      snapshot.files.some((f) => isSource(f.path) && /from\s+["']@supabase\/|require\(\s*["']@supabase\//.test(f.content));
+      snapshot.files.some((f) =>
+        isSource(f.path) && !isTestPath(f.path) && /from\s+["']@supabase\/|require\(\s*["']@supabase\//.test(codeOnly(f))
+      );
     if (!usesSupabase) {
       return { status: "not-applicable", reason: "This app doesn't use Supabase, the only database this item is about.", absent: true };
     }
-    const sql = snapshot.files.filter((f) => f.path.endsWith(".sql") && !isTestPath(f.path));
+    // When Supabase's own folder creates tables, only that SQL sets up
+    // Supabase tables. Other SQL in the same repository (a Cloudflare D1 or
+    // SQLite database, say) is a database the browser cannot reach. A folder
+    // holding only seed data does not count: the tables are made elsewhere.
+    const allSql = snapshot.files.filter((f) => f.path.endsWith(".sql") && !isTestPath(f.path));
+    const inSupabase = allSql.filter((f) => /(?:^|\/)supabase\//.test(f.path));
+    const sql = inSupabase.some((f) => CREATES_TABLE.test(bare(f.content))) ? inSupabase : allSql;
     if (sql.length === 0) {
       return {
         status: "not-applicable",
@@ -50,39 +69,22 @@ export const supabaseRowRules: ProjectCheck = {
       };
     }
 
-    // Comments and function bodies (between $$ quotes) are not statements run
-    // by the migration, so a `create table` inside one does not count.
-    const bare = (text: string): string =>
-      text.replace(/\$(\w*)\$[\s\S]*?\$\1\$/g, (m) => m.replace(/[^\n]/g, " "))
-        .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
-        .replace(/--[^\n]*/g, (m) => " ".repeat(m.length));
     const all = sql.map((f) => bare(f.content)).join("\n");
     // Only an `enable` on the public table itself counts: `private.notes`
     // having row rules does nothing for `public.notes`.
-    const secured = new Set(
-      [...all.matchAll(/ALTER\s+TABLE\s+(?:ONLY\s+)?(?:IF\s+EXISTS\s+)?((?:"?\w+"?\.)?)"?(\w+)"?\s+ENABLE\s+ROW\s+LEVEL\s+SECURITY/gi)]
-        .filter((m) => ["", "public"].includes(m[1]!.replace(/["."]/g, "").toLowerCase()))
-        .map((m) => m[2]!.toLowerCase()),
-    );
+    const secured = securedTables(all);
     const risks: Risk[] = [];
-    for (const file of sql) {
-      const text = bare(file.content);
-      for (const match of text.matchAll(/CREATE\s+(?:UNLOGGED\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?((?:"?\w+"?\.)?)"?(\w+)"?/gi)) {
-        const schema = match[1]!.replace(/["."]/g, "").toLowerCase();
-        const table = match[2]!.toLowerCase();
-        if ((schema && schema !== "public") || secured.has(table)) continue;
-        const line = text.slice(0, match.index).split("\n").length;
-        risks.push(risk(
-          "check/supabase-no-rls",
-          "high",
-          `Anyone visiting your site can read, change or delete everything in the \`${table}\` table. It has no lock on who may see each row (Row Level Security).`,
-          "Supabase lets visitors' browsers talk to your database directly. Without that lock, every row in this table is open to all of them.",
-          "Turn on Row Level Security for this table, and add rules that let each person reach only their own rows.",
-          file.path,
-          line,
-          `Add \`alter table public.${table} enable row level security;\` in a new migration, then create policies limiting each user to their own rows (for example \`using (auth.uid() = user_id)\`).`,
-        ));
-      }
+    for (const { file, table, line } of openTables(sql, secured)) {
+      risks.push(risk(
+        "check/supabase-no-rls",
+        "high",
+        `Anyone visiting your site can read, change or delete everything in the \`${table}\` table. It has no lock on who may see each row (Row Level Security).`,
+        "Supabase lets visitors' browsers talk to your database directly. Without that lock, every row in this table is open to all of them.",
+        "Turn on Row Level Security for this table, and add rules that let each person reach only their own rows.",
+        file.path,
+        line,
+        `Add \`alter table public.${table} enable row level security;\` in a new migration, then create policies limiting each user to their own rows (for example \`using (auth.uid() = user_id)\`).`,
+      ));
     }
 
     const buckets = [...all.matchAll(/insert\s+into\s+storage\.buckets[^;]*?values\s*\(\s*'([^']+)'[^;]*?\btrue\b/gi)].map((m) => m[1]!);
@@ -90,9 +92,48 @@ export const supabaseRowRules: ProjectCheck = {
       ? `Public file storage: ${buckets.join(", ")}. Anyone with a file's address can download it -- fine for pictures meant to be seen, not for private documents.`
       : undefined;
     if (risks.length > 0) return { status: "risks", risks, ...(notice ? { notice } : {}) };
+
+    // SQL outside Supabase's folder was left out. It may be another database
+    // (a Cloudflare D1 one) or more Supabase tables made with another tool;
+    // the files cannot say which, so tables there without a lock go back to
+    // the user rather than passing.
+    const leftOutSql = allSql.filter((f) => !sql.includes(f));
+    const securedThere = securedTables(leftOutSql.map((f) => bare(f.content)).join("\n"));
+    const leftOut = openTables(leftOutSql, new Set([...secured, ...securedThere]));
+    if (leftOut.length > 0) {
+      const files = [...new Set(leftOut.map((t) => t.file.path))];
+      return {
+        status: "not-applicable",
+        reason: `Your Supabase tables all have Row Level Security, but ${files.join(", ")} also create${files.length === 1 ? "s" : ""} tables without it (${[...new Set(leftOut.map((t) => t.table))].join(", ")}). If those are in your Supabase database too, turn Row Level Security on for them; if they belong to a different database, nothing is needed.`,
+        ...(notice ? { notice } : {}),
+      };
+    }
     return { status: "pass", ...(notice ? { notice } : {}) };
   },
 };
+
+/** Public tables given row level security in this SQL. */
+const securedTables = (sql: string): Set<string> =>
+  new Set(
+    [...sql.matchAll(/ALTER\s+TABLE\s+(?:ONLY\s+)?(?:IF\s+EXISTS\s+)?((?:"?\w+"?\.)?)"?(\w+)"?\s+ENABLE\s+ROW\s+LEVEL\s+SECURITY/gi)]
+      .filter((m) => ["", "public"].includes(m[1]!.replace(/["."]/g, "").toLowerCase()))
+      .map((m) => m[2]!.toLowerCase()),
+  );
+
+/** Public tables a set of SQL files creates without row level security. */
+function openTables(files: Array<{ path: string; content: string }>, secured: Set<string>) {
+  const found: Array<{ file: { path: string; content: string }; table: string; line: number }> = [];
+  for (const file of files) {
+    const text = bare(file.content);
+    for (const match of text.matchAll(/CREATE\s+(?:UNLOGGED\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?((?:"?\w+"?\.)?)"?(\w+)"?/gi)) {
+      const schema = match[1]!.replace(/["."]/g, "").toLowerCase();
+      const table = match[2]!.toLowerCase();
+      if ((schema && schema !== "public") || secured.has(table)) continue;
+      found.push({ file, table, line: text.slice(0, match.index).split("\n").length });
+    }
+  }
+  return found;
+}
 
 // --- Containers: the app should not run as root ------------------------------
 

@@ -290,7 +290,7 @@ test("a value handed to code that was not reviewed is undecidable, not safe", ()
       'import { renderReport } from "some-package";',
       'app.get("/api/reports", async (c) => {',
       '  const name = c.req.query("name");',
-      "  const table = 'reports';",
+      "  const table = settings.reportsTable;",
       "  await db.query(`SELECT * FROM ${table}`);",
       "  return c.json(await renderReport(name));",
       "});",

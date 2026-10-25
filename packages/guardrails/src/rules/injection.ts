@@ -113,7 +113,8 @@ const unsafeSinks: Rule = {
     const findings: Finding[] = [];
 
     for (const sink of findSinksInFile(file)) {
-      // A tagged query template parameterises every value it interpolates.
+      // A tagged query template parameterises every value it interpolates, and
+      // a query built only from fixed text has nothing a visitor can change.
       if (sink.inherentlySafe) continue;
 
       const copy = COPY[sink.kind];
