@@ -348,7 +348,8 @@ the server with the AI step, start it with an extra `--env-file` that sets
   checklist follows OWASP Top 10:2025; the four items added for its new
   categories (A03 supply chain, A10 exceptional conditions) have no detector yet.
 - **GitHub App works end to end (first live run 2026-10-01):** App ID 5157570
-  ("yg-aegis-review"), installed only on the private test repo
+  (address github.com/apps/shipbrace; it was "yg-aegis-review" until renamed,
+  and the old address now gives "not found"), installed only on the private test repo
   yalinGenc704/aegis-dvna-test (a DVNA copy). A push produced a failing check
   with 12 line notes. Local setup: `GITHUB_*` settings in `.env`, key in
   `github-app.pem` (git-ignored), and a temporary Cloudflare quick tunnel

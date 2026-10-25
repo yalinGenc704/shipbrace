@@ -30,7 +30,7 @@
   "vars": {
     "PUBLIC_URL": "https://app.shipbrace.com",
     "GITHUB_APP_ID": "5157570",
-    "GITHUB_APP_SLUG": "yg-aegis-review",
+    "GITHUB_APP_SLUG": "shipbrace",
     "GITHUB_CLIENT_ID": "Iv23liy8pr9ByG3NznCo",
     "AI_REVIEW": "on",
     "PACKAGE_LOOKUP": "on",
