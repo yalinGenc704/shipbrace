@@ -22,9 +22,11 @@ never deploy past a failing check.
    - `npx oxlint .`
    - `TEST_DATABASE_URL=postgres:///shipbrace_test npm test` (start PostgreSQL
      first if needed; see CLAUDE.md, "Running things")
-   - `npm run bench`: the scores must not drop below the ones recorded in
-     CLAUDE.md (rules alone 27 of 31, perfect suggester 30 of 31, 0 false
-     alarms).
+   - `npm run bench`: the scores must not drop below the latest ones in
+     CLAUDE.md ("Current state and known gaps", the Benchmark line), which
+     wins if it differs from this note. On 2026-10-20: rules alone 36 of 40,
+     perfect suggester 39 of 40, 42 of 42 safe decoys cleared, 0 false
+     alarms.
 3. If `cloud/migrations/` has a migration not yet applied on Cloudflare
    (`cd cloud && npx wrangler d1 migrations list aegis-history --remote`), tell
    the user which one and apply it with `--remote` before deploying the code.
