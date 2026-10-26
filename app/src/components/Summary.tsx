@@ -51,6 +51,13 @@ export function Summary({
             )}
             <Stat label="Modules clear" value={`${review.summary.clear}/10`} tone="ok" />
           </dl>
+          {checklist.total > 0 && (
+            <p className="mt-3 max-w-xl text-xs leading-relaxed text-ink-soft">
+              <span className="font-medium text-ink">Your checklist</span> holds good-practice questions
+              every app should think through, such as who would notice an alert. They are not problems found
+              in your code, and no automated check can answer them. Tick each one off once you've considered it.
+            </p>
+          )}
         </div>
 
         {total > 0 && (
