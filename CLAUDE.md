@@ -75,7 +75,7 @@ everywhere:
 # PostgreSQL 18 (Homebrew, not started at login). Databases: shipbrace, shipbrace_test.
 LC_ALL=en_US.UTF-8 /opt/homebrew/opt/postgresql@18/bin/pg_ctl -D /opt/homebrew/var/postgresql@18 -l /opt/homebrew/var/log/postgresql@18.log start
 
-# all tests (expect 347 pass). Without TEST_DATABASE_URL the 6 database tests
+# all tests (expect 356 pass). Without TEST_DATABASE_URL the 6 database tests
 # are skipped and say so; it must name a database ending in _test (it is wiped).
 # CI (.github/workflows/ci.yml) runs typecheck, lint, tests and build on every push.
 TEST_DATABASE_URL=postgres:///shipbrace_test npm test
@@ -471,6 +471,14 @@ the server with the AI step, start it with an extra `--env-file` that sets
   address is the site's own or locked. The reader also reads `.jsonc` and
   `.json5` now, and the CSRF check counts `Set-Cookie` headers and
   `SameSite=Lax/Strict` in them.
+- **Database reachable from outside (2026-10-25, `compose:no-public-database`).**
+  Reads every Docker Compose file (`COMPOSE` in `review/project-files.ts`:
+  `compose.yaml`, `docker-compose.yml`, overrides), merging services by name
+  within one folder only. A database image (judged by the image's own name,
+  not its registry) that publishes a port not bound to 127.0.0.1, or uses
+  `network_mode: host`, is a high risk (medium in dev/test files). Shared
+  blocks that touch ports or images, `extends:`, `include:`, flow-style or
+  old-format files, and unread compose files hand the item back.
 - **Self-review (2026-10-25, from the dashboard):** 13 "needs fixing", 2
   were package warnings (see `CLAUDE.local.md`). The other 11 and 8 of 9 query notes came from reading
   text about code as code; fixed the same day (see "Text about code is not

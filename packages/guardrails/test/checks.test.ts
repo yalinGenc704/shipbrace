@@ -82,6 +82,121 @@ test("a published port on a non-database service is not flagged", () => {
   assert.equal(statusOf([web, SERVER], "config/exposed-services"), "pass");
 });
 
+test("every Docker Compose file name is read, and an override can open the database", () => {
+  for (const path of ["compose.yaml", "compose.yml", "docker-compose.yaml", "deploy/compose.yaml"]) {
+    assert.equal(statusOf([{ ...compose(true), path }, SERVER], "config/exposed-services"), "risks", path);
+    assert.equal(statusOf([{ ...compose(false), path }, SERVER], "config/exposed-services"), "pass", path);
+  }
+  // The image is named in the main file, the port opened in an override.
+  const override: File = { path: "compose.prod.yaml", content: ["services:", "  db:", "    ports:", '      - "5432:5432"'].join("\n") };
+  const outcome = outcomes([{ ...compose(false), path: "compose.yaml" }, override, SERVER]).get("config/exposed-services");
+  assert.equal(outcome?.status, "risks");
+  assert.match((outcome as { risks: { what: string }[] }).risks[0]?.what ?? "", /compose\.prod\.yaml/);
+});
+
+test("a database port opened only on this machine is not open to the internet", () => {
+  const local = (entry: string): File => ({
+    path: "compose.yaml",
+    content: ["services:", "  db:", "    image: postgres:18", "    ports:", `      - ${entry}`].join("\n"),
+  });
+  assert.equal(statusOf([local('"127.0.0.1:5432:5432"'), SERVER], "config/exposed-services"), "pass");
+  assert.equal(statusOf([local("localhost:5432:5432"), SERVER], "config/exposed-services"), "pass");
+  assert.equal(statusOf([local('"0.0.0.0:5432:5432"'), SERVER], "config/exposed-services"), "risks");
+  assert.equal(statusOf([local("target: 5432"), SERVER], "config/exposed-services"), "risks", "the long form counts as open");
+  const inline: File = { path: "compose.yaml", content: ["services:", "  db:", "    image: mysql:8", '    ports: ["3306:3306"]'].join("\n") };
+  assert.equal(statusOf([inline, SERVER], "config/exposed-services"), "risks");
+});
+
+test("compose layouts that once slipped through are still read", () => {
+  const db = (lines: string[], image = "postgres:16"): File => ({
+    path: "compose.yaml",
+    content: ["services:", "  db:", `    image: ${image}`, ...lines].join("\n"),
+  });
+  // List items at the same indent as their key.
+  assert.equal(statusOf([db(["    ports:", '    - "5432:5432"']), SERVER], "config/exposed-services"), "risks");
+  // A comment inside the list neither hides an open port nor counts as one.
+  assert.equal(statusOf([db(["    ports:", '      - "127.0.0.1:5433:5432"', "      # bi tool", '      - "5432:5432"']), SERVER], "config/exposed-services"), "risks");
+  assert.equal(statusOf([db(["    ports:", "      # only on this machine", '      - "127.0.0.1:5432:5432"']), SERVER], "config/exposed-services"), "pass");
+  // The long form bound to this machine, the one-line form with a comment, the host network.
+  assert.equal(statusOf([db(["    ports:", "      - target: 5432", "        published: 5432", "        host_ip: 127.0.0.1"]), SERVER], "config/exposed-services"), "pass");
+  assert.equal(statusOf([db(['    ports: ["5432:5432"] # dev']), SERVER], "config/exposed-services"), "risks");
+  assert.equal(statusOf([db(['    ports: ["127.0.0.1:5432:5432", "[::1]:5433:5432"]']), SERVER], "config/exposed-services"), "pass");
+  assert.equal(statusOf([db(["    network_mode: host"]), SERVER], "config/exposed-services"), "risks");
+  // Databases beyond the big five.
+  for (const image of ["pgvector/pgvector:pg16", "timescale/timescaledb:latest", "valkey/valkey:8", "elasticsearch:8.15.0", "mcr.microsoft.com/mssql/server:2022-latest"]) {
+    assert.equal(statusOf([db(["    ports:", '      - "9000:9000"'], image), SERVER], "config/exposed-services"), "risks", image);
+  }
+});
+
+test("settings this check can't follow go back to the user instead of passing", () => {
+  const anchored: File = {
+    path: "compose.yaml",
+    content: ["x-db: &db", "  ports:", '    - "5432:5432"', "services:", "  db:", "    image: postgres:16", "    <<: *db"].join("\n"),
+  };
+  assert.equal(statusOf([anchored, SERVER], "config/exposed-services"), "not-applicable");
+  // A shared block that only sets restart rules and limits hides nothing.
+  const harmless: File = {
+    path: "compose.yaml",
+    content: ["x-base: &base", "  restart: unless-stopped", "  read_only: true", "services:", "  app:", "    <<: *base", "    build: .", "  db:", "    <<: *base", "    image: postgres:16"].join("\n"),
+  };
+  assert.equal(statusOf([harmless, SERVER], "config/exposed-services"), "pass");
+  const v1: File = { path: "docker-compose.yml", content: ["db:", "  image: postgres:9", "  ports:", '    - "5432:5432"'].join("\n") };
+  assert.equal(statusOf([v1, SERVER], "config/exposed-services"), "not-applicable");
+  // A compose file the reader skipped (too large) could hold the open port.
+  const snapshot = snapshotFromFiles([{ ...compose(false), path: "compose.yaml" }, SERVER], undefined, { unread: ["compose.prod.yaml"] });
+  assert.equal(runProjectChecks(snapshot, buildInventory(snapshot)).get("config/exposed-services")?.status, "not-applicable");
+});
+
+test("a service named like a database in another folder is another project", () => {
+  const a: File = { path: "apps/a/docker-compose.yml", content: ["services:", "  db:", "    image: postgres:16"].join("\n") };
+  const b: File = { path: "apps/b/docker-compose.yml", content: ["services:", "  db:", "    build: ./mock", "    ports:", '      - "8080:8080"'].join("\n") };
+  assert.equal(statusOf([a, b, SERVER], "config/exposed-services"), "pass");
+  // A non-database service opened in an override stays quiet.
+  const web: File = { path: "compose.override.yaml", content: ["services:", "  web:", "    ports:", '      - "80:80"'].join("\n") };
+  assert.equal(statusOf([{ ...compose(false), path: "compose.yaml" }, web, SERVER], "config/exposed-services"), "pass");
+});
+
+test("only the image's own name decides that it is a database", () => {
+  const svc = (image: string): File => ({
+    path: "compose.yaml",
+    content: ["services:", "  x:", `    image: ${image}`, "    ports:", '      - "8080:8080"'].join("\n"),
+  });
+  for (const image of ["oraclelinux:9-slim", "container-registry.oracle.com/java/openjdk:21", "opensearchproject/opensearch-dashboards:2", "prom/memcached-exporter", "ghcr.io/my-postgres-team/api:1", "percona/pmm-server:2"]) {
+    assert.equal(statusOf([svc(image), SERVER], "config/exposed-services"), "pass", image);
+  }
+  for (const image of ["bitnami/postgresql:16", "supabase/postgres:15", "${DB_IMAGE:-postgres:16}", "mcr.microsoft.com/mssql/server:2022-latest"]) {
+    assert.equal(statusOf([svc(image), SERVER], "config/exposed-services"), "risks", image);
+  }
+});
+
+test("services written with an anchor or in quotes are read; a one-line service goes back to the user", () => {
+  const file = (key: string): File => ({
+    path: "compose.yaml",
+    content: ["services:", `  ${key}`, "    image: postgres:16", "    ports:", '      - "5432:5432"', "  api:", "    image: nginx"].join("\n"),
+  });
+  assert.equal(statusOf([file("db: &db"), SERVER], "config/exposed-services"), "risks");
+  assert.equal(statusOf([file('"db":'), SERVER], "config/exposed-services"), "risks");
+  const flow: File = { path: "compose.yaml", content: ["services:", '  db: {image: postgres, ports: ["5432:5432"]}', "  api:", "    image: nginx"].join("\n") };
+  assert.equal(statusOf([flow, SERVER], "config/exposed-services"), "not-applicable");
+});
+
+test("the risk points at the database's own line and suggests a fix that works", () => {
+  const file: File = {
+    path: "compose.yaml",
+    content: ["services:", "  reviewer:", "    image: app", "    network_mode: none", "  db:", "    image: postgres:16", "    network_mode: host"].join("\n"),
+  };
+  const host = outcomes([file, SERVER]).get("config/exposed-services") as { risks: { location?: { line: number } }[] };
+  assert.equal(host.risks[0]?.location?.line, 7);
+  const bare = outcomes([{ path: "compose.yaml", content: ["services:", "  db:", "    image: redis:7", "    ports:", '      - "6379"'].join("\n") }, SERVER])
+    .get("config/exposed-services") as { risks: { fixDetail?: string }[] };
+  assert.match(bare.risks[0]?.fixDetail ?? "", /127\.0\.0\.1:6379:6379/);
+});
+
+test("a development-only compose file is a medium risk, not a high one", () => {
+  const outcome = outcomes([{ ...compose(true), path: "compose.dev.yaml" }, SERVER]).get("config/exposed-services");
+  assert.equal((outcome as { risks: { grade: string }[] }).risks[0]?.grade, "medium");
+});
+
 test("protective headers are detected when present and missed when absent", () => {
   assert.equal(statusOf([SERVER], "config/security-headers"), "pass");
 

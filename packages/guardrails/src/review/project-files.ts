@@ -230,7 +230,8 @@ export const containerUser: ProjectCheck = {
 
 // --- Debug settings in what gets deployed -------------------------------------
 
-const COMPOSE = /(?:^|\/)(?:docker-)?compose(?:\.[\w-]+)?\.ya?ml$/i;
+/** Docker Compose's file names: today's `compose.yaml`, the older `docker-compose.yml`, and overrides such as `compose.prod.yaml`. */
+export const COMPOSE = /(?:^|\/)(?:docker-)?compose(?:\.[\w-]+)?\.ya?ml$/i;
 
 /**
  * Development mode in a Dockerfile or compose file ships with the app:

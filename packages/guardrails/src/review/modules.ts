@@ -459,7 +459,7 @@ const MODULES: ModuleShape[] = [
       },
       {
         id: "config/exposed-services",
-        covers: "your setup file (docker-compose) doesn't open the database to the outside world",
+        covers: "your Docker Compose setup files (compose.yaml, docker-compose.yml and their overrides) don't open a database service (PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Elasticsearch and similar) to the outside world; a database built from your own Dockerfile, or hosted elsewhere, was not checked",
         title: "The database is not reachable from the internet",
         question:
           "Confirm your database can only be reached by your own app, not from the internet.",

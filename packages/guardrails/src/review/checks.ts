@@ -1,7 +1,7 @@
 import { codeOnly, codeOnlyLines, dottedName, locationOf, parseFile, walk, type Node } from "../analysis/ast.ts";
 import type { Inventory } from "../analysis/inventory.ts";
 import { modelFields } from "../analysis/schemas.ts";
-import { dependencyNames, fileChecks, outOfSight } from "./project-files.ts";
+import { COMPOSE, dependencyNames, fileChecks, outOfSight } from "./project-files.ts";
 import type { CodeLocation, RepoSnapshot, SourceFile } from "../types.ts";
 import { isSource, isTestPath, redact } from "../util.ts";
 import { pageName, upperFirst, type Grade, type Risk } from "./modules.ts";
@@ -165,67 +165,234 @@ function risk(
 
 // --- A02: the database must not be reachable from outside --------------------
 
+/** The image's own name, without registry, owner or tag: `bitnami/postgresql:16` is `postgresql`. */
+const DATABASE_NAME =
+  /^(?:postgres(?:ql)?|pgvector|postgis|timescaledb(?:-ha)?|mysql(?:-server)?|mariadb|percona(?:-server(?:-mongodb)?)?|mongo(?:db)?(?:-(?:community|enterprise)-server)?|redis(?:-stack(?:-server)?)?|valkey|keydb|dragonfly|memcached|cockroach|clickhouse(?:-server)?|elasticsearch|opensearch|couchdb|cassandra|scylla|neo4j|influxdb|oracle-(?:free|xe)|arangodb|rethinkdb|surrealdb|questdb)$/i;
+
+function isDatabaseImage(image: string): boolean {
+  // `${DB_IMAGE:-postgres:16}`: the default is what runs unless set otherwise.
+  const chosen = /^\$\{[^}:]*:-([^}]+)\}/.exec(image)?.[1] ?? image;
+  const path = chosen.replace(/[:@][^/]*$/, "").toLowerCase();
+  // SQL Server's image is `mcr.microsoft.com/mssql/server`.
+  return DATABASE_NAME.test(path.split("/").at(-1) ?? "") || /(?:^|\/)mssql\/server$/.test(path);
+}
+/** A port opened only on the machine itself, which the internet cannot reach. */
+const LOOPBACK_ONLY = /^["']?(?:127\.0\.0\.1|localhost|\[::1\]):/;
+/** Files meant for a developer's own machine; they matter only if used on a server. */
+const DEV_COMPOSE = /(?:^|\/)(?:docker-)?compose\.(?:dev|development|local|test|testing|ci)(?:\.[\w-]+)?\.ya?ml$/i;
+
+interface ComposeService {
+  file: SourceFile;
+  name: string;
+  image: string;
+  /** Line index of the first port open to the outside, or -1. */
+  openAt: number;
+  /** The entry that opened it, for the suggested fix. */
+  openEntry: string;
+  /** Line index of `network_mode: host` -- every port the database listens on is open -- or -1. */
+  hostNetwork: number;
+  /** Settings pulled in from elsewhere (`<<:`, `extends:`, `ports: *x`), out of this reader's sight. */
+  indirect: boolean;
+  /** Built from the project's own Dockerfile rather than a named image. */
+  built: boolean;
+}
+
 /**
- * Reads the compose file by indentation rather than with a YAML parser, which
- * this package deliberately has no dependency on. Service blocks are two spaces
- * in and their keys four, so a `ports:` belonging to the database is
- * unambiguous without parsing the whole document.
+ * Shared blocks (`x-base: &base`) that could change how a service is reached.
+ * A block that sets only things like restart rules or memory limits cannot
+ * open a port, so merging it in (`<<: *base`) hides nothing.
+ */
+function riskyAnchors(lines: string[]): Set<string> {
+  const risky = new Set<string>();
+  for (const [index, line] of lines.entries()) {
+    const anchor = /^(\s*)[\w.-]+:\s*&([\w-]+)\s*$/.exec(line);
+    if (!anchor) continue;
+    const depth = anchor[1]!.length;
+    for (const next of lines.slice(index + 1)) {
+      if (next.trim() === "" || next.trim().startsWith("#")) continue;
+      if (next.length - next.trimStart().length <= depth) break;
+      if (/^\s*(?:ports|image|network_mode|<<|extends):/.test(next)) risky.add(anchor[2]!);
+    }
+  }
+  return risky;
+}
+
+/**
+ * Reads one compose file by indentation rather than with a YAML parser, which
+ * this package deliberately has no dependency on. It assumes the usual shape:
+ * services two spaces in under `services:`, their keys four. A file shaped
+ * otherwise is reported as unreadable rather than guessed at.
+ */
+function composeServices(file: SourceFile): { services: ComposeService[]; unreadable: boolean } {
+  const lines = file.content.split(/\r?\n/);
+  const risky = riskyAnchors(lines);
+  const services: ComposeService[] = [];
+  let section = "";
+  let current: ComposeService | null = null;
+  let inPorts = false;
+  let longEntry: { at: number; text: string; loopback: boolean } | null = null;
+  let sawServiceContent = false;
+  let shapeUnread = false;
+
+  const open = (at: number, entry: string) => {
+    if (current && current.openAt === -1) {
+      current.openAt = at;
+      current.openEntry = entry;
+    }
+  };
+  const endLongEntry = () => {
+    if (longEntry && !longEntry.loopback) open(longEntry.at, longEntry.text);
+    longEntry = null;
+  };
+
+  for (const [index, line] of lines.entries()) {
+    if (line.trim() === "" || line.trim().startsWith("#")) continue;
+    const indent = line.length - line.trimStart().length;
+    const text = line.trim().replace(/\s+#.*$/, "");
+
+    if (indent === 0) {
+      endLongEntry();
+      inPorts = false;
+      current = null;
+      section = /^([\w.-]+):/.exec(text)?.[1] ?? "";
+      // Other compose files pulled in by name, which may not be read here.
+      if (section === "include") shapeUnread = true;
+      continue;
+    }
+    if (section !== "services") continue;
+    sawServiceContent = true;
+
+    if (indent === 2) {
+      endLongEntry();
+      inPorts = false;
+      // `db:`, `"db":`, or `db: &db` (an anchor, to reuse the service).
+      const name = /^["']?([A-Za-z0-9_.-]+)["']?:(?:\s*&[\w-]+)?$/.exec(text)?.[1];
+      // Anything else here (`db: {image: ..., ports: [...]}`) is not read.
+      if (!name) shapeUnread = true;
+      current = name
+        ? { file, name, image: "", openAt: -1, openEntry: "", hostNetwork: -1, indirect: false, built: false }
+        : null;
+      if (current) services.push(current);
+      continue;
+    }
+    if (!current) continue;
+
+    if (inPorts && indent >= 4 && text.startsWith("-")) {
+      endLongEntry();
+      const entry = text.replace(/^-\s*/, "");
+      if (/^[\w-]+:\s/.test(entry)) longEntry = { at: index, text: entry, loopback: false };
+      else if (!LOOPBACK_ONLY.test(entry)) open(index, entry);
+      continue;
+    }
+    if (inPorts && indent > 4) {
+      // A line inside a long-form entry: only `host_ip` changes where it opens.
+      if (longEntry && /^host_ip:\s*["']?(?:127\.0\.0\.1|localhost|::1)["']?$/.test(text)) longEntry.loopback = true;
+      continue;
+    }
+    if (indent === 4) {
+      endLongEntry();
+      inPorts = false;
+      const image = /^image:\s*["']?([^\s"']+)/.exec(text);
+      if (image) current.image = image[1]!;
+      if (/^network_mode:\s*["']?host\b/.test(text)) current.hostNetwork = index;
+      // Sharing another service's network: its ports are this one's.
+      if (/^network_mode:\s*["']?(?:service|container):/.test(text)) current.indirect = true;
+      if (/^build:/.test(text)) current.built = true;
+      const merged = /^<<:\s*(.*)$/.exec(text);
+      if (merged) {
+        // `<<: *base` or `<<: [*a, *b]`: only blocks that touch ports or images matter.
+        const names = [...merged[1]!.matchAll(/\*([\w-]+)/g)].map((m) => m[1]!);
+        if (names.length === 0 || names.some((n) => risky.has(n) || !lines.some((l) => new RegExp(`&${n}\\s*$`).test(l)))) current.indirect = true;
+      }
+      if (/^extends:/.test(text) || /^ports:\s*\*/.test(text)) current.indirect = true;
+      if (/^ports:$/.test(text)) inPorts = true;
+      const inline = /^ports:\s*\[(.*)\]$/.exec(text);
+      if (inline) {
+        const entries = inline[1]!.split(",").map((e) => e.trim()).filter(Boolean);
+        const public_ = entries.find((e) => !LOOPBACK_ONLY.test(e));
+        if (public_) open(index, public_);
+      } else if (/^ports:\s*\[/.test(text)) {
+        current.indirect = true; // A one-line list spread over several lines.
+      }
+    }
+  }
+  endLongEntry();
+  // `services:` with content but no service two spaces in: not the shape read here.
+  const oldFormat = !/^services:/m.test(file.content) && /^ {2}image:/m.test(file.content);
+  return { services, unreadable: oldFormat || shapeUnread || (sawServiceContent && services.length === 0) };
+}
+
+/**
+ * A database service in a compose file that publishes a port is reachable
+ * from outside the server (on Linux, Docker opens it past the firewall).
+ *
+ * Every compose file is read, because Docker merges them: an override can
+ * open a port on a database whose image is named only in the main file of the
+ * same folder.
  */
 const exposedServices: ProjectCheck = {
   id: "compose:no-public-database",
   itemId: "config/exposed-services",
 
   run(snapshot) {
-    const compose = fileNamed(snapshot, /(^|\/)docker-compose\.ya?ml$/);
-    if (!compose) {
+    const files = snapshot.files.filter((f) => COMPOSE.test(f.path) && !isTestPath(f.path));
+    const unreadCompose = snapshot.incomplete || (snapshot.unread ?? []).some((p) => COMPOSE.test(p));
+    if (files.length === 0) {
       return {
         status: "not-applicable",
-        reason: "This project has no docker-compose setup file, so how the database is reached could not be seen. If your database is hosted somewhere, check in its settings that only your app can connect to it.",
+        reason: unreadCompose
+          ? "This project's Docker Compose setup files could not be read, so how the database is reached could not be seen. Check that none of them opens a database to the outside world, and that a hosted database only lets your app connect."
+          : "This project has no Docker Compose setup file (compose.yaml or docker-compose.yml), so how the database is reached could not be seen. If your database is hosted somewhere, check in its settings that only your app can connect to it.",
       };
     }
 
-    const lines = compose.content.split(/\r?\n/);
+    const read = files.map(composeServices);
+    const services = read.flatMap((r) => r.services);
+    const folder = (path: string) => path.replace(/[^/]*$/, "");
+    // Docker merges files in one folder; a service of the same name elsewhere is another project.
+    const imageOf = (s: ComposeService) =>
+      s.image || services.find((o) => o.name === s.name && o.image && folder(o.file.path) === folder(s.file.path))?.image || "";
+
     const risks: Risk[] = [];
-
-    let service: string | null = null;
-    let image = "";
-    let publishes = -1;
-
-    const settle = (): void => {
-      if (service && /postgres|mysql|mariadb|mongo|redis/i.test(image) && publishes !== -1) {
-        risks.push(
-          risk(
-            "check/exposed-database",
-            "high",
-            `Your setup file (${compose.path}) opens the "${service}" database to the outside world.`,
-            "Your database can be reached from outside your app. Databases are constantly searched for on the internet, and a weak or default password is enough to lose everything in it. Nothing outside your own app needs to reach it.",
-            "Remove the line that opens the database to the outside. Your app can still reach it; only the rest of the internet loses access.",
-            { path: compose.path, line: publishes + 1, excerpt: lines[publishes]!.trim() },
-            `Delete the "ports:" entry from the "${service}" service in ${compose.path}. Other services in the same compose file still reach it by name.`,
-          ),
-        );
-      }
-    };
-
-    for (const [index, line] of lines.entries()) {
-      const serviceStart = /^ {2}([A-Za-z0-9_-]+):\s*$/.exec(line);
-
-      if (serviceStart) {
-        settle();
-        service = serviceStart[1]!;
-        image = "";
-        publishes = -1;
-        continue;
-      }
-      if (!service) continue;
-
-      const imageLine = /^ {4}image:\s*(\S+)/.exec(line);
-      if (imageLine) image = imageLine[1]!;
-      if (/^ {4}ports:\s*$/.test(line)) publishes = index;
+    let indirect: ComposeService | undefined;
+    for (const s of services) {
+      const image = imageOf(s);
+      if (s.indirect && (isDatabaseImage(image) || (!image && !s.built))) indirect ??= s;
+      if (!isDatabaseImage(image) || (s.openAt === -1 && s.hostNetwork === -1)) continue;
+      const dev = DEV_COMPOSE.test(s.file.path);
+      const lines = s.file.content.split(/\r?\n/);
+      const at = s.openAt !== -1 ? s.openAt : s.hostNetwork;
+      const entry = s.openEntry.replace(/^["']?(?:\d{1,3}(?:\.\d{1,3}){3}|\[[^\]]*\]):/, "").replace(/["']/g, "");
+      // A bare container port (`"5432"`) needs the host port written out too.
+      const bound = /^[^:]+$/.test(entry) ? `127.0.0.1:${entry}:${entry}` : `127.0.0.1:${entry}`;
+      const longForm = /^[\w-]+:\s/.test(s.openEntry);
+      risks.push(
+        risk(
+          "check/exposed-database",
+          dev ? "medium" : "high",
+          `Your setup file (${s.file.path}) opens the "${s.name}" database to the outside world.${dev ? " It looks like a file for development, so this matters if it is ever used on a server." : ""}`,
+          "Your database can be reached from outside your app. Databases are constantly searched for on the internet, and a weak or default password is enough to lose everything in it. Nothing outside your own app needs to reach it.",
+          "Remove the line that opens the database to the outside. Your app can still reach it; only the rest of the internet loses access.",
+          { path: s.file.path, line: at + 1, excerpt: redact(lines[at]?.trim() ?? "") },
+          s.openAt === -1
+            ? `Remove \`network_mode: host\` from the "${s.name}" service in ${s.file.path}; other services in the same compose setup reach it by name.`
+            : longForm
+            ? `Delete the "ports:" entry from the "${s.name}" service in ${s.file.path}, or add \`host_ip: 127.0.0.1\` to it so it opens on this machine only. Other services in the same compose setup still reach it by name.`
+            : `Delete the "ports:" entry from the "${s.name}" service in ${s.file.path}, or bind it to this machine only ("${bound}"). Other services in the same compose setup still reach it by name.`,
+        ),
+      );
     }
-    settle();
+    if (risks.length > 0) return { status: "risks", risks };
 
-    return risks.length > 0 ? { status: "risks", risks } : { status: "pass" };
+    const unreadable = read.findIndex((r) => r.unreadable);
+    if (unreadable !== -1 || indirect || unreadCompose) {
+      const where = indirect ? indirect.file.path : unreadable !== -1 ? files[unreadable]!.path : "some of its compose files";
+      return {
+        status: "not-applicable",
+        reason: `The database settings in ${where} are written in a way this check can't follow (settings pulled in from elsewhere, an unusual layout, or a file that could not be read). Confirm none of them opens a database to the outside world.`,
+      };
+    }
+    return { status: "pass" };
   },
 };
 
