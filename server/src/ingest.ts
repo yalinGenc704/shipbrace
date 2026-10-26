@@ -87,7 +87,7 @@ const GIT_OVERRIDES = [
   "-c", "protocol.allow=never",
 ];
 
-function trackedFiles(directory: string): { tracked: Set<string>; isRepository: boolean } {
+function trackedFiles(directory: string): { tracked: Set<string>; project: Set<string>; isRepository: boolean } {
   const result = spawnSync("git", [...GIT_OVERRIDES, "ls-files", "-z"], {
     cwd: directory,
     encoding: "utf8",
@@ -98,10 +98,24 @@ function trackedFiles(directory: string): { tracked: Set<string>; isRepository: 
   });
 
   if (result.status !== 0 || typeof result.stdout !== "string") {
-    return { tracked: new Set(), isRepository: false };
+    return { tracked: new Set(), project: new Set(), isRepository: false };
   }
+  // Files not yet added to git but not ignored either are part of the
+  // project too; only what git ignores is left out.
+  const untracked = spawnSync("git", [...GIT_OVERRIDES, "ls-files", "-z", "--others", "--exclude-standard"], {
+    cwd: directory,
+    encoding: "utf8",
+    timeout: 10_000,
+    maxBuffer: 16 * 1024 * 1024,
+    shell: false,
+    env: { PATH: process.env.PATH ?? "/usr/bin:/bin", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0" },
+  });
   return {
     tracked: new Set(result.stdout.split("\0").filter(Boolean)),
+    project: new Set([
+      ...result.stdout.split("\0"),
+      ...(untracked.status === 0 && typeof untracked.stdout === "string" ? untracked.stdout.split("\0") : []),
+    ].filter(Boolean)),
     isRepository: true,
   };
 }
@@ -119,6 +133,8 @@ export async function ingest(
 
   const files: Array<{ path: string; content: string }> = [];
   const skipped = { binaryOrUnknown: 0, tooLarge: 0, overLimit: 0 };
+  const unread: string[] = [];
+  const pathOf = (absolute: string) => relative(directory, absolute).split(sep).join("/");
   let totalBytes = 0;
 
   async function walk(current: string): Promise<void> {
@@ -143,6 +159,7 @@ export async function ingest(
 
       if (!wanted(entry.name)) {
         skipped.binaryOrUnknown++;
+        unread.push(pathOf(absolute));
         continue;
       }
 
@@ -152,6 +169,7 @@ export async function ingest(
         : limits.maxFileBytes;
       if (size > cap) {
         skipped.tooLarge++;
+        unread.push(pathOf(absolute));
         continue;
       }
 
@@ -161,20 +179,22 @@ export async function ingest(
         continue;
       }
 
-      files.push({
-        path: relative(directory, absolute).split(sep).join("/"),
-        content: buffer.toString("utf8"),
-      });
+      files.push({ path: pathOf(absolute), content: buffer.toString("utf8") });
       totalBytes += size;
     }
   }
 
   await walk(directory);
 
-  const { tracked, isRepository } = trackedFiles(directory);
+  const { tracked, project, isRepository } = trackedFiles(directory);
 
   return {
-    snapshot: snapshotFromFiles(files, tracked),
+    // In a git repository, files git ignores (local settings, caches) are not
+    // part of the project, so not reading them hides nothing.
+    snapshot: snapshotFromFiles(files, tracked, {
+      unread: isRepository ? unread.filter((path) => project.has(path)) : unread,
+      incomplete: skipped.overLimit > 0,
+    }),
     skipped,
     root: directory,
     fileCount: files.length,

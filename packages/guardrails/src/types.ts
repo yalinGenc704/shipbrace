@@ -34,6 +34,14 @@ export interface RepoSnapshot {
   manifests: Map<string, Record<string, unknown>>;
   /** Set of repo-relative paths tracked by git, for .gitignore-awareness. */
   tracked: ReadonlySet<string>;
+  /**
+   * Files that exist but were not read: a type the reader does not read
+   * (Python, Vue, a Jenkinsfile), or too large. What they hold is out of
+   * sight, so nothing may be called absent on the strength of not finding it.
+   */
+  unread?: readonly string[];
+  /** Some files were never even listed: the repository was over a limit. */
+  incomplete?: boolean;
 }
 
 export interface CodeLocation {

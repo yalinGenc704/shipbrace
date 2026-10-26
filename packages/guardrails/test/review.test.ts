@@ -176,17 +176,19 @@ test("the SQL risk lands in the injection module", async () => {
   assert.equal(item?.risks[0]?.grade, "high");
 });
 
-test("human-judgement items are surfaced for review, not silently passed", async () => {
+test("human-judgement items are surfaced on the checklist, not silently passed", async () => {
   const review = await runSecurityReview(snap("server/src/a.ts", VALIDATED));
   const design = review.modules.find((m) => m.id === "insecure-design");
   const manual = design?.items.filter((i) => i.detector === null) ?? [];
 
   assert.ok(manual.length > 0);
   for (const item of manual) {
-    assert.equal(item.status, "needs-your-review");
+    // General questions: kept apart from "Needs your check", which is only
+    // about this code, and never a pass.
+    assert.equal(item.status, "checklist");
     assert.ok((item.question?.length ?? 0) > 30);
   }
-  assert.ok(review.summary.awaitingReview > 0);
+  assert.ok((review.summary.checklist ?? 0) > 0);
 });
 
 test("unverified proposals are never counted as risks", () => {

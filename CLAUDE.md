@@ -75,7 +75,7 @@ everywhere:
 # PostgreSQL 18 (Homebrew, not started at login). Databases: shipbrace, shipbrace_test.
 LC_ALL=en_US.UTF-8 /opt/homebrew/opt/postgresql@18/bin/pg_ctl -D /opt/homebrew/var/postgresql@18 -l /opt/homebrew/var/log/postgresql@18.log start
 
-# all tests (expect 322 pass). Without TEST_DATABASE_URL the 6 database tests
+# all tests (expect 347 pass). Without TEST_DATABASE_URL the 6 database tests
 # are skipped and say so; it must name a database ending in _test (it is wiped).
 # CI (.github/workflows/ci.yml) runs typecheck, lint, tests and build on every push.
 TEST_DATABASE_URL=postgres:///shipbrace_test npm test
@@ -128,7 +128,24 @@ the server with the AI step, start it with an extra `--env-file` that sets
   "Doesn't apply" (status `does-not-apply`, never a pass, out of every count):
   only when the thing checked is clearly not in the project. Where it could
   exist out of the check's sight (unknown framework, unusual address, a
-  library the check does not know), do not set `absent`.
+  library the check does not know), do not set `absent`. Files the reader
+  skips (types not in `READABLE` in `server/src/files.ts`, too large, over
+  the limit) are out of sight too: `snapshot.unread`/`incomplete` and
+  `outOfSight()` in `review/project-files.ts` block the checklist
+  questions' `absent`, and the password, upload and scripts ones, while any
+  of them could hold the evidence. Older absents (session expiry, CSRF,
+  Supabase, Dockerfile) do not consult it yet.
+- **Your checklist (2026-10-25).** An item with no detector, or a
+  not-applicable outcome marked `general: true`, has status `checklist`:
+  a good-practice question, counted in `summary.checklist`, apart from
+  `awaitingReview`, never a pass, and not holding a module back from
+  "clear". "Needs your check" is only about this code: leads, and checks
+  that could not run here. A question with no detector is marked absent
+  only through `applicability` in `review/checks.ts` (passwords, accounts),
+  which runs after the project checks and never overrides them. The
+  private-network and build-steps questions are never skipped: no list of
+  ways to send a request is complete, and hosting services build sites
+  with no file in the repository.
 - **Only proof is a risk.** Anything styled as a risk must be traced or be the
   problem itself. Unproven pattern hits are leads (`unproven`), never risks.
 - **No warnings on correct code.** Several fixed bugs were warnings about code
@@ -137,8 +154,8 @@ the server with the AI step, start it with an extra `--env-file` that sets
 - **Precision over coverage.** Missing a real path is a gap; inventing one is a
   defect. When in doubt, return `undecidable`, never `valid` and never "safe".
 - **Text about code is not code (2026-10-25).** A pattern that looks for a
-  danger runs on `codeOnly(file)` (`analysis/ast.ts`): comments and quoted
-  text holding a space are blanked, single-word strings (package names,
+  danger runs on `codeOnly(file)` (`analysis/ast.ts`): comments, quoted
+  text holding a space, and regular-expression patterns are blanked, single-word strings (package names,
   `'md5'`, header names) are kept. Use `codeHits` in `rules/auth.ts` and
   `anyCodeMatch`/`codeLineOf` in `review/checks.ts`. A pattern that looks for
   a protection keeps reading the whole file (`anyMatch`), so a mention of one
@@ -443,6 +460,17 @@ the server with the AI step, start it with an extra `--env-file` that sets
   in the checker that day: a fetch whose *public* origin is fixed in the code
   is not request forgery (internal hosts still are), and `/webhook(s)`,
   `/callback`, `/oauth` routes are public by design.
+- **Code from other websites (2026-10-25, `pages:script-integrity`).** Page
+  files (html and template types, jsx/tsx) are read for script and
+  stylesheet tags. An outside address without the tag's own
+  `integrity="sha…"` is a low risk that may be intended (the risk names
+  only the host). Services that ask not to be locked (Google Fonts, Stripe,
+  reCAPTCHA, Turnstile…) are a notice. A placeholder or expression address,
+  an import map, an import from a web address, head settings in code or
+  scripts added at run time hand the item back. Pass only when every
+  address is the site's own or locked. The reader also reads `.jsonc` and
+  `.json5` now, and the CSRF check counts `Set-Cookie` headers and
+  `SameSite=Lax/Strict` in them.
 - **Self-review (2026-10-25, from the dashboard):** 13 "needs fixing", 2
   were package warnings (see `CLAUDE.local.md`). The other 11 and 8 of 9 query notes came from reading
   text about code as code; fixed the same day (see "Text about code is not

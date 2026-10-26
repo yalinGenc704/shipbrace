@@ -23,6 +23,9 @@ import { createSandbox, ReviewStoppedError, type Review } from "./sandbox.ts";
 export interface ReviewRequest {
   files: Array<{ path: string; content: string }>;
   tracked: string[];
+  /** Files that exist but were not read; see `RepoSnapshot.unread`. */
+  unread?: string[];
+  incomplete?: boolean;
   proposer?: { name: string };
   vulnerabilities?: { notice: string };
 }
@@ -64,7 +67,11 @@ export async function handleReview(request: ReviewRequest, review: Review): Prom
     } satisfies VulnerabilitySource;
   }
   try {
-    const result = await review(snapshotFromFiles(request.files, request.tracked), options);
+    const sight = {
+      ...(Array.isArray(request.unread) ? { unread: request.unread.filter((p): p is string => typeof p === "string") } : {}),
+      ...(request.incomplete === true ? { incomplete: true } : {}),
+    };
+    const result = await review(snapshotFromFiles(request.files, request.tracked, sight), options);
     return { type: "done", result };
   } catch (error) {
     return error instanceof ReviewStoppedError ? { type: "stopped", reason: error.reason } : { type: "failed" };

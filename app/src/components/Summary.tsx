@@ -18,12 +18,15 @@ export function Summary({
   mode,
   onModeChange,
   outstandingReviews,
+  checklist,
   live,
 }: {
   review: ReviewResult;
   mode: Mode;
   onModeChange: (mode: Mode) => void;
   outstandingReviews: number;
+  /** General good-practice questions, and how many the reader has ticked. */
+  checklist: { ticked: number; total: number };
   /** Risks still to fix: everything except those the reader marked as intended. */
   live: Risk[];
 }) {
@@ -37,12 +40,15 @@ export function Summary({
         <div className="min-w-0">
           <h1 className="text-xl font-semibold text-ink sm:text-2xl">Security review</h1>
           <p className="mt-1.5 max-w-xl text-sm leading-relaxed text-ink-soft">
-            {headline(total, high, outstandingReviews)}
+            {headline(total, high, outstandingReviews, checklist.total - checklist.ticked)}
           </p>
 
           <dl className="mt-4 flex flex-wrap gap-x-6 gap-y-2">
             <Stat label="Need fixing" value={total} tone={high > 0 ? "danger" : "ok"} />
             <Stat label="Needs your check" value={outstandingReviews} tone="review" />
+            {checklist.total > 0 && (
+              <Stat label="Your checklist" value={`${checklist.ticked} of ${checklist.total}`} tone="muted" />
+            )}
             <Stat label="Modules clear" value={`${review.summary.clear}/10`} tone="ok" />
           </dl>
         </div>
@@ -117,14 +123,19 @@ export function Summary({
  * checked, and 22 of the 31 items are still the user's to judge -- a headline
  * implying otherwise would be the most harmful sentence on the page.
  */
-function headline(total: number, high: number, outstanding: number): string {
-  if (total === 0 && outstanding === 0) {
+function headline(total: number, high: number, outstanding: number, checklistLeft: number): string {
+  if (total === 0 && outstanding === 0 && checklistLeft === 0) {
     return "Every automated check passed and you have worked through the whole checklist.";
+  }
+  if (total === 0 && outstanding === 0) {
+    return `No problems were found, and nothing in your code needs your check. ${checklistLeft} good-practice question${
+      checklistLeft === 1 ? " is" : "s are"
+    } left on your checklist.`;
   }
   if (total === 0) {
     return `No problems were found by the automated checks. ${outstanding} item${
       outstanding === 1 ? "" : "s"
-    } still need${outstanding === 1 ? "s" : ""} your judgement -- they cannot be checked automatically.`;
+    } in your code still need${outstanding === 1 ? "s" : ""} your judgement -- they cannot be checked automatically.`;
   }
   return `${total} problem${total === 1 ? "" : "s"} found${
     high > 0 ? `, ${high} of them serious` : ""
@@ -135,6 +146,7 @@ const TONE = {
   danger: "text-danger",
   review: "text-review",
   ok: "text-ok",
+  muted: "text-ink",
 } as const;
 
 function Stat({

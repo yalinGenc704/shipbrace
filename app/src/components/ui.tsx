@@ -1,5 +1,5 @@
 import type { Grade, ItemStatus } from "@shipbrace/guardrails";
-import { AlertTriangle, Check, CircleHelp, CircleSlash, Loader2, ShieldCheck } from "lucide-react";
+import { AlertTriangle, Check, CircleHelp, CircleSlash, ListChecks, Loader2, ShieldCheck } from "lucide-react";
 import type { ReactNode } from "react";
 
 /**
@@ -7,6 +7,7 @@ import type { ReactNode } from "react";
  *
  * Note the deliberate asymmetry: a failed check says what to do ("Needs
  * fixing"), an unchecked item says whose job it is ("Needs your check"), a
+ * general good-practice question says it belongs to every app ("Checklist"), a
  * passed check names the thing that checked it, and an item about something
  * the app does not have says so ("Doesn't apply") without looking like a pass. Nothing says "secure" -- no scanner
  * can promise that, and a badge that implies it would be the most damaging
@@ -22,6 +23,11 @@ const STATUS: Record<ItemStatus, { label: string; className: string; icon: React
     label: "Needs your check",
     className: "bg-review-bg text-review",
     icon: <CircleHelp className="size-3.5" aria-hidden />,
+  },
+  checklist: {
+    label: "Checklist",
+    className: "bg-surface text-ink-soft",
+    icon: <ListChecks className="size-3.5" aria-hidden />,
   },
   pass: {
     label: "Checked",

@@ -6,7 +6,7 @@ import type { Mode } from "../lib/review.ts";
 import { loadReview } from "../lib/review.ts";
 import { useReviewed } from "../lib/reviewed.ts";
 import { Home } from "./Home.tsx";
-import { liveRisks, ModuleCard } from "./ModuleCard.tsx";
+import { checklistKey, liveRisks, ModuleCard } from "./ModuleCard.tsx";
 import { Loading, StatusPill } from "./ui.tsx";
 import { Summary } from "./Summary.tsx";
 
@@ -39,9 +39,10 @@ export function ReviewView({ review, context }: { review: ReviewResult; context?
   const [mode, setMode] = useState<Mode>("essentials");
   const reviewed = useReviewed();
 
-  const outstanding = review.modules
-    .flatMap((m) => m.items)
-    .filter((i) => i.status === "needs-your-review" && !reviewed.isReviewed(i.id)).length;
+  const items = review.modules.flatMap((m) => m.items);
+  const outstanding = items.filter((i) => i.status === "needs-your-review" && !reviewed.isReviewed(i.id)).length;
+  const checklist = items.filter((i) => i.status === "checklist");
+  const checklistTicked = checklist.filter((i) => reviewed.isReviewed(checklistKey(i))).length;
   // Risks the reader marked as intended no longer count as needing a fix.
   const live = review.modules.flatMap((m) => liveRisks(m, reviewed));
 
@@ -70,6 +71,7 @@ export function ReviewView({ review, context }: { review: ReviewResult; context?
         mode={mode}
         onModeChange={setMode}
         outstandingReviews={outstanding}
+        checklist={{ ticked: checklistTicked, total: checklist.length }}
         live={live}
       />
 

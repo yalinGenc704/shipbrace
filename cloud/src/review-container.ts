@@ -41,6 +41,10 @@ export async function reviewInContainer(
   const request: ReviewRequest = {
     files: snapshot.files.map(({ path, content }) => ({ path, content })),
     tracked: [...snapshot.tracked],
+    // Only whether something went unread matters, and one name to quote;
+    // a repository full of unread files should not swell the request.
+    ...(snapshot.unread ? { unread: snapshot.unread.slice(0, 500) } : {}),
+    ...(snapshot.incomplete ? { incomplete: true } : {}),
     ...(useAi ? { proposer: { name: "claude" } } : {}),
     ...(useLookup ? { vulnerabilities: { notice: OSV_NOTICE } } : {}),
   };

@@ -1,7 +1,7 @@
 import { codeOnly, codeOnlyLines, dottedName, locationOf, parseFile, walk, type Node } from "../analysis/ast.ts";
 import type { Inventory } from "../analysis/inventory.ts";
 import { modelFields } from "../analysis/schemas.ts";
-import { fileChecks } from "./project-files.ts";
+import { dependencyNames, fileChecks, outOfSight } from "./project-files.ts";
 import type { CodeLocation, RepoSnapshot, SourceFile } from "../types.ts";
 import { isSource, isTestPath, redact } from "../util.ts";
 import { pageName, upperFirst, type Grade, type Risk } from "./modules.ts";
@@ -37,6 +37,13 @@ export type CheckOutcome =
      * shows as "Doesn't apply here" -- still never a pass.
      */
     absent?: boolean;
+    /**
+     * The check found nothing of its own to judge, so what is left is a
+     * general question rather than something about this code: no pages
+     * named "admin" leaves "do admin pages check for admins?". The item goes
+     * on the user's checklist instead of "Needs your check".
+     */
+    general?: boolean;
   };
 
 export interface ProjectCheck {
@@ -55,6 +62,50 @@ export interface ProjectCheck {
  * the specific detectors know a few libraries, and many others exist.
  */
 const SIGN_IN_HINT = /\b(?:password|passwd|login|log_in|signin|sign_in|session|cookies?|auth\w*|jwt|token)\b/i;
+
+/**
+ * Any sign of a password, in any language the target users write in, or of
+ * the tools that check one. Generous on purpose: a word in a comment keeps
+ * the password questions, which is the safe way to be wrong.
+ */
+/** A cookie being set by writing the header itself: `c.header("Set-Cookie", ...)`. */
+const SETS_COOKIE = /\.(?:header|set|append|setHeader|writeHead)\s*\(\s*["'`]set-cookie["'`]\s*,|["'`]set-cookie["'`]\s*:\s*[^\]\s]/i;
+
+/** Where the app sets its sign-in cookie, for pointing at it. */
+function cookieLine(files: SourceFile[]): CodeLocation {
+  const plain = /session\s*\(|setCookie|res\.cookie/;
+  const file = files.find((f) => plain.test(codeOnly(f))) ?? files.find((f) => SETS_COOKIE.test(codeOnly(f))) ?? files[0]!;
+  return plain.test(codeOnly(file)) ? codeLineOf(file, plain) : codeLineOf(file, SETS_COOKIE);
+}
+
+const PASSWORD_WORD = /pass(?:word|wd|phrase)|\bpass\s*[,}:=)]|passwort|\bpwd\b|\bpw\b|s[iı]fre|contrase|senha|mot.?de.?passe|scrypt|pbkdf2|bcrypt|argon2|type\s*=\s*["']?password/i;
+const PASSWORD_PACKAGES = /^(?:bcrypt|bcryptjs|argon2|@node-rs\/(?:argon2|bcrypt)|passport-local|scrypt-js)$/;
+
+/**
+ * Whether anything in the project could be handling passwords. Read
+ * generously on purpose -- comments, messages and schema files all count --
+ * because "doesn't apply" is only said when passwords are clearly absent.
+ */
+function mentionsPasswords(snapshot: RepoSnapshot): boolean {
+  const readable = snapshot.files.filter((f) =>
+    !isTestPath(f.path) && (isSource(f.path) || /\.(?:sql|prisma|graphql|gql|html|vue|svelte|ejs|hbs|pug)$/i.test(f.path))
+  );
+  return readable.some((f) => PASSWORD_WORD.test(f.content)) ||
+    dependencyNames(snapshot).some((name) => PASSWORD_PACKAGES.test(name)) ||
+    // What could not be read could hold one.
+    outOfSight(snapshot) !== undefined;
+}
+
+/**
+ * Any sign the app tells people or callers apart: sign-in, sessions, API
+ * keys, a current user, tenants. Broader than SIGN_IN_HINT, because "no
+ * accounts at all" is a stronger thing to say.
+ */
+const ACCOUNT_HINT = /\b(?:password|passwd|login|log_?in|sign_?in\w*|session|cookies?|auth\w*|jwt|token|api[-_]?keys?|bearer)\b|SignIn\w*|currentUser|req\.user|user_?id|userId|tenant|clerk|supabase\.auth|getServerSession|x-api-key/i;
+
+const hasAccounts = (snapshot: RepoSnapshot): boolean =>
+  outOfSight(snapshot) !== undefined ||
+  snapshot.files.some((f) => !isTestPath(f.path) && ACCOUNT_HINT.test(f.content));
 
 const sourceFiles = (snapshot: RepoSnapshot): SourceFile[] =>
   snapshot.files.filter((f) => isSource(f.path) && !isTestPath(f.path));
@@ -538,12 +589,8 @@ const passwordStorage: ProjectCheck = {
     const files = sourceFiles(snapshot);
     const passwordWord = /\bpassword\w*\b/i;
 
-    if (!anyMatch(files, passwordWord)) {
-      return {
-        status: "not-applicable",
-        reason: "This app doesn't seem to handle passwords.",
-        absent: true,
-      };
+    if (!mentionsPasswords(snapshot)) {
+      return { status: "not-applicable", reason: NO_PASSWORDS, absent: true };
     }
     // Only in messages or comments: could be anything, so it goes back to the
     // user rather than becoming an alarm about how passwords are stored.
@@ -811,7 +858,8 @@ const csrfProtection: ProjectCheck = {
     }
 
     // The browser sends cookies along automatically; that is what makes this possible.
-    const cookieLogin = anyCodeMatch(files, /\b(?:express-session|cookie-session)\b|\b(?:session|cookieSession)\s*\(\s*\{|\bsetCookie\s*\(|res\.cookie\s*\(/);
+    const cookieLogin = anyCodeMatch(files, /\b(?:express-session|cookie-session)\b|\b(?:session|cookieSession)\s*\(\s*\{|\bsetCookie\s*\(|res\.cookie\s*\(/) ||
+      anyCodeMatch(files, SETS_COOKIE);
     if (!cookieLogin) {
       return {
         status: "not-applicable",
@@ -822,7 +870,7 @@ const csrfProtection: ProjectCheck = {
 
     const protectedBy =
       anyMatch(files, /\b(?:csurf|lusca\.csrf|csrf\s*\(|doubleCsrf|csrfSync)\b|from\s+["']hono\/csrf["']/) ||
-      anyMatch(files, /sameSite\s*:\s*["'`](?:strict|lax)["'`]/i);
+      anyMatch(files, /sameSite\s*:\s*["'`](?:strict|lax)["'`]|SameSite=(?:Strict|Lax)\b/i);
     if (protectedBy) return { status: "pass" };
 
     return {
@@ -834,7 +882,7 @@ const csrfProtection: ProjectCheck = {
           `Your site remembers who is signed in, and ${changes.length} of its actions change things (saving, editing, deleting). Nothing stops another website from secretly triggering them for a signed-in visitor.`,
           "A page on any other site can quietly send an action to yours while your visitor is signed in -- changing their email, placing an order, deleting data. Your site can't tell it apart from the visitor doing it.",
           "Turn on protection against this (often called CSRF protection), and make the sign-in cookie only travel with visits from your own site.",
-          codeLineOf(files.find((f) => /session\s*\(|setCookie|res\.cookie/.test(codeOnly(f))) ?? files[0]!, /session\s*\(|setCookie|res\.cookie/),
+          cookieLine(files),
           "Set the session cookie with `sameSite: \"lax\"` (or \"strict\"), and add CSRF middleware to every route that changes data: `csrf()` from hono/csrf on Hono, or csrf-csrf / csrf-sync on Express.",
         ),
       ],
@@ -863,9 +911,15 @@ const adminOnly: ProjectCheck = {
     // A route whose own address says it is for administrators.
     const adminRoutes = inventory.doors.filter((d) => /(?:^|\/)admin(?:\/|$|[-_])/i.test(d.path));
     if (adminRoutes.length === 0) {
+      if (!hasAccounts(snapshot)) {
+        return { status: "not-applicable", reason: NO_SIGN_IN, absent: true };
+      }
       return {
         status: "not-applicable",
         reason: "No pages with \"admin\" in their address were found. If some pages are meant for administrators only, confirm each one checks that the visitor is one.",
+        // A general reminder only when the app's pages were found at all;
+        // otherwise the page finder may simply have missed them.
+        ...(inventory.doors.length > 0 ? { general: true } : {}),
       };
     }
 
@@ -903,6 +957,9 @@ const passwordHashesSent: ProjectCheck = {
 
   run(snapshot, inventory) {
     const files = sourceFiles(snapshot);
+    if (!mentionsPasswords(snapshot)) {
+      return { status: "not-applicable", reason: NO_PASSWORDS, absent: true };
+    }
     // Only a project whose user records actually carry a password.
     const hasPasswordField = anyCodeMatch(files, /\bpassword\w*\s*:\s*(?:\{|DataTypes|Sequelize|String|text\(|varchar|type\b)/i);
     if (!hasPasswordField) {
@@ -974,6 +1031,47 @@ export const projectChecks: ProjectCheck[] = [
   logsWithoutSecrets,
 ];
 
+// --- Questions that do not apply ---------------------------------------------
+
+const NO_PASSWORDS =
+  "This app doesn't handle passwords itself: no password fields, password packages or mentions of passwords were found. Sign-in, if any, happens through another service.";
+const NO_SIGN_IN = "This app has no sign-in at all, so there are no accounts to keep apart.";
+
+/**
+ * Some checklist questions have no automated check, but can be seen not to
+ * apply: there is nothing to ask about password resets in an app with no
+ * passwords. Each says so only when the code clearly shows it, never on a
+ * guess; otherwise the question stays on the user's checklist.
+ *
+ * Deliberately not here: the private-network and build-steps questions. No
+ * list of ways to send a request is ever complete, and a hosting service can
+ * build and publish a site with no file in the repository saying so.
+ */
+export interface Applicability {
+  id: string;
+  itemId: string;
+  /** The reason the question does not apply, or undefined when it might. */
+  absentBecause: (snapshot: RepoSnapshot, inventory: Inventory) => string | undefined;
+}
+
+export const applicability: Applicability[] = [
+  {
+    id: "applies:passwords",
+    itemId: "auth/brute-force",
+    absentBecause: (snapshot) => (mentionsPasswords(snapshot) ? undefined : NO_PASSWORDS),
+  },
+  {
+    id: "applies:passwords",
+    itemId: "auth/account-recovery",
+    absentBecause: (snapshot) => (mentionsPasswords(snapshot) ? undefined : NO_PASSWORDS),
+  },
+  {
+    id: "applies:sign-in",
+    itemId: "access-control/object-ownership",
+    absentBecause: (snapshot) => (hasAccounts(snapshot) ? undefined : NO_SIGN_IN),
+  },
+];
+
 /**
  * Run every check. A check that throws is recorded as unable to run rather than
  * failing the review -- the same reasoning as the rule engine, and it still
@@ -983,6 +1081,7 @@ export function runProjectChecks(
   snapshot: RepoSnapshot,
   inventory: Inventory,
   checks: ProjectCheck[] = projectChecks,
+  questions: Applicability[] = applicability,
 ): Map<string, CheckOutcome & { detector: string }> {
   const outcomes = new Map<string, CheckOutcome & { detector: string }>();
 
@@ -997,6 +1096,17 @@ export function runProjectChecks(
         }`,
         detector: check.id,
       });
+    }
+  }
+  // A question that cannot be seen not to apply -- or whose test fails --
+  // simply stays on the checklist.
+  for (const question of questions) {
+    if (outcomes.has(question.itemId)) continue;
+    try {
+      const reason = question.absentBecause(snapshot, inventory);
+      if (reason) outcomes.set(question.itemId, { status: "not-applicable", reason, absent: true, detector: question.id });
+    } catch {
+      // Left on the checklist.
     }
   }
   return outcomes;

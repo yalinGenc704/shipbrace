@@ -29,7 +29,7 @@ export const SKIP_DIR =
   /^(node_modules|\.git|dist|build|coverage|\.next|\.turbo|\.cache|vendor|__pycache__)$/;
 
 /** Only text formats the rules and the oracle can actually reason about. */
-const READABLE = /\.(?:[cm]?[jt]sx?|json|ya?ml|toml|md|sql|sh|env[\w.]*|dockerfile|txt|ejs|hbs|handlebars|pug|njk|swig|html|prisma)$/i;
+const READABLE = /\.(?:[cm]?[jt]sx?|jsonc?|json5|ya?ml|toml|md|sql|sh|env[\w.]*|dockerfile|txt|ejs|hbs|handlebars|pug|njk|swig|html|prisma)$/i;
 const NAMED = /^(?:Dockerfile|docker-compose\.ya?ml|\.env[\w.]*|\.gitignore|.*\.lock|bun\.lockb?)$/i;
 
 export const looksBinary = (buffer: Buffer): boolean => buffer.subarray(0, 8192).includes(0);

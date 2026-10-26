@@ -78,8 +78,15 @@ export interface Unproven {
  * project (no Supabase, no passwords). It is not a pass -- nothing was
  * checked -- and it is not something the user must decide either, so it is
  * kept out of both counts and shown with its reason.
+ *
+ * `checklist`: a good-practice question no automated check can answer, asked
+ * of every app it applies to ("does someone see the alerts?"). Not a pass
+ * either, and not something found in this code: it is kept apart from
+ * "Needs your check", which is only about this code (lines worth a look,
+ * checks that could not run here), so a general question never reads as an
+ * unproven problem.
  */
-export type ItemStatus = "pass" | "action-needed" | "needs-your-review" | "does-not-apply";
+export type ItemStatus = "pass" | "action-needed" | "needs-your-review" | "checklist" | "does-not-apply";
 
 export interface ActionItem {
   id: string;
@@ -141,8 +148,13 @@ export interface SecurityReview {
     high: number;
     medium: number;
     low: number;
-    /** Items the user must judge personally. */
+    /** Items about this code the user must judge personally. */
     awaitingReview: number;
+    /**
+     * General good-practice questions, kept apart from `awaitingReview`.
+     * Missing from reviews made before 2026-10-25.
+     */
+    checklist?: number;
     /** Modules with nothing outstanding. */
     clear: number;
     /** Places worth a look, counted apart from risks. */
@@ -703,10 +715,11 @@ const MODULES: ModuleShape[] = [
       },
       {
         id: "integrity/third-party-scripts",
+        covers: "the script and style tags written in your pages and page templates",
         title: "Code loaded from other websites can't be swapped without you noticing",
         question:
           "If your pages load code straight from another website, whoever runs that site can change what runs on yours. Confirm each one is locked to an exact version with a safety check (called subresource integrity), or hosted on your own site.",
-        detector: null,
+        detector: "pages:script-integrity",
       },
       {
         id: "integrity/client-data",
@@ -1094,6 +1107,7 @@ export function buildReview(input: ReviewInput): SecurityReview {
       const outcome = input.checks?.get(item.id);
       const blocked = outcome?.status === "not-applicable" ? outcome.reason : undefined;
       const absent = outcome?.status === "not-applicable" && outcome.absent === true;
+      const general = outcome?.status === "not-applicable" && outcome.general === true;
       const notice = outcome?.notice;
 
       return {
@@ -1108,10 +1122,14 @@ export function buildReview(input: ReviewInput): SecurityReview {
         // An unproven lead is not a pass either: someone has to look at it.
         // "Doesn't apply" is not a pass either: it only says the thing this
         // item is about was not found in the project, with the reason shown.
+        // A general question -- nothing automated answers it, and nothing in
+        // this code was found for it -- goes on the checklist.
         status: risks.length > 0
           ? "action-needed"
           : absent && unproven.length === 0
           ? "does-not-apply"
+          : unproven.length === 0 && ((!item.detector && !blocked) || general)
+          ? "checklist"
           : blocked || !item.detector || unproven.length > 0
           ? "needs-your-review"
           : "pass",
@@ -1138,7 +1156,7 @@ const GRADE_ORDER: Record<Grade, number> = { high: 0, medium: 1, low: 2 };
 const byGrade = (a: Risk, b: Risk): number => GRADE_ORDER[a.grade] - GRADE_ORDER[b.grade];
 
 function summarise(modules: ReviewModule[]): SecurityReview["summary"] {
-  const summary = { high: 0, medium: 0, low: 0, awaitingReview: 0, clear: 0, unproven: 0 };
+  const summary = { high: 0, medium: 0, low: 0, awaitingReview: 0, checklist: 0, clear: 0, unproven: 0 };
 
   for (const module of modules) {
     let outstanding = 0;
@@ -1148,6 +1166,8 @@ function summarise(modules: ReviewModule[]): SecurityReview["summary"] {
         summary.awaitingReview++;
         outstanding++;
       }
+      // A checklist question does not hold a module back from "clear".
+      if (item.status === "checklist") summary.checklist++;
       for (const risk of item.risks) {
         summary[risk.grade]++;
         outstanding++;

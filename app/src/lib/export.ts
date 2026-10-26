@@ -14,6 +14,7 @@ import { utils, writeFile } from "xlsx";
 const STATUS = {
   "action-needed": "Needs fixing",
   "needs-your-review": "Needs your check",
+  checklist: "Your checklist",
   pass: "Checked",
   "does-not-apply": "Doesn't apply",
 } as const;
@@ -70,6 +71,8 @@ export function downloadReview(review: ReviewResult, filename = "security-review
           "Why this matters": "",
           "What to do": item.status === "pass" || item.status === "does-not-apply"
             ? ""
+            : item.status === "checklist"
+            ? "Good practice for every app: think it through, then tick it off."
             : "Check this yourself and mark it as checked.",
           "Exact fix (for your AI assistant)": "",
           Where: "",

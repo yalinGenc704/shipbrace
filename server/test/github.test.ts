@@ -145,6 +145,7 @@ test("a push is reviewed and the result posted back as a check, in plain words",
   assert.equal(final.conclusion, "failure", "a proven high risk fails the check");
   assert.match(output.title, /high-risk problem/);
   assert.match(output.title, /for you to check/, "a tick never reads as 'secure'");
+  assert.match(output.title, /good-practice question/, "the checklist is left for the user too");
   assert.match(output.summary, /Why this matters/);
 
   const note = output.annotations.find((a: any) => a.path === "server/src/api.ts" && a.annotation_level === "failure");

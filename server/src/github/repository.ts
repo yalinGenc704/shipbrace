@@ -46,6 +46,7 @@ export async function fetchRepository(
 
   const skipped = { notReadable: 0, tooLarge: 0, overLimit: 0, treeTruncated: tree.truncated };
   const chosen: TreeEntry[] = [];
+  const unread: string[] = [];
   let plannedBytes = 0;
 
   for (const entry of tree.tree) {
@@ -55,6 +56,7 @@ export async function fetchRepository(
     if (parts.slice(0, -1).some((dir) => SKIP_DIR.test(dir))) continue;
     if (!wanted(name)) {
       skipped.notReadable++;
+      unread.push(entry.path);
       continue;
     }
     const size = entry.size ?? 0;
@@ -63,10 +65,12 @@ export async function fetchRepository(
       : limits.maxFileBytes;
     if (size > cap) {
       skipped.tooLarge++;
+      unread.push(entry.path);
       continue;
     }
     if (chosen.length >= limits.maxFiles || plannedBytes + size > limits.maxTotalBytes) {
       skipped.overLimit++;
+      unread.push(entry.path);
       continue;
     }
     chosen.push(entry);
@@ -91,5 +95,9 @@ export async function fetchRepository(
   }
 
   // Everything here came from the commit, so all of it is tracked by git.
-  return { snapshot: snapshotFromFiles(files), fileCount: files.length, skipped };
+  return {
+    snapshot: snapshotFromFiles(files, undefined, { unread, incomplete: tree.truncated }),
+    fileCount: files.length,
+    skipped,
+  };
 }

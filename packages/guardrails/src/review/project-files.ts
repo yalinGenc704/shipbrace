@@ -1,5 +1,6 @@
 import { codeOnly, dottedName, parseFile, walk, type Node } from "../analysis/ast.ts";
 import { isSource, isTestPath } from "../util.ts";
+import type { RepoSnapshot } from "../types.ts";
 import type { ProjectCheck } from "./checks.ts";
 import type { Risk } from "./modules.ts";
 
@@ -13,6 +14,28 @@ import type { Risk } from "./modules.ts";
 
 function risk(id: string, grade: Risk["grade"], what: string, impact: string, fix: string, path: string, line: number, detail?: string): Risk {
   return { id: `${id}@${path}:${line}`, grade, what, impact, fix, ...(detail ? { fixDetail: detail } : {}), location: { path, line }, confirmedBy: "rule" };
+}
+
+/** Every package the project's manifests name, in either list. */
+export const dependencyNames = (snapshot: RepoSnapshot): string[] =>
+  [...snapshot.manifests.values()].flatMap((m) =>
+    Object.keys({ ...(m.dependencies as object | undefined), ...(m.devDependencies as object | undefined) })
+  );
+
+/** Files that cannot hold code or settings: pictures, fonts, styles, archives. */
+const NOT_EVIDENCE = /\.\w*ignore$|(?:^|\/)(?:\.(?:prettierrc|eslintrc|stylelintrc|babelrc|browserslistrc|node-version|tool-versions|lintstagedrc|commitlintrc)\w*|\.husky\/[^/]+|Makefile)$|(?:^|\/)_(?:headers|redirects)$|\.(?:bin|sqlite3?|db|crt|cer|key|pem|log|png|jpe?g|gif|svg|ico|webp|avif|bmp|tiff?|woff2?|ttf|otf|eot|mp[34]|wav|ogg|webm|mov|avi|pdf|zip|gz|tgz|bz2|xz|7z|br|wasm|map|csv|tsv|xlsx?|docx?|pptx?|psd|sketch|fig|css|scss|sass|less|snap|gitkeep|keep)$|(?:^|\/)(?:LICEN[CS]E|NOTICE|AUTHORS|CODEOWNERS|\.gitattributes|\.editorconfig|\.npmrc|\.nvmrc|\.DS_Store)(?:\.\w+)?$/i;
+
+/**
+ * Why part of the project is out of sight, or undefined when everything that
+ * could matter was read. "Doesn't apply" is never said while code ShipBrace
+ * cannot read (Python, Vue, a Jenkinsfile) or never reached could hold the
+ * very thing it did not find.
+ */
+export function outOfSight(snapshot: RepoSnapshot): string | undefined {
+  if (snapshot.incomplete) return "this repository was too large to read in full";
+  const hidden = (snapshot.unread ?? []).filter((p) => !NOT_EVIDENCE.test(p));
+  if (hidden.length === 0) return undefined;
+  return `${hidden.length} file${hidden.length === 1 ? "" : "s"} could not be read (for example ${hidden[0]})`;
 }
 
 // --- Supabase: tables the browser can reach need row rules -------------------
@@ -250,6 +273,10 @@ export const debugOff: ProjectCheck = {
 
 // --- Upload size limits --------------------------------------------------------
 
+/** Anything that could be receiving a file. Read broadly: one word keeps the question. */
+const UPLOAD_HINT = /multer|formidable|busboy|multiparty|fileupload|multipart|parseBody|formData|FormData|type\s*=\s*["']file["']|\.files\b|upload|arrayBuffer|\.blob\s*\(|\.pipe\s*\(|createWriteStream|express\.raw|bodyParser\.raw|presign|PutObject|getSignedUrl|on\s*\(\s*["']data["']/i;
+const UPLOAD_PACKAGES = /multer|formidable|busboy|multiparty|fileupload|upload|uppy|filepond|dropzone|s3-request-presigner|client-s3/i;
+
 /**
  * multer accepts files of any size unless `limits` is set. One visitor can
  * then fill the disk or memory with a single upload. Only multer is judged:
@@ -289,7 +316,16 @@ export const uploadLimits: ProjectCheck = {
         ));
       });
     }
-    if (!found) return { status: "not-applicable", reason: "We didn't find an upload feature we know how to check (only multer is checked). If visitors can upload files, confirm there's a size limit." };
+    if (!found) {
+      // Nothing that even looks like receiving a file: no upload package, no
+      // form data, no file field. Read broadly, so a word is enough to keep it.
+      const anyUpload = snapshot.files.some((f) => !isTestPath(f.path) && UPLOAD_HINT.test(f.content)) ||
+        dependencyNames(snapshot).some((name) => UPLOAD_PACKAGES.test(name));
+      if (!anyUpload && !outOfSight(snapshot)) {
+        return { status: "not-applicable", reason: "This app doesn't seem to accept file uploads: no upload package, form data, file field or raw upload was found.", absent: true };
+      }
+      return { status: "not-applicable", reason: "We didn't find an upload feature we know how to check (only multer is checked). If visitors can upload files, confirm there's a size limit." };
+    }
     return risks.length > 0 ? { status: "risks", risks } : { status: "pass" };
   },
 };
@@ -385,4 +421,164 @@ export const suspiciousPackages: ProjectCheck = {
   },
 };
 
-export const fileChecks: ProjectCheck[] = [supabaseRowRules, containerUser, debugOff, uploadLimits, suspiciousPackages];
+// --- Pages: code from other websites should be locked ---------------------------
+
+const PAGE_FILE = /\.(?:html?|ejs|hbs|handlebars|pug|njk|swig|liquid|mustache|twig|vue|svelte|astro|jsx|tsx)$/i;
+/** Every script tag, and every link that loads a stylesheet or script. */
+const TAG = /<(?:script|Script)\b[^>]*>|<link\b(?=[^>]*\brel\s*=\s*["']?(?:stylesheet|modulepreload|preload\b(?=[^>]*\bas\s*=\s*["']?(?:script|style)\b)))[^>]*>/g;
+/** The address in a tag, however it is written: quoted, in braces, or bare. */
+const ADDRESS = /(?:^|\s)(?:src|href)\s*=\s*(?:"([^"]*)"|'([^']*)'|\{\s*["'`]([^"'`$]*)["'`]\s*\}|(\{)|([^\s>"']+))/;
+/** A lock that holds: the tag's own integrity attribute, with a real hash. */
+const LOCKED = /(?:^|\s)integrity\s*=\s*["']sha(?:256|384|512)-/;
+const OUTSIDE = /^(?:https?:)?\/\//i;
+/** Template placeholders: the address is filled in when the page is made. */
+const PLACEHOLDER = /<%|\{\{|\$\{|\{%|#\{/;
+/**
+ * Other ways a page can load outside code that a tag scan cannot judge:
+ * scripts added while running, head settings in code, import maps, imports
+ * from a web address.
+ */
+const OUT_OF_TAGS = /createElement\s*\(\s*["'`]script["'`]\s*\)|\bimportScripts\s*\(|\bloadScript\s*\(|\buse(?:Head|Script|SeoMeta)\s*\(|<Helmet\b|type\s*=\s*["']importmap["']|\bimport\s*\(?\s*["'`](?:https?:)?\/\/|\bfrom\s+["'`](?:https?:)?\/\/|\bsrc\s*:\s*["'`](?:https?:)?\/\//;
+/**
+ * Services that change their files on purpose and ask sites not to lock them
+ * (fonts sized per browser, payment and bot-check widgets). Loading them
+ * unlocked is how they are meant to be used, so it is said once, not raised.
+ */
+const UNLOCKABLE = /^(?:fonts\.googleapis\.com|fonts\.gstatic\.com|js\.stripe\.com|www\.googletagmanager\.com|www\.google-analytics\.com|www\.google\.com|www\.gstatic\.com|challenges\.cloudflare\.com|maps\.googleapis\.com|js\.hcaptcha\.com|static\.cloudflareinsights\.com)$/i;
+
+/**
+ * Pug writes tags without angle brackets: `script(src="...")`. Rewritten as
+ * `<script src="...">` on the same line, so one reader judges both.
+ */
+const asTags = (path: string, text: string): string =>
+  /\.pug$/i.test(path)
+    ? text.replace(/^([ \t]*)(script|link)((?:[.#][\w-]+)*)\(([^)\n]*)\)/gim, (_m, indent: string, tag: string, _c: string, attrs: string) =>
+      `${indent}<${tag} ${attrs.replace(/,\s*/g, " ")}>`)
+    : text;
+
+const hostOf = (address: string): string => {
+  try {
+    return new URL(address.startsWith("//") ? `https:${address}` : address).host;
+  } catch {
+    return "another website";
+  }
+};
+
+/**
+ * A script or stylesheet loaded from another website runs with your page's
+ * full power, and whoever controls that website can change it at any time.
+ * An `integrity` hash locks it to the exact file that was checked.
+ *
+ * Passes only when every address found is the site's own or locked. An
+ * address filled in later (a placeholder, an expression), or outside code
+ * loaded some other way, hands the item back: it cannot be read as locked.
+ */
+export const scriptIntegrity: ProjectCheck = {
+  id: "pages:script-integrity",
+  itemId: "integrity/third-party-scripts",
+
+  run(snapshot) {
+    const pages = snapshot.files.filter((f) => PAGE_FILE.test(f.path) && !isTestPath(f.path) && !f.path.includes("node_modules/"));
+    const writesHtml = snapshot.files.some((f) => isSource(f.path) && !isTestPath(f.path) && /<(?:html|script|link)\b/i.test(f.content));
+    if (pages.length === 0 && !writesHtml) {
+      const hidden = outOfSight(snapshot);
+      return hidden
+        ? { status: "not-applicable", reason: `No web pages were found, but ${hidden}, and pages could be among them. If your site loads code from other websites, confirm each file is locked (subresource integrity) or kept on your own site.` }
+        : { status: "not-applicable", reason: "This app has no web pages of its own, so it loads no code from other websites into them.", absent: true };
+    }
+
+    const risks: Risk[] = [];
+    const unlockable = new Set<string>();
+    let unreadable: string | undefined;
+    for (const file of pages) {
+      // Sample pages kept as text in code do not run, and neither does a tag
+      // inside an HTML comment.
+      const text = asTags(file.path, codeOnly(file).replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\r\n]/g, " ")));
+      // In an HTML-style page only what is inside script tags is code; the
+      // rest is words, which may name a tool ("Helmet") without using it.
+      const code = /\.[cm]?[jt]sx$/i.test(file.path)
+        ? text
+        : [...text.matchAll(/<script\b[^>]*>[\s\S]*?<\/script>/gi)].map((m) => m[0]).join("\n");
+      if (OUT_OF_TAGS.test(code)) unreadable ??= file.path;
+      for (const match of text.matchAll(TAG)) {
+        const tag = match[0];
+        const found = ADDRESS.exec(tag);
+        if (!found) {
+          // An address the tag reader could not take apart (a template tag
+          // with its own `>` inside the quotes) cannot be called local.
+          if (/\b(?:src|href)\s*=/.test(tag)) unreadable ??= file.path;
+          continue; // Otherwise code written inside the tag: judged above.
+        }
+        const address = found[1] ?? found[2] ?? found[3] ?? found[5];
+        if (address === undefined || PLACEHOLDER.test(address)) {
+          unreadable ??= file.path;
+          continue;
+        }
+        if (!OUTSIDE.test(address) || LOCKED.test(tag)) continue;
+        const host = hostOf(address);
+        if (UNLOCKABLE.test(host)) {
+          unlockable.add(host);
+          continue;
+        }
+        const line = text.slice(0, match.index).split("\n").length;
+        risks.push({
+          ...risk(
+            "check/script-without-integrity",
+            "low",
+            `Your page ${file.path} loads code from ${host} without a lock (subresource integrity).`,
+            "Whoever controls that website can change the file, and the change runs on your pages with full access to what your visitors see and type.",
+            "Lock the file to the exact version you checked, or keep a copy on your own site. If the service tells you not to lock it, mark this as intended.",
+            file.path,
+            line,
+            `Add \`integrity="sha384-..."\` and \`crossorigin="anonymous"\` to the tag in ${file.path} line ${line}, using the hash the provider publishes (or \`openssl dgst -sha384 -binary file | openssl base64 -A\`), or serve the file from your own site.`,
+          ),
+          mayBeIntended: true,
+        });
+      }
+    }
+    const notice = unlockable.size > 0
+      ? `Your pages load files from ${[...unlockable].join(", ")}. These services change their files on purpose and ask sites not to lock them, which is normal; only keep the ones you trust.`
+      : undefined;
+    if (risks.length > 0) return { status: "risks", risks, ...(notice ? { notice } : {}) };
+    if (unreadable) {
+      return {
+        status: "not-applicable",
+        reason: `${unreadable} loads code in a way whose address is only known when the page is built or run (a placeholder, an expression, or code that adds scripts), so it can't be read as locked. Confirm each file comes from your own site, or is locked (subresource integrity).`,
+        ...(notice ? { notice } : {}),
+      };
+    }
+    // Pages can also be written as text inside code (`c.html(\`<script src=...\`)`),
+    // which reads the same as sample pages kept as text. Either way it can't
+    // be called locked, so it goes back to the user.
+    const asText = snapshot.files.find((f) =>
+      isSource(f.path) && !isTestPath(f.path) && !PAGE_FILE.test(f.path) &&
+      [...f.content.matchAll(TAG)].some((m) => {
+        const address = ADDRESS.exec(m[0]);
+        const value = address?.[1] ?? address?.[2] ?? address?.[5] ?? "";
+        return OUTSIDE.test(value) && !LOCKED.test(m[0]) && !UNLOCKABLE.test(hostOf(value));
+      })
+    );
+    if (asText) {
+      return {
+        status: "not-applicable",
+        reason: `${asText.path} holds page text that loads code from another website without a lock. If that text is a page your site sends, lock the file (subresource integrity) or keep a copy on your own site; if it is only an example, nothing is needed.`,
+        ...(notice ? { notice } : {}),
+      };
+    }
+    const added = snapshot.files.find((f) => isSource(f.path) && !isTestPath(f.path) && !PAGE_FILE.test(f.path) && OUT_OF_TAGS.test(codeOnly(f)));
+    if (added) {
+      return {
+        status: "not-applicable",
+        reason: `${added.path} loads code into pages in a way whose address can't be read from the files (scripts added while running, head settings, or imports from a web address). Confirm each one is from a site you trust, and locked where the service allows it.`,
+        ...(notice ? { notice } : {}),
+      };
+    }
+    const hidden = outOfSight(snapshot);
+    if (hidden) {
+      return { status: "not-applicable", reason: `The pages ShipBrace could read load nothing unlocked from other websites, but ${hidden}. Confirm any pages among them do the same.`, ...(notice ? { notice } : {}) };
+    }
+    return { status: "pass", ...(notice ? { notice } : {}) };
+  },
+};
+
+export const fileChecks: ProjectCheck[] = [supabaseRowRules, containerUser, debugOff, uploadLimits, suspiciousPackages, scriptIntegrity];

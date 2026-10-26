@@ -53,7 +53,9 @@ export function checkOutput(review: ReviewResult, skipped?: { overLimit: number;
   const proven = high + medium + low;
 
   const conclusion: Conclusion = high > 0 ? "failure" : proven > 0 ? "neutral" : "success";
-  const left = plural(awaitingReview, "item") + " for you to check";
+  const checklist = review.summary.checklist ?? 0;
+  const left = plural(awaitingReview, "item") + " for you to check" +
+    (checklist > 0 ? ` · ${plural(checklist, "good-practice question")}` : "");
   const title = high > 0
     ? `${plural(high, "high-risk problem")} to fix · ${left}`
     : proven > 0

@@ -201,6 +201,9 @@ export function isStringLiteral(node: unknown): node is Node & { value: string }
  * pattern run over it matches only real code. Offsets and line breaks are kept,
  * so a match still points at the right line of the original.
  *
+ * Regular-expression patterns are blanked too: they spell out what to look
+ * for, which is text about code (a checker's own patterns name every danger).
+ *
  * Quoted text is blanked only when it holds a space or a line break: that is a
  * sentence, or sample code kept as text (`"Replace \`origin: true\` with..."`,
  * a benchmark app in a template). A single word stays, because that is how
@@ -223,6 +226,10 @@ export function codeOnly(file: SourceFile): string {
     walk(parsed.program, (node) => {
       if (node.type === "Literal" && typeof node.value === "string" && /\s/.test(node.value)) {
         ranges.push({ start: node.start + 1, end: node.end - 1 });
+      } else if (node.type === "Literal" && node.regex) {
+        // A pattern describes text to look for; what it spells out is not code.
+        const pattern = String((node.regex as { pattern?: string }).pattern ?? "");
+        ranges.push({ start: node.start + 1, end: node.start + 1 + pattern.length });
       } else if (node.type === "TemplateLiteral") {
         // The text pieces are found from the template's own span and its
         // expressions: the parser's spans for the pieces differ between .ts

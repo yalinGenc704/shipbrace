@@ -11,6 +11,7 @@ const IGNORED = /(^|\/)(node_modules|dist|build|\.git|\.next|coverage|\.turbo)(\
 export function snapshotFromFiles(
   files: SourceFile[],
   tracked: Iterable<string> = files.map((f) => f.path),
+  sight: { unread?: string[]; incomplete?: boolean } = {},
 ): RepoSnapshot {
   const kept = files.filter((f) => !IGNORED.test(f.path));
   const manifests = new Map<string, Record<string, unknown>>();
@@ -28,5 +29,11 @@ export function snapshotFromFiles(
     }
   }
 
-  return { files: kept, manifests, tracked: new Set(tracked) };
+  return {
+    files: kept,
+    manifests,
+    tracked: new Set(tracked),
+    ...(sight.unread ? { unread: sight.unread.filter((p) => !IGNORED.test(p)) } : {}),
+    ...(sight.incomplete ? { incomplete: true } : {}),
+  };
 }

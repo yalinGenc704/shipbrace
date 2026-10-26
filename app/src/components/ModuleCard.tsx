@@ -22,6 +22,13 @@ export function risksOf(module: ReviewModule): Array<{ risk: Risk; item: ActionI
  */
 export const intendedKey = (risk: Risk): string => `${risk.id}#${risk.what}`;
 
+/**
+ * The key a checklist tick is saved under: apart from "I've checked this", so
+ * thinking a general question through never ticks off the same item where
+ * another review found something in the code.
+ */
+export const checklistKey = (item: ActionItem): string => `checklist:${item.id}`;
+
 export const isIntended = (risk: Risk, reviewed: ReviewedState): boolean =>
   risk.mayBeIntended === true && reviewed.isReviewed(intendedKey(risk));
 
@@ -33,9 +40,9 @@ export function liveRisks(module: ReviewModule, reviewed: ReviewedState): Risk[]
 /**
  * One of the ten modules, as a collapsible section of the checklist.
  *
- * Inside, three parts in the order a reader acts on them: problems to fix,
- * most serious first across the whole module; items that need the reader's own
- * check; and what passed. Items about something the app does not have are not
+ * Inside, four parts in the order a reader acts on them: problems to fix,
+ * most serious first across the whole module; items about this code that need
+ * the reader's own check; the general checklist questions; and what passed. Items about something the app does not have are not
  * here at all -- they are listed once, at the end of the page.
  *
  * The OWASP code is shown because it lets a user (or someone they hire) look
@@ -58,6 +65,8 @@ export function ModuleCard({
   const toFix = liveRisks(module, reviewed).length;
   const yours = module.items.filter((item) => item.status === "needs-your-review");
   const outstanding = yours.filter((item) => !reviewed.isReviewed(item.id)).length;
+  const checklist = module.items.filter((item) => item.status === "checklist");
+  const checklistLeft = checklist.filter((item) => !reviewed.isReviewed(checklistKey(item))).length;
   const passed = module.items.filter((item) => item.status === "pass");
   const notices = [...new Set(module.items.flatMap((item) => (item.notice ? [item.notice] : [])))];
   const panelId = `module-${module.id}`;
@@ -92,11 +101,15 @@ export function ModuleCard({
           <span className="flex shrink-0 flex-col items-end gap-1.5">
             {toFix > 0 && <StatusPill status="action-needed" />}
             {toFix === 0 && outstanding > 0 && <StatusPill status="needs-your-review" />}
-            {toFix === 0 && outstanding === 0 && <StatusPill status="pass" />}
+            {toFix === 0 && outstanding === 0 && checklistLeft > 0 && <StatusPill status="checklist" />}
+            {toFix === 0 && outstanding === 0 && checklistLeft === 0 && <StatusPill status="pass" />}
             <span className="text-right text-xs text-ink-soft">
               {[toFix > 0 && `${toFix} to fix`, outstanding > 0 && `${outstanding} to check`]
                 .filter(Boolean)
                 .join(" · ") || "nothing outstanding"}
+              {checklistLeft > 0 && (
+                <span className="block">{checklistLeft} on your checklist</span>
+              )}
             </span>
           </span>
         </button>
@@ -128,6 +141,18 @@ export function ModuleCard({
                 {yours.map((item) => (
                   <li key={item.id}>
                     <YourCheck item={item} mode={mode} reviewed={reviewed} />
+                  </li>
+                ))}
+              </ul>
+            </Part>
+          )}
+
+          {checklist.length > 0 && (
+            <Part title="Your checklist" note="Good practice for every app, not something found in your code. Tick each off once you've thought it through.">
+              <ul className="divide-y divide-line rounded-xl border border-dashed border-line">
+                {checklist.map((item) => (
+                  <li key={item.id}>
+                    <ChecklistQuestion item={item} reviewed={reviewed} />
                   </li>
                 ))}
               </ul>
@@ -173,6 +198,34 @@ function Part({ title, note, children }: { title: string; note?: string; childre
       <h3 className="text-xs font-semibold tracking-wide text-ink-soft uppercase">{title}</h3>
       {note && <p className="mt-0.5 text-xs text-ink-soft">{note}</p>}
       <div className="mt-3">{children}</div>
+    </div>
+  );
+}
+
+/**
+ * A general question. Quieter than "Needs your check" on purpose: nothing was
+ * found in the code, so it carries no badge that could read as a warning
+ * until it is ticked.
+ */
+function ChecklistQuestion({ item, reviewed }: { item: ActionItem; reviewed: ReviewedState }) {
+  const ticked = reviewed.isReviewed(checklistKey(item));
+
+  return (
+    <div className="p-4">
+      <div className="flex items-start justify-between gap-3">
+        <h4 className="text-sm font-medium text-ink">{item.title}</h4>
+        {ticked && <StatusPill status="pass" />}
+      </div>
+      {!ticked && (item.notApplicable ?? item.question) && (
+        <p className="mt-2 text-sm leading-relaxed text-ink-soft">{item.notApplicable ?? item.question}</p>
+      )}
+      <div className="mt-3">
+        <Checkbox
+          checked={ticked}
+          onChange={() => reviewed.toggle(checklistKey(item))}
+          label={ticked ? "You've thought this through" : "I've thought this through"}
+        />
+      </div>
     </div>
   );
 }
