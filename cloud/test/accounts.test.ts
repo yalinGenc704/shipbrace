@@ -367,6 +367,21 @@ test("the package check can be switched off for your installation, and only your
   assert.equal((await post("/api/installations/9/settings", { packageLookup: false }, cookie)).status, 403, "someone else's");
 });
 
+test("changing one switch leaves the other as it was", async () => {
+  env.AI_REVIEW = "on";
+  env.ANTHROPIC_API_KEY = "k";
+  env.AI_ALLOWED_GITHUB_IDS = "5";
+  const cookie = await signIn();
+  await post("/api/repos", { link: "ada/shop" }, cookie);
+  assert.equal((await post("/api/installations/7/settings", { aiReview: true }, cookie)).status, 200);
+  assert.equal((await post("/api/installations/7/settings", { packageLookup: false }, cookie)).status, 200);
+  assert.deepEqual(await installationSwitches(env.DB, 7), { packageLookup: false, aiReview: true });
+  // Sending the value it already has is still a success, not "set up first".
+  assert.equal((await post("/api/installations/7/settings", { packageLookup: false }, cookie)).status, 200);
+  assert.equal((await post("/api/installations/7/settings", { packageLookup: true, aiReview: false }, cookie)).status, 200);
+  assert.deepEqual(await installationSwitches(env.DB, 7), { packageLookup: true, aiReview: false });
+});
+
 test("the AI step cannot be switched on before it is offered", async () => {
   const cookie = await signIn();
   await post("/api/repos", { link: "ada/shop" }, cookie);

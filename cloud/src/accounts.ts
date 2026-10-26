@@ -438,9 +438,14 @@ export function accountRoutes() {
     if (typeof body.packageLookup === "boolean") updates.push(["package_lookup", body.packageLookup ? 1 : 0]);
     if (typeof body.aiReview === "boolean") updates.push(["ai_review", body.aiReview ? 1 : 0]);
     if (updates.length === 0) return c.json({ error: "Nothing to change." }, 400);
-    // Column names come from the fixed list above, never from the request.
-    const result = await c.env.DB.prepare(`UPDATE installations SET ${updates.map(([col]) => `${col} = ?`).join(", ")} WHERE installation_id = ?`)
-      .bind(...updates.map(([, v]) => v), id)
+    // One fixed statement: a switch left out of the request keeps its value.
+    const value = (column: string) => updates.find(([col]) => col === column)?.[1] ?? null;
+    const result = await c.env.DB.prepare(
+      `UPDATE installations
+       SET package_lookup = COALESCE(?, package_lookup), ai_review = COALESCE(?, ai_review)
+       WHERE installation_id = ?`,
+    )
+      .bind(value("package_lookup"), value("ai_review"), id)
       .run();
     if (!result.meta.changes) return c.json({ error: "Set this installation up first by reviewing one of its repositories." }, 409);
     await record(c.env.DB, { actor: c.get("session").githubId, action: "switches-changed", target: id, detail: Object.fromEntries(updates) });

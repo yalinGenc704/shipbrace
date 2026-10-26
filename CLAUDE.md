@@ -75,7 +75,7 @@ everywhere:
 # PostgreSQL 18 (Homebrew, not started at login). Databases: shipbrace, shipbrace_test.
 LC_ALL=en_US.UTF-8 /opt/homebrew/opt/postgresql@18/bin/pg_ctl -D /opt/homebrew/var/postgresql@18 -l /opt/homebrew/var/log/postgresql@18.log start
 
-# all tests (expect 321 pass). Without TEST_DATABASE_URL the 6 database tests
+# all tests (expect 322 pass). Without TEST_DATABASE_URL the 6 database tests
 # are skipped and say so; it must name a database ending in _test (it is wiped).
 # CI (.github/workflows/ci.yml) runs typecheck, lint, tests and build on every push.
 TEST_DATABASE_URL=postgres:///shipbrace_test npm test
@@ -446,9 +446,10 @@ the server with the AI step, start it with an extra `--env-file` that sets
 - **Self-review (2026-10-25, from the dashboard):** 13 "needs fixing", 2
   were package warnings (see `CLAUDE.local.md`). The other 11 and 8 of 9 query notes came from reading
   text about code as code; fixed the same day (see "Text about code is not
-  code"). Still a note: `cloud/src/accounts.ts` building `SET col = ?` from
-  a fixed list of column names (proving the list fixed needs more than one
-  expression). `crypto/no-password-hashes-sent` went from pass to handed
+  code"). The last note, `cloud/src/accounts.ts` pasting column names from a
+  fixed list into `SET col = ?`, was removed by rewriting it as one fixed
+  `COALESCE` statement; the report's suggested fix (`?` placeholders) could
+  not have worked there, since `?` only stands for values. `crypto/no-password-hashes-sent` went from pass to handed
   back: ShipBrace has no password fields, it had passed on benchmark text.
 - **Security audit of ShipBrace (2026-10-18, `security-auditor`).** `npm
   audit`: 0 known vulnerabilities. Fixed the same day: `redact()` now hides
