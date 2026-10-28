@@ -24,9 +24,9 @@ never deploy past a failing check.
      first if needed; see CLAUDE.md, "Running things")
    - `npm run bench`: the scores must not drop below the latest ones in
      CLAUDE.md ("Current state and known gaps", the Benchmark line), which
-     wins if it differs from this note. On 2026-10-20: rules alone 36 of 40,
-     perfect suggester 39 of 40, 42 of 42 safe decoys cleared, 0 false
-     alarms.
+     wins if it differs from this note. On 2026-10-27: rules alone 37 of 46,
+     perfect suggester 40 of 46, 43 of 49 safe decoys cleared, 6 false
+     alarms, all on the known list in `test/bench.test.ts` (no new ones).
 3. If `cloud/migrations/` has a migration not yet applied on Cloudflare
    (`cd cloud && npx wrangler d1 migrations list aegis-history --remote`), tell
    the user which one and apply it with `--remote` before deploying the code.

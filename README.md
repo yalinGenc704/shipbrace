@@ -142,13 +142,21 @@ such as what personal data the app stores.
 
 ## Results, honestly
 
-**Benchmark:** 56 sample apps with a known answer key: 31 real problems and
-26 deliberately safe decoys built to look dangerous.
+**Benchmark:** 94 sample apps with a known answer key: 46 real problems and
+49 deliberately safe decoys built to look dangerous.
 
 | | Real problems proven | False alarms |
 | --- | --- | --- |
-| Rules alone | 27 of 31 | 0 |
-| With a perfect AI suggester | 30 of 31 | 0 |
+| Rules alone | 37 of 46 | 6 |
+| With a perfect AI suggester | 40 of 46 | 6 |
+
+All six false alarms, and five of the misses, come from twelve cases added on
+purpose to measure one known gap: the checker judges an app's home-made
+"cleaning" functions by their names, so a broken one with a reassuring name
+is trusted and a correct one with a plain name is not. Before those cases the
+set scored 36 and 39 of 40 with no false alarms. The known false alarms are
+listed in a test, so any new one fails CI, and a fixed one must come off the
+list.
 
 With Claude as the suggester on the earlier 31-app version of the set, it
 matched the perfect suggester exactly, with no false alarms; not yet re-run on

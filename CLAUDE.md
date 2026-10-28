@@ -75,7 +75,7 @@ everywhere:
 # PostgreSQL 18 (Homebrew, not started at login). Databases: shipbrace, shipbrace_test.
 LC_ALL=en_US.UTF-8 /opt/homebrew/opt/postgresql@18/bin/pg_ctl -D /opt/homebrew/var/postgresql@18 -l /opt/homebrew/var/log/postgresql@18.log start
 
-# all tests (expect 356 pass). Without TEST_DATABASE_URL the 6 database tests
+# all tests (expect 357 pass). Without TEST_DATABASE_URL the 6 database tests
 # are skipped and say so; it must name a database ending in _test (it is wiped).
 # CI (.github/workflows/ci.yml) runs typecheck, lint, tests and build on every push.
 TEST_DATABASE_URL=postgres:///shipbrace_test npm test
@@ -185,10 +185,22 @@ the server with the AI step, start it with an extra `--env-file` that sets
 
 ## Current state and known gaps
 
-- **Benchmark (81 apps, 40 real problems, 42 safe decoys), 2026-10-20:** rules
-  alone prove 36; a perfect suggester proves 39; zero false alarms. Only
-  miss: a React component pasting a `body` prop as raw HTML, with nothing
-  showing where the prop comes from (stays "worth a look").
+- **Benchmark (94 apps, 46 real problems, 49 safe decoys), 2026-10-27:** rules
+  alone prove 37; a perfect suggester proves 40; 43 of 49 safe cleared; 6
+  false alarms, all known (`KNOWN_FALSE_ALARMS` in `test/bench.test.ts`, by
+  case and marker; any other one fails the tests, and a fixed one must come
+  off the list). The 12 "home-made cleaners" cases added that day show the
+  sanitizer gap: sanitizers are recognised by name and only when assigned
+  (`const safe = escapeX(v)`), so 5 broken cleaners with good names are
+  missed (4 as "worth a look", 1 silent) and 6 correct ones with plain
+  names, or called inside the dangerous line, are proven risks. The 37 and
+  40 include `homemade-escape-sql-inline`, proven only because inline calls
+  are not seen as cleaners: recognising inline calls by name alone would
+  drop each score by one, which is expected, not a regression.
+  `Number.parseInt`/`Number.parseFloat` now count like `parseInt` (case
+  `number-parse-int-direct`). Before them (2026-10-20): 36/40, 39/40, 0 false alarms; the only
+  other perfect-suggester miss is a React component pasting a `body` prop
+  as raw HTML (stays "worth a look").
 - **Stored attacks (2026-10-20).** A table column a visitor's unchecked
   value is saved into (SQL `INSERT ... VALUES`/`UPDATE ... SET`, model
   `create`/`update` data; never `WHERE` or a filter) makes reads of it a
@@ -648,7 +660,7 @@ Claude Code setup above (2026-10-18).
 roadmap item 6 below. Steps 1-5 are done, tried on the practice apps (see
 Current state) and deployed (2026-10-21).
 Every new check gets benchmark cases (a real problem and a safe look-alike),
-keeps zero false alarms, is tried on the practice apps, and fills a checklist
+adds no false alarm beyond the known list in `test/bench.test.ts`, is tried on the practice apps, and fills a checklist
 item only once it can actually run ("no false pass"). In order:
 
 1. **Groundwork (done 2026-10-20).** `conventions-reviewer` added; legacy

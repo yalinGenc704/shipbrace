@@ -1294,7 +1294,7 @@ function protectsOf(init: Node): SinkKind[] | undefined {
   if (call?.type !== "CallExpression") return undefined;
   const name = dottedName(call.callee) ?? "";
   // Numbers and schema checks make a value safe everywhere.
-  if (/^(?:Number|parseInt|parseFloat)$/.test(name) || /\.(?:safeParse|parse)$/.test(name)) return undefined;
+  if (/^(?:Number|parseInt|parseFloat|Number\.parseInt|Number\.parseFloat)$/.test(name) || /\.(?:safeParse|parse)$/.test(name)) return undefined;
   return protectsFor(name);
 }
 
@@ -1344,7 +1344,7 @@ function sanitizerKindOf(init: Node, parsed: ParsedFile): Sanitizer["kind"] | un
 
   const name = dottedName(call.callee) ?? "";
 
-  if (/^(?:Number|parseInt|parseFloat)$/.test(name)) return "numeric-coercion";
+  if (/^(?:Number|parseInt|parseFloat|Number\.parseInt|Number\.parseFloat)$/.test(name)) return "numeric-coercion";
   if (/\.(?:safeParse|parse)$/.test(name)) {
     const schema = name.split(".").slice(-2, -1)[0] ?? "";
     return schemaAcceptsAnyText(parsed, schema) ? undefined : "schema-validation";

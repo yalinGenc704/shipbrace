@@ -63,7 +63,8 @@ Run `npm test` with `TEST_DATABASE_URL=postgres:///shipbrace_test` if
 PostgreSQL is running (see CLAUDE.md, "Running things"); otherwise say the
 database tests were skipped. Never add `--model` to the benchmark (it costs
 money). Compare the benchmark with the scores recorded in CLAUDE.md: rules
-alone and perfect suggester must not drop, and false alarms must stay 0.
+alone and perfect suggester must not drop, and there must be no false alarm
+outside the known list in `packages/guardrails/test/bench.test.ts`.
 
 ## Report
 

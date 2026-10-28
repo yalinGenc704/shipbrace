@@ -9,7 +9,7 @@ import { falseAlarms, grade, type Score } from "../packages/guardrails/bench/gra
  *                                                               also a real model (costs credit)
  *
  * Read the two numbers per mode: real problems found (higher is better) and
- * false alarms (must be zero). "perfect" is the ceiling the checker allows;
+ * false alarms (only the known ones listed in test/bench.test.ts; never a new one). "perfect" is the ceiling the checker allows;
  * whatever it misses, no model can make the tool find.
  */
 

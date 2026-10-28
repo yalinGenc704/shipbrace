@@ -2288,4 +2288,342 @@ export const CASES: BenchCase[] = [
       },
     ],
   },
+
+  // --- home-made cleaners (added 2026-10-27) -------------------------------------
+  // AI-built apps often write their own small "cleaning" function. Whether it
+  // protects anything depends on what it does, not on its name: a broken one
+  // with a trustworthy name is a real problem, and a correct one with a plain
+  // name is safe.
+
+  {
+    id: "homemade-escape-sql-first-quote",
+    tests: "A home-made escapeSql replaces only the first quote mark, then the name goes into a query.",
+    files: [
+      file("server/src/index.ts", [
+        ...HEAD,
+        "function escapeSql(s) { return s.replace(\"'\", \"''\"); }",
+        "",
+        'app.get("/users", async (c) => {',
+        '  const name = escapeSql(c.req.query("name"));',
+        "  return c.json(await db.query(`SELECT * FROM users WHERE name = '${name}'`)); // [A]",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/users",
+        parameter: "name",
+        sink: "sql",
+        real: true,
+        why: "Only the first quote is doubled, so a second quote in the name ends the text and the rest runs as part of the command.",
+      },
+    ],
+  },
+  {
+    id: "homemade-sanitize-input-trim",
+    tests: "A home-made sanitizeInput only trims spaces before the text goes into a page.",
+    files: [
+      file("server/src/index.ts", [
+        ...HEAD,
+        "const sanitizeInput = (s) => s.trim();",
+        "",
+        'app.get("/search", (c) => {',
+        '  const q = sanitizeInput(c.req.query("q"));',
+        "  return c.html(`<p>You searched for ${q}</p>`); // [A]",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/search",
+        parameter: "q",
+        sink: "html",
+        real: true,
+        why: "Trimming spaces leaves <script> untouched, so it runs in the visitor's browser.",
+      },
+    ],
+  },
+  {
+    id: "homemade-escape-html-in-attribute",
+    tests: "A home-made escapeHtml handles < and > but not quotes, and the value goes into a link's address.",
+    files: [
+      file("server/src/index.ts", [
+        ...HEAD,
+        'function escapeHtml(s) { return s.replace(/</g, "&lt;").replace(/>/g, "&gt;"); }',
+        "",
+        'app.get("/profile", (c) => {',
+        '  const site = escapeHtml(c.req.query("site"));',
+        '  return c.html(`<a href="${site}">My site</a>`); // [A]',
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/profile",
+        parameter: "site",
+        sink: "html",
+        real: true,
+        why: "A quote mark ends the address and what follows (onmouseover=...) runs as code, since this cleaner leaves quotes alone. A javascript: address would get through any escaping.",
+      },
+    ],
+  },
+  {
+    id: "homemade-sanitize-filename-one-pass",
+    tests: "A home-made sanitizeFilename removes every ../ in one pass, then the name picks a file to read.",
+    files: [
+      file("server/src/index.ts", [
+        'import { readFile } from "node:fs/promises";',
+        'import { join } from "node:path";',
+        ...HEAD,
+        'function sanitizeFilename(n) { return n.replace(/\\.\\.\\//g, ""); }',
+        "",
+        'app.get("/files", async (c) => {',
+        '  const name = sanitizeFilename(c.req.query("name"));',
+        '  return c.body(await readFile(join("uploads", name))); // [A]',
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/files",
+        parameter: "name",
+        sink: "filesystem",
+        real: true,
+        why: "Removing every ../ in one pass turns ....// back into ../, so the visitor can still climb out of the uploads folder.",
+      },
+    ],
+  },
+  {
+    id: "homemade-escape-shell-spaces",
+    tests: "A home-made escapeShellArg only escapes spaces, then the host goes into a shell command.",
+    files: [
+      file("server/src/index.ts", [
+        'import { execSync } from "node:child_process";',
+        ...HEAD,
+        'function escapeShellArg(s) { return s.replace(/ /g, "\\\\ "); }',
+        "",
+        'app.get("/ping", (c) => {',
+        '  const host = escapeShellArg(c.req.query("host"));',
+        "  return c.text(execSync(`ping -c 1 ${host}`).toString()); // [A]",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/ping",
+        parameter: "host",
+        sink: "shell",
+        real: true,
+        why: "Only spaces are escaped; ;rm${IFS}-rf needs no spaces and runs as a second command.",
+      },
+    ],
+  },
+  {
+    id: "homemade-to-safe-id",
+    tests: "A plainly named toSafeId turns the id into a number before it goes into a query.",
+    files: [
+      file("server/src/index.ts", [
+        ...HEAD,
+        "const toSafeId = (v) => parseInt(v, 10);",
+        "",
+        'app.get("/orders", async (c) => {',
+        '  const id = toSafeId(c.req.query("id"));',
+        "  return c.json(await db.query(`SELECT * FROM orders WHERE id = ${id}`)); // [A]",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/orders",
+        parameter: "id",
+        sink: "sql",
+        real: false,
+        why: "A number (or NaN) cannot carry SQL, so the query can't be changed.",
+      },
+    ],
+  },
+  {
+    id: "homemade-only-digits",
+    tests: "A plainly named onlyDigits refuses anything but digits before the id goes into a query.",
+    files: [
+      file("server/src/index.ts", [
+        ...HEAD,
+        'function onlyDigits(s) { if (!/^\\d+$/.test(s)) throw new Error("bad id"); return s; }',
+        "",
+        'app.get("/orders", async (c) => {',
+        '  const id = onlyDigits(c.req.query("id"));',
+        "  return c.json(await db.query(`SELECT * FROM orders WHERE id = ${id}`)); // [A]",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/orders",
+        parameter: "id",
+        sink: "sql",
+        real: false,
+        why: "Anything but digits is refused before the query, and digits alone cannot change it.",
+      },
+    ],
+  },
+  {
+    id: "homemade-pick-column",
+    tests: "A plainly named pickColumn only lets two fixed column names through before ORDER BY.",
+    files: [
+      file("server/src/index.ts", [
+        ...HEAD,
+        'function pickColumn(col) { return ["name", "created_at"].includes(col) ? col : "name"; }',
+        "",
+        'app.get("/users", async (c) => {',
+        '  const sort = pickColumn(c.req.query("sort"));',
+        "  return c.json(await db.query(`SELECT * FROM users ORDER BY ${sort}`)); // [A]",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/users",
+        parameter: "sort",
+        sink: "sql",
+        real: false,
+        why: "Only one of two fixed names ever reaches the query, whatever the visitor sends.",
+      },
+    ],
+  },
+  {
+    id: "homemade-clean-host",
+    tests: "A plainly named clean strips everything but letters, digits, dots and dashes before a shell command.",
+    files: [
+      file("server/src/index.ts", [
+        'import { execSync } from "node:child_process";',
+        ...HEAD,
+        'const clean = (s) => s.replace(/[^a-z0-9.-]/gi, "");',
+        "",
+        'app.get("/ping", (c) => {',
+        '  const host = clean(c.req.query("host"));',
+        "  return c.text(execSync(`ping -c 1 ${host}`).toString()); // [A]",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/ping",
+        parameter: "host",
+        sink: "shell",
+        real: false,
+        why: "Without ; | $ ` or spaces nothing can start a second command; a leading dash is the worst left, and ping rejects it.",
+      },
+    ],
+  },
+  {
+    id: "homemade-encode-html",
+    tests: "A plainly named encode escapes all five special HTML characters before the text goes into a page.",
+    files: [
+      file("server/src/index.ts", [
+        ...HEAD,
+        "function encode(s) {",
+        '  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/\'/g, "&#39;");',
+        "}",
+        "",
+        'app.get("/search", (c) => {',
+        '  const q = encode(c.req.query("q"));',
+        "  return c.html(`<p>You searched for ${q}</p>`); // [A]",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/search",
+        parameter: "q",
+        sink: "html",
+        real: false,
+        why: "Every character that could start a tag or end a quote is escaped, so the text shows as text.",
+      },
+    ],
+  },
+  {
+    id: "number-parse-int-direct",
+    tests: "The id is turned into a number with Number.parseInt right in the route, then goes into a query.",
+    files: [
+      file("server/src/index.ts", [
+        ...HEAD,
+        'app.get("/orders", async (c) => {',
+        '  const id = Number.parseInt(c.req.query("id"), 10);',
+        "  return c.json(await db.query(`SELECT * FROM orders WHERE id = ${id}`)); // [A]",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/orders",
+        parameter: "id",
+        sink: "sql",
+        real: false,
+        why: "Number.parseInt is the same as parseInt: what reaches the query is a number, which can't change it.",
+      },
+    ],
+  },
+  {
+    id: "homemade-escape-sql-inline",
+    tests: "The broken escapeSql again, called inside the query instead of before it.",
+    files: [
+      file("server/src/index.ts", [
+        ...HEAD,
+        "function escapeSql(s) { return s.replace(\"'\", \"''\"); }",
+        "",
+        'app.get("/users", async (c) => {',
+        '  const name = c.req.query("name");',
+        "  return c.json(await db.query(`SELECT * FROM users WHERE name = '${escapeSql(name)}'`)); // [A]",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/users",
+        parameter: "name",
+        sink: "sql",
+        real: true,
+        why: "Only the first quote is doubled, wherever the cleaner is called.",
+      },
+    ],
+  },
+  {
+    id: "homemade-escape-html-inline",
+    tests: "A correct, well-named escapeHtml called inside the page text instead of before it.",
+    files: [
+      file("server/src/index.ts", [
+        ...HEAD,
+        "function escapeHtml(s) {",
+        '  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/\'/g, "&#39;");',
+        "}",
+        "",
+        'app.get("/search", (c) => {',
+        '  const q = c.req.query("q");',
+        "  return c.html(`<p>You searched for ${escapeHtml(q)}</p>`); // [A]",
+        "});",
+      ]),
+    ],
+    key: [
+      {
+        marker: "A",
+        door: "/search",
+        parameter: "q",
+        sink: "html",
+        real: false,
+        why: "The text is fully escaped before it reaches the page, wherever the cleaner is called.",
+      },
+    ],
+  },
 ];
