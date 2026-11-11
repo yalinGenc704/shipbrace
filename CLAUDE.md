@@ -717,7 +717,12 @@ experiment, off by default, so a deploy changes nothing there). 375 tests.
      reading can create or soften findings, labelled as such;
    - the GitHub check's mark when a finding was softened to "worth a look"
      (recommendation: neutral, never a green pass);
-   - measure the real cost per review; `security-auditor` pass on the wiring.
+   - measure the real cost per review; `security-auditor` pass on the wiring;
+   - let the plain-words rule (`test/wording.test.ts`, `review.test.ts`)
+     allow banned words inside the user's own names shown in code style
+     (`` `sanitizeInput` ``), while still banning them in ShipBrace's own
+     sentences, and run those wording tests with a scripted cleaner judge
+     (about 15 minutes; the report must name the function so it can be found).
    Also decide `homemade-clean-host` (both models call it unsafe because of
    a leading dash; the key says safe): keep the key, or change the sample.
    Left on purpose (each fails safe, no question asked): CommonJS `require`,
