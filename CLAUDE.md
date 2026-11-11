@@ -695,11 +695,11 @@ Read this first in a new session, then CLAUDE.local.md ("Waiting on Murat")
 for the private items. Do not start any of these unasked: summarise them,
 recommend one, and wait for Murat's choice.
 
-**State:** everything is pushed (2026-11-10), but the last deployed commit
-is `2f660a4` (live version `9fe6d454`). Not live yet: `2e89129` (12
-home-made cleaner benchmark cases, `Number.parseInt` counted as a number;
-reaches the live checker with the next `/ship`) and `ffd9905` (the cleaner
-experiment, off by default, so a deploy changes nothing there). 375 tests.
+**State:** everything is pushed and deployed (2026-11-10): last deployed
+commit `b3da87f`, live version `ef1f4030`, all six live checks passed. That
+deploy brought `2e89129` live (12 home-made cleaner benchmark cases,
+`Number.parseInt` counted as a number) and `ffd9905` (the cleaner
+experiment, off by default, so it changes nothing live). 375 tests.
 
 1. **The AI cleaner step: go live or not (Murat's decision).** Built and
    measured (see "Cleaner experiment" in Current state); recommended model
