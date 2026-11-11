@@ -2500,12 +2500,12 @@ export const CASES: BenchCase[] = [
   },
   {
     id: "homemade-clean-host",
-    tests: "A plainly named clean strips everything but letters, digits, dots and dashes before a shell command.",
+    tests: "A plainly named clean keeps only letters, digits, dots and dashes, and drops any dashes at the start, before a shell command.",
     files: [
       file("server/src/index.ts", [
         'import { execSync } from "node:child_process";',
         ...HEAD,
-        'const clean = (s) => s.replace(/[^a-z0-9.-]/gi, "");',
+        'const clean = (s) => s.replace(/[^a-z0-9.-]/gi, "").replace(/^-+/, "");',
         "",
         'app.get("/ping", (c) => {',
         '  const host = clean(c.req.query("host"));',
@@ -2520,7 +2520,7 @@ export const CASES: BenchCase[] = [
         parameter: "host",
         sink: "shell",
         real: false,
-        why: "Without ; | $ ` or spaces nothing can start a second command; a leading dash is the worst left, and ping rejects it.",
+        why: "Without ; | $ ` or spaces nothing can start a second command, and with dashes at the start dropped the value can't be read as an option either.",
       },
     ],
   },

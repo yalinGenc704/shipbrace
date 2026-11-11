@@ -116,7 +116,7 @@ function Notice({ version }: { version: string }) {
         )}
         {point(
           "The AI step",
-          "Off. If it's ever switched on, short excerpts of your code (with recognised secrets removed) would be sent to Anthropic, the AI provider, to suggest places to check. You'll be asked again before that happens.",
+          "Off. If it's ever switched on, short excerpts of your code (with recognised secrets removed) would be sent to Anthropic, the AI provider, to suggest places to check and to read any cleaning functions your app wrote itself; anything the report says because of that reading is marked as the AI's. You'll be asked again before that happens.",
         )}
         {point(
           "What's kept, and for how long",
@@ -415,7 +415,7 @@ function Settings() {
             />
             <Switch
               label="AI-assisted review"
-              detail={data.data!.aiAvailable ? "Sends short excerpts of your code, secrets removed, to Anthropic." : "Not available yet. Nothing is sent to an AI."}
+              detail={data.data!.aiAvailable ? "Sends short excerpts of your code, secrets removed, to Anthropic. The AI suggests places to check and reads your app's own cleaning functions; what the report says because of that is marked as the AI's reading." : "Not available yet. Nothing is sent to an AI."}
               on={inst.aiReview}
               disabled={!data.data!.aiAvailable}
               onChange={(on) => void flip(inst.id, { aiReview: on })}

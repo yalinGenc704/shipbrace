@@ -185,10 +185,17 @@ function reviewOnce(
       }
       asked.add(message.step);
 
-      const step =
+      // Only a step this review was given: a name outside the list, or one
+      // the caller did not switch on, means the same thing as asking twice.
+      const step: (() => Promise<unknown>) | undefined =
         message.step === "propose" ? options.proposer && (() => options.proposer!.propose(message.input as never))
-        : options.vulnerabilities && (() => options.vulnerabilities!.lookup(message.input as never));
-      if (!step) return finish({ error: new ReviewStoppedError("crash") });
+        : message.step === "lookup" ? options.vulnerabilities && (() => options.vulnerabilities!.lookup(message.input as never))
+        : message.step === "judge" ? options.cleanerJudge && (() => options.cleanerJudge!.judge(message.input as never))
+        : undefined;
+      if (!step) {
+        log("sandbox: asked for a step this review was not given; stopping the review");
+        return finish({ error: new ReviewStoppedError("crash") });
+      }
 
       pauseClock();
       step().then(
@@ -225,6 +232,7 @@ function reviewOnce(
       snapshot,
       ...(options.proposer ? { proposer: { name: options.proposer.name } } : {}),
       ...(options.vulnerabilities ? { vulnerabilities: { notice: options.vulnerabilities.notice } } : {}),
+      ...(options.cleanerJudge ? { cleanerJudge: { name: options.cleanerJudge.name } } : {}),
     };
     child.send(request);
   });

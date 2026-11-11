@@ -3,7 +3,9 @@ import { test } from "node:test";
 import { CASES } from "../bench/cases.ts";
 import { moduleSkeleton } from "../src/review/modules.ts";
 import { runSecurityReview } from "../src/review/pipeline.ts";
+import type { CleanerJudge, CleanerVerdict } from "../src/analysis/cleaners.ts";
 import { snapshotFromFiles } from "../src/snapshot.ts";
+import { leakedJargon } from "./plain-words.ts";
 
 /**
  * The report is read by people who do not read code, so each explanation is
@@ -47,6 +49,69 @@ test("every explanation a review produces is at most three sentences", async () 
       }
     }
   }
+});
+
+/** A stand-in for the AI cleaner step: the same answer for every function, no model. */
+const always = (protects: boolean): CleanerJudge => ({
+  name: "scripted",
+  judge: (questions) =>
+    Promise.resolve(
+      new Map<string, CleanerVerdict>(
+        questions.map((q) => [q.id, { protects, reason: protects ? "It turns every value into a number." : "Only the first quote mark is handled." }]),
+      ),
+    ),
+});
+
+test("with the AI cleaner step on, explanations stay short and in plain words", async () => {
+  let named = 0;
+  for (const protects of [false, true]) {
+    for (const benchCase of CASES) {
+      const review = await runSecurityReview(snapshotFromFiles(benchCase.files), { cleanerJudge: always(protects) });
+      for (const item of review.modules.flatMap((m) => m.items)) {
+        for (const risk of item.risks) {
+          limit(`${benchCase.id} what`, risk.what);
+          limit(`${benchCase.id} fix`, risk.fix);
+          // The exact fix is code for an AI assistant and may quote code; the
+          // explanations are ShipBrace's own sentences, checked one by one.
+          for (const text of [risk.what, risk.impact, risk.fix]) {
+            assert.deepEqual(leakedJargon(text), [], `${benchCase.id}: ${text}`);
+          }
+          if (risk.confirmedBy !== "cleaner-check") continue;
+          // The function is named, in code style, so it can be found.
+          assert.match(risk.what, /your function `[\w$]+`/, benchCase.id);
+          assert.doesNotMatch(risk.fix, /`/, "the plain fix carries no code");
+          named++;
+        }
+        for (const lead of item.unproven) {
+          limit(`${benchCase.id} lead what`, lead.what);
+          limit(`${benchCase.id} lead check`, lead.check);
+          for (const text of [lead.what, lead.why, lead.check]) {
+            assert.deepEqual(leakedJargon(text), [], `${benchCase.id}: ${text}`);
+          }
+          if (lead.id.startsWith("cleaner/")) named++;
+        }
+      }
+    }
+  }
+  assert.ok(named >= 10, `the step changed only ${named} explanations; the samples should give at least 10`);
+});
+
+test("only a single name in code style is exempt from the plain-words rule", () => {
+  assert.deepEqual(leakedJargon("It goes through your function `sanitizeInput` first."), []);
+  assert.deepEqual(leakedJargon("It goes through `utils.sanitizeInput` first."), []);
+  assert.deepEqual(leakedJargon("This value is tainted."), ["taint"]);
+  assert.deepEqual(leakedJargon("`This whole sentence about a payload is in code style.`"), ["payload"]);
+  assert.deepEqual(leakedJargon("`sanitizeInput(x)` is called first."), ["sanitiz"], "a call is more than a name");
+  assert.deepEqual(leakedJargon("A stray ` mark, then a payload, then `name`."), ["payload", "an unpaired backtick"]);
+  assert.deepEqual(leakedJargon("A stray ` mark alone."), ["an unpaired backtick"]);
+});
+
+test("a function whose own name holds a word the report avoids is still named", async () => {
+  const benchCase = CASES.find((c) => c.id === "homemade-sanitize-input-trim")!;
+  const review = await runSecurityReview(snapshotFromFiles(benchCase.files), { cleanerJudge: always(false) });
+  const risk = review.modules.flatMap((m) => m.items).flatMap((i) => i.risks).find((r) => r.confirmedBy === "cleaner-check");
+  assert.match(risk?.what ?? "", /`sanitizeInput`/);
+  assert.deepEqual(leakedJargon(risk?.what ?? ""), []);
 });
 
 const EXPRESS_APP = [

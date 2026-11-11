@@ -6,6 +6,7 @@ import { parseProposals } from "../src/analysis/proposer.ts";
 import { buildReview, moduleSkeleton } from "../src/review/modules.ts";
 import { runSecurityReview } from "../src/review/pipeline.ts";
 import { snapshotFromFiles } from "../src/snapshot.ts";
+import { leakedJargon } from "./plain-words.ts";
 
 const snap = (path: string, content: string) => snapshotFromFiles([{ path, content }]);
 
@@ -158,14 +159,9 @@ test("every risk carries what, impact, fix, and a grade", async () => {
 
 test("risk explanations avoid security jargon", async () => {
   const review = await runSecurityReview(snap("server/src/a.ts", VULNERABLE));
-  const prose = review.modules
-    .flatMap((m) => m.items.flatMap((i) => i.risks.map((r) => `${r.what} ${r.impact} ${r.fix}`)))
-    .join(" ")
-    .toLowerCase();
-
-  for (const jargon of ["taint", "sink", "sanitiz", "cwe", "payload"]) {
-    assert.ok(!prose.includes(jargon), `leaked jargon: ${jargon}`);
-  }
+  const prose = review.modules.flatMap((m) => m.items.flatMap((i) => i.risks.flatMap((r) => [r.what, r.impact, r.fix])));
+  assert.ok(prose.length > 0);
+  for (const text of prose) assert.deepEqual(leakedJargon(text), [], `leaked jargon: ${text}`);
 });
 
 test("the SQL risk lands in the injection module", async () => {
@@ -299,9 +295,8 @@ test("lead explanations avoid security jargon", async () => {
   const leads = review.modules.flatMap((m) => m.items.flatMap((i) => i.unproven));
   assert.ok(leads.length > 0);
 
-  const prose = leads.map((l) => `${l.what} ${l.why} ${l.check}`).join(" ").toLowerCase();
-  for (const jargon of ["taint", "sink", "sanitiz", "cwe", "payload"]) {
-    assert.ok(!prose.includes(jargon), `leaked jargon: ${jargon}`);
+  for (const text of leads.flatMap((l) => [l.what, l.why, l.check])) {
+    assert.deepEqual(leakedJargon(text), [], `leaked jargon: ${text}`);
   }
 });
 

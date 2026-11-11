@@ -25,7 +25,8 @@ review" and "Conventions that are load-bearing".
    `verifyClaim` returns `valid`; `verifyClaim` and every detector never call
    a model. The enumerating pass still runs before the model. The one
    exception is the opt-in cleaner step (`ReviewOptions.cleanerJudge`, see
-   CLAUDE.md "The one rule"): it must stay off by default, re-trace a path
+   CLAUDE.md "The one rule"): it must stay off by default in the library
+   (a deployment switches it on, for allowed accounts only), re-trace a path
    with rules before calling it a finding, word its results as the AI's
    reading, and only ever soften a finding to "worth a look", never remove it.
 2. **No false "pass".** A checklist item reports `pass` only when its
@@ -85,7 +86,7 @@ Change reviewed: [files]
 
 ### Checks
 - typecheck: pass/fail · lint: pass/fail · tests: N pass, N fail, N skipped
-- benchmark: rules alone X/31, perfect suggester Y/31, false alarms Z
+- benchmark: rules alone X of N, perfect suggester Y of N, false alarms Z
   (recorded: ...)
 
 ### Verdict

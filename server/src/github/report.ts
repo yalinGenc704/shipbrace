@@ -6,8 +6,11 @@ import type { ReviewResult } from "@shipbrace/guardrails";
  *
  * The mark (product decision, 2026-10-01):
  *   failure  - at least one proven high risk
- *   neutral  - proven risks, none high
- *   success  - no proven risks
+ *   neutral  - proven risks, none high; or no proven risks, but an AI's
+ *              opinion alone moved a traced finding to "worth a look" (the
+ *              optional cleaner step; Murat's decision, 2026-11-10). A model
+ *              saying "this is fine" never produces a green tick.
+ *   success  - no proven risks, and nothing softened by an AI
  * The title always says what is still left for the user, so a green tick
  * never reads as "this app is secure" -- no scanner can promise that, and the
  * checklist always holds items only a person can judge.
@@ -52,7 +55,13 @@ export function checkOutput(review: ReviewResult, skipped?: { overLimit: number;
   const { high, medium, low, awaitingReview, unproven } = review.summary;
   const proven = high + medium + low;
 
-  const conclusion: Conclusion = high > 0 ? "failure" : proven > 0 ? "neutral" : "success";
+  // Traced findings the optional AI step moved to "worth a look" because it
+  // thought the app's own cleaning function works: an opinion, not proof.
+  const softened = review.modules
+    .flatMap((m) => m.items.flatMap((i) => i.unproven))
+    .filter((lead) => lead.id.startsWith("cleaner/")).length;
+
+  const conclusion: Conclusion = high > 0 ? "failure" : proven > 0 || softened > 0 ? "neutral" : "success";
   const checklist = review.summary.checklist ?? 0;
   const left = plural(awaitingReview, "item") + " for you to check" +
     (checklist > 0 ? ` · ${plural(checklist, "good-practice question")}` : "");
@@ -60,6 +69,8 @@ export function checkOutput(review: ReviewResult, skipped?: { overLimit: number;
     ? `${plural(high, "high-risk problem")} to fix · ${left}`
     : proven > 0
     ? `${plural(proven, "problem")} to fix, none high-risk · ${left}`
+    : softened > 0
+    ? `${plural(softened, "finding")} an AI thinks ${softened === 1 ? "is" : "are"} safe, for you to confirm · ${left}`
     : `No proven problems · ${left}`;
 
   const lines: string[] = [];
@@ -69,6 +80,23 @@ export function checkOutput(review: ReviewResult, skipped?: { overLimit: number;
       ` · **${plural(unproven, "place")} worth a look**, not proven · **${left}**`,
     "",
   );
+
+  if (softened > 0) {
+    lines.push(
+      `> **An AI's opinion is waiting for you to confirm.** In ${plural(softened, "place")}, the checker traced a visitor's value ` +
+        "to a risky operation through a cleaning function your app wrote itself, and an AI that read the function thought it makes " +
+        'the value safe. That is an opinion, not proof, so the finding is listed under "worth a look" and this check is not marked as passed.',
+      "",
+    );
+  }
+  const cleanerStep = review.stats.cleaners;
+  if (cleanerStep && cleanerStep.status !== "used") {
+    lines.push(
+      `> The AI ${cleanerStep.status === "refused" ? "declined to read" : "could not be reached to read"} your app's own cleaning ` +
+        "functions this time, so they were judged by the automated rules alone.",
+      "",
+    );
+  }
 
   for (const module of review.modules) {
     const order = { high: 0, medium: 1, low: 2 } as const;

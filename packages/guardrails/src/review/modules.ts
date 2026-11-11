@@ -890,7 +890,9 @@ function riskFromBrokenCleaner(path: TaintPath, cleaner: NonNullable<TaintPath["
     ...base,
     what: `${path.door ? `${entry} on ${pageName(path.door)}` : entry} goes through your function \`${cleaner.name}\` before ${copy?.operation ?? "it is used"}, and an AI reading that function found it does not make the value safe there. ${cleaner.reason}`,
     fix: "Replace this home-made cleaning step with a well-known, tested way of doing the same job, or close the gap the AI describes.",
-    fixDetail: `Replace \`${cleaner.name}\` with a library function made for ${copy?.operation ?? "this use"}, or fix it. ${cleaner.reason}`,
+    // The AI's own sentence stays out of this one: it is pasted into a coding
+    // assistant, and the sentence comes from a model that read the repository.
+    fixDetail: `Replace \`${cleaner.name}\` with a well-known library function made for ${copy?.operation ?? "this use"}, or correct it so that no value can change what the line does.`,
     confirmedBy: "cleaner-check",
   };
 }

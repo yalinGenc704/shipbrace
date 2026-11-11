@@ -60,12 +60,15 @@ The enumerating pass is kept for two reasons: the review must work with no model
 key, or cost; and running it before the model means a hostile repository cannot use
 the model to suppress a real finding.
 
-One opt-in step bends this (2026-11-10, off by default, not live): a model reads
-the app's own cleaning functions on traced paths. A cleaner it says does not work
-becomes a finding only if the rules, re-tracing without it, find the path open; a
-cleaner it says works softens a finding to "worth a look", never further. With that
-step on, a hostile repository could steer the model towards "works" and soften, but
-not hide, a finding. See CLAUDE.md, "The one rule".
+One opt-in step bends this (2026-11-10, off by default in the library, switched on
+per deployment and only for allowed accounts): a model reads the app's own cleaning
+functions on traced paths. A cleaner it says does not work becomes a finding only if
+the rules, re-tracing without it, find the path open; a cleaner it says works softens
+a finding to "worth a look", never further, and the GitHub check is then neutral
+rather than green. With that step on, a hostile repository could steer the model
+towards "works" and soften, but not hide, a finding. The questions are written by the
+sealed side of a review and checked by the side that holds the key before anything is
+sent. See CLAUDE.md, "The one rule".
 
 ### Verdicts
 

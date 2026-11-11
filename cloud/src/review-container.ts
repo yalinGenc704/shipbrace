@@ -5,7 +5,8 @@ import { ReviewStoppedError } from "@shipbrace/server/sandbox/stopped.ts";
 import { installationSwitches } from "./accounts.ts";
 import type { Env } from "./env.ts";
 import type { OutsideStep } from "./outside-steps.ts";
-import { aiAllowedFor } from "./ai-access.ts";
+import { CLEANER_MODEL } from "@shipbrace/guardrails/cleaner-judge";
+import { aiAllowedFor, cleanerCheckOffered } from "./ai-access.ts";
 import { claimReviewStart, reviewLimits } from "./limits.ts";
 
 const STOP_REASONS = new Set(["time", "memory", "crash", "busy", "unavailable"]);
@@ -36,6 +37,9 @@ export async function reviewInContainer(
   // The AI step: offered, switched on for this installation, and started by
   // someone allowed to use it (ai-access.ts).
   const useAi = aiAllowedFor(env, ranBy) && switches.aiReview;
+  // The AI's reading of the app's own cleaning functions is part of the AI
+  // step: the same people, the same switch, plus its own deployment switch.
+  const useCleanerCheck = useAi && cleanerCheckOffered(env);
   const useLookup = env.PACKAGE_LOOKUP === "on" && switches.packageLookup;
   const reviewer = env.REVIEWER.get(env.REVIEWER.newUniqueId());
   const request: ReviewRequest = {
@@ -46,11 +50,16 @@ export async function reviewInContainer(
     ...(snapshot.unread ? { unread: snapshot.unread.slice(0, 500) } : {}),
     ...(snapshot.incomplete ? { incomplete: true } : {}),
     ...(useAi ? { proposer: { name: "claude" } } : {}),
+    ...(useCleanerCheck ? { cleanerJudge: { name: `claude:${CLEANER_MODEL}` } } : {}),
     ...(useLookup ? { vulnerabilities: { notice: OSV_NOTICE } } : {}),
   };
   // Told to the review's own record before it starts, so the Worker refuses
   // any other step even if the code inside the container is taken over.
-  const allowed: OutsideStep[] = [...(useAi ? (["propose"] as const) : []), ...(useLookup ? (["lookup"] as const) : [])];
+  const allowed: OutsideStep[] = [
+    ...(useAi ? (["propose"] as const) : []),
+    ...(useCleanerCheck ? (["judge"] as const) : []),
+    ...(useLookup ? (["lookup"] as const) : []),
+  ];
 
   try {
     let response: Response;

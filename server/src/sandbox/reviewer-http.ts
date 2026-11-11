@@ -2,11 +2,13 @@ import { createServer, type IncomingMessage } from "node:http";
 import {
   ProposerRefusedError,
   snapshotFromFiles,
+  toVerdicts,
   type AttackProposer,
   type ReviewOptions,
   type VulnerabilitySource,
 } from "@shipbrace/guardrails";
 import { createSandbox, ReviewStoppedError, type Review } from "./sandbox.ts";
+import type { OutsideStep } from "./worker.ts";
 
 /**
  * The reviewer as Cloudflare runs it: one container per review, with internet
@@ -14,7 +16,7 @@ import { createSandbox, ReviewStoppedError, type Review } from "./sandbox.ts";
  * "review these files" -- using the same sandbox as everywhere else, so inside
  * the container each review still runs in its own sealed process.
  *
- * The AI step and the package lookup are asked of `http://shipbrace.internal`.
+ * The AI steps and the package lookup are asked of `http://shipbrace.internal`.
  * That address is not on the internet: Cloudflare hands every request to it to
  * the Worker, which decides whether to answer (at most once per step, per
  * review). Every other address simply has no way out.
@@ -28,6 +30,8 @@ export interface ReviewRequest {
   incomplete?: boolean;
   proposer?: { name: string };
   vulnerabilities?: { notice: string };
+  /** Present when the Worker will let an AI read the app's own cleaning functions. */
+  cleanerJudge?: { name: string };
 }
 
 export type ReviewReply =
@@ -39,7 +43,7 @@ const ASK = "http://shipbrace.internal/ask";
 /** Matches the largest snapshot a review reads (32 MB), with room for JSON. */
 const MAX_REQUEST_BYTES = 96 * 1024 * 1024;
 
-async function ask(step: "propose" | "lookup", input: unknown): Promise<unknown> {
+async function ask(step: OutsideStep, input: unknown): Promise<unknown> {
   const response = await fetch(`${ASK}/${step}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -65,6 +69,13 @@ export async function handleReview(request: ReviewRequest, review: Review): Prom
       // A Map does not survive JSON, so it travels as its entries.
       lookup: async (dependencies) => new Map((await ask("lookup", dependencies)) as Array<[string, never]>),
     } satisfies VulnerabilitySource;
+  }
+  if (request.cleanerJudge && typeof request.cleanerJudge.name === "string") {
+    options.cleanerJudge = {
+      name: request.cleanerJudge.name,
+      // A Map does not survive JSON here either: the verdicts travel as entries.
+      judge: async (questions) => toVerdicts(await ask("judge", questions)),
+    };
   }
   try {
     const sight = {

@@ -35,9 +35,30 @@ the model can suggest where to look. Source code can contain personal data,
 trade secrets, and occasionally credentials (the platform redacts secrets it
 recognises before sending, but cannot promise to catch all of them).
 
+**The AI also reads the app's own cleaning functions (added 2026-11-10).**
+When a visitor's value passes through a function the app wrote itself to make
+it safe, on the way to something dangerous, that function's code (at most
+4,000 characters each, at most 30 functions per review, recognised secrets
+removed) and the one line it feeds are sent to the same provider, and the
+model is asked whether the function really protects that line. This is the
+one place where what the model says changes the report directly, so users
+must be told both things:
+
+- If the model says a function does not work, the automated rules trace the
+  path again without it, and only a path that is then open is reported, as
+  "needs fixing", worded as the AI's reading.
+- If the model says a function works, a finding the rules would have reported
+  is listed as "worth a look" instead. It is never removed, never shown as
+  passed, and the GitHub check is then neutral rather than green.
+
+It runs under the same switch and for the same people as the rest of the AI
+step (today: the owner's account only), has its own deployment switch
+(`AI_CLEANER_CHECK`), and uses a smaller model from the same provider.
+
 | Obligation | What the product does |
 | --- | --- |
-| Tell users their code is sent to an AI provider, and which one | **Not built yet.** Must be shown before a user first switches the AI step on, and named in the privacy policy |
+| Tell users their code is sent to an AI provider, and which one | Said in the notices before the first review and beside the switch (app.shipbrace.com, Settings), including that the AI reads the app's own cleaning functions. Still to do before opening up: name it in the privacy policy |
+| Tell users when the report says something because of the AI | Each such finding names the function and says an AI read it; the report's footer says how many functions were read and what changed, or that the AI did not run |
 | Let users decline | The review works with no AI at all; the AI step only runs when a key is configured. Needs to become a per-user choice |
 | A data processing agreement with the provider | Needed if users' code contains personal data and you serve users under GDPR or similar laws. Anthropic offers one for API customers; sign it before launch |
 
@@ -84,7 +105,12 @@ read it.
 >
 > *AI-assisted review.* If you turn on AI-assisted review, parts of your
 > app's source code are sent to Anthropic, which provides the AI model, so it
-> can suggest places to check. Anthropic processes this data under our
-> agreement with them and does not use it to train its models. [Confirm
-> against the current Anthropic commercial terms before publishing.] You can
-> use the security review without this feature.
+> can suggest places to check. It also reads any functions your app wrote
+> itself to clean visitors' input, and says whether each one really protects
+> the place it is used. What the AI says about those functions can add a
+> finding to your report or move one to "worth a look"; either way the report
+> says it is the AI's reading, and it never marks anything as passed.
+> Anthropic processes this data under our agreement with them and does not
+> use it to train its models. [Confirm against the current Anthropic
+> commercial terms before publishing.] You can use the security review
+> without this feature.

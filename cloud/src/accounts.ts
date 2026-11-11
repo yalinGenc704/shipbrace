@@ -34,7 +34,7 @@ import { clearedSessionCookie, closeSession, cookieValue, openSession, readSessi
  */
 
 /** Bump when the notices change; everyone is asked again. */
-export const NOTICE_VERSION = "2026-10-10.2";
+export const NOTICE_VERSION = "2026-11-10.1";
 const REVIEWS_PER_HOUR = 10;
 const GITHUB_TIMEOUT_MS = 15_000;
 const STATE_COOKIE = "__Host-shipbrace-state";

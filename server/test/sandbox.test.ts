@@ -2,7 +2,14 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { ProposerRefusedError, runSecurityReview, snapshotFromFiles, type AttackProposer } from "@shipbrace/guardrails";
+import {
+  ProposerRefusedError,
+  runSecurityReview,
+  snapshotFromFiles,
+  type AttackProposer,
+  type CleanerJudge,
+  type CleanerQuestion,
+} from "@shipbrace/guardrails";
 import { createSandbox, DEFAULT_SANDBOX_LIMITS, ReviewStoppedError } from "../src/sandbox/sandbox.ts";
 
 const fixture = (name: string) => fileURLToPath(new URL(`./sandbox-fixtures/${name}.ts`, import.meta.url));
@@ -84,6 +91,92 @@ test("the package lookup is answered from outside too", async () => {
   assert.equal(sent.length, 1);
   assert.equal(item?.status, "pass");
   assert.equal(item?.notice, "test notice");
+});
+
+// --- the AI's reading of the app's own cleaning functions ----------------------------
+
+/** A home-made cleaner the rules trust by its name, and one they do not see. */
+const cleanerApp = (cleaner: string, use: string) =>
+  snapshotFromFiles([
+    {
+      path: "server/src/index.ts",
+      content: ['import { Hono } from "hono";', "const app = new Hono();", cleaner, 'app.get("/x", async (c) => {', ...use.split("\n"), "});"].join("\n"),
+    },
+  ]);
+const BROKEN = cleanerApp(
+  "function escapeSql(s) { return s.replace(\"'\", \"''\"); }",
+  '  const name = escapeSql(c.req.query("name"));\n  return c.json(await db.query(`SELECT * FROM users WHERE name = \'${name}\'`));',
+);
+const WORKING = cleanerApp(
+  "const toSafeId = (v) => parseInt(v, 10);",
+  '  const id = toSafeId(c.req.query("id"));\n  return c.json(await db.query(`SELECT * FROM orders WHERE id = ${id}`));',
+);
+const scripted = (protects: boolean, asked: CleanerQuestion[][] = []): CleanerJudge => ({
+  name: "scripted",
+  judge: async (questions) => {
+    asked.push(questions);
+    return new Map(questions.map((q) => [q.id, { protects, reason: "Scripted reason." }]));
+  },
+});
+const tracedRisks = (review: Awaited<ReturnType<typeof runSecurityReview>>) =>
+  review.modules.flatMap((m) => m.items.flatMap((i) => i.risks)).filter((r) => r.id.startsWith("taint/"));
+
+test("the cleaner step is answered from outside, once, and gives what an ordinary review gives", async () => {
+  const asked: CleanerQuestion[][] = [];
+  const sealed = await createSandbox(DEFAULT_SANDBOX_LIMITS, undefined, quiet)(BROKEN, { cleanerJudge: scripted(false, asked) });
+  assert.equal(asked.length, 1, "asked once");
+  assert.match(asked[0]![0]!.code, /function escapeSql/, "the function's own code crossed the wall");
+  assert.equal(tracedRisks(sealed)[0]?.confirmedBy, "cleaner-check");
+  assert.deepEqual(sealed.stats.cleaners, { status: "used", name: "scripted", asked: 1, broken: 1, working: 0 });
+  const ordinary = await runSecurityReview(BROKEN, { cleanerJudge: scripted(false) });
+  assert.deepEqual(withoutTiming(sealed), withoutTiming(ordinary));
+});
+
+test("an AI saying a cleaner works softens the finding and never removes it, sealed as well", async () => {
+  const before = await createSandbox(DEFAULT_SANDBOX_LIMITS, undefined, quiet)(WORKING);
+  assert.equal(tracedRisks(before).length, 1);
+  const after = await createSandbox(DEFAULT_SANDBOX_LIMITS, undefined, quiet)(WORKING, { cleanerJudge: scripted(true) });
+  assert.equal(tracedRisks(after).length, 0);
+  const leads = after.modules.flatMap((m) => m.items.flatMap((i) => i.unproven));
+  assert.ok(leads.some((l) => l.id.startsWith("cleaner/") && /toSafeId/.test(l.what)), "still on the page, as worth a look");
+});
+
+test("without the cleaner step switched on, nothing is asked and the rules' answer stands", async () => {
+  const sealed = await createSandbox(DEFAULT_SANDBOX_LIMITS, undefined, quiet)(BROKEN);
+  assert.equal(sealed.stats.cleaners, undefined);
+  assert.equal(tracedRisks(sealed).length, 0);
+});
+
+test("a cleaner judge that declines or fails leaves the rules' answer, and the review says so", async () => {
+  const refusing: CleanerJudge = { name: "refusing", judge: () => Promise.reject(new ProposerRefusedError("policy")) };
+  const failing: CleanerJudge = { name: "failing", judge: () => Promise.reject(new Error("network")) };
+  for (const [cleanerJudge, status] of [[refusing, "refused"], [failing, "failed"]] as const) {
+    const review = await createSandbox(DEFAULT_SANDBOX_LIMITS, undefined, quiet)(WORKING, { cleanerJudge });
+    assert.equal(review.stats.cleaners?.status, status);
+    assert.equal(tracedRisks(review).length, 1, "the finding stays a finding");
+  }
+});
+
+test("a process asking for the cleaner step when the review was not given it is stopped", async () => {
+  await assert.rejects(
+    createSandbox(DEFAULT_SANDBOX_LIMITS, fixture("uninvited"), quiet)(VULNERABLE),
+    (error: unknown) => error instanceof ReviewStoppedError && error.reason === "crash",
+  );
+  // Even with a proposer and a lookup switched on: each step is its own permission.
+  let calls = 0;
+  const proposer: AttackProposer = { name: "m", propose: async () => (calls++, []) };
+  await assert.rejects(createSandbox(DEFAULT_SANDBOX_LIMITS, fixture("uninvited"), quiet)(VULNERABLE, { proposer }), ReviewStoppedError);
+  assert.equal(calls, 0);
+});
+
+test("a process asking for a step that does not exist is stopped, not given the package lookup", async () => {
+  let calls = 0;
+  const vulnerabilities = { notice: "n", lookup: async () => (calls++, new Map()) };
+  await assert.rejects(
+    createSandbox(DEFAULT_SANDBOX_LIMITS, fixture("unknown-step"), quiet)(VULNERABLE, { vulnerabilities }),
+    ReviewStoppedError,
+  );
+  assert.equal(calls, 0);
 });
 
 // --- the walls ----------------------------------------------------------------------

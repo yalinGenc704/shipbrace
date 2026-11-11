@@ -129,7 +129,7 @@ export function HistoryPage({ id }: { id: string }) {
 function ConclusionIcon({ conclusion }: { conclusion: Conclusion }) {
   const { icon, label, className } = {
     failure: { icon: AlertTriangle, label: "High-risk problems", className: "text-danger" },
-    neutral: { icon: CircleHelp, label: "Problems, none high-risk", className: "text-warn" },
+    neutral: { icon: CircleHelp, label: "Not passed: problems or open questions, none high-risk", className: "text-warn" },
     success: { icon: ShieldCheck, label: "No proven problems", className: "text-ok" },
   }[conclusion];
   const Icon = icon;

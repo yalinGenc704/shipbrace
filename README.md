@@ -158,6 +158,13 @@ set scored 36 and 39 of 40 with no false alarms. The known false alarms are
 listed in a test, so any new one fails CI, and a fixed one must come off the
 list.
 
+An optional AI step closes that gap by reading those functions (off unless a
+deployment switches it on). On the same set, with a small model, it found 42
+of 46 with no false alarms: the five broken cleaners became findings, each
+confirmed open by the rules and labelled as the AI's reading, and the six
+correct ones moved to "worth a look". It never marks anything as passed, and
+a finding it softens keeps the GitHub check from going green.
+
 With Claude as the suggester on the earlier 31-app version of the set, it
 matched the perfect suggester exactly, with no false alarms; not yet re-run on
 all 56. The one problem never found: a stored comment later rendered as raw

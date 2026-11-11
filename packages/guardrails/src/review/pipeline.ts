@@ -37,7 +37,7 @@ export interface ReviewOptions {
    */
   vulnerabilities?: VulnerabilitySource;
   /**
-   * Reads the app's own cleaning functions on traced paths (experiment,
+   * Reads the app's own cleaning functions on traced paths (optional,
    * 2026-11-10, off by default). A cleaner it says does not work turns its
    * path into a finding labelled as its reading; one it says works can only
    * turn a finding into "worth a look". It never removes anything.

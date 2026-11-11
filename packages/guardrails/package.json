@@ -8,6 +8,7 @@
     ".": "./src/index.ts",
     "./snapshot": "./src/snapshot.ts",
     "./proposer": "./src/analysis/proposer.ts",
+    "./cleaner-judge": "./src/analysis/cleaner-judge.ts",
     "./vulnerabilities": "./src/review/vulnerabilities.ts"
   },
   "scripts": {

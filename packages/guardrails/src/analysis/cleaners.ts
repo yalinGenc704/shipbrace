@@ -1,12 +1,13 @@
 import type { RepoSnapshot, SourceFile } from "../types.ts";
 import { redact } from "../util.ts";
 import { dottedName, parseFile, walk, type Node, type ParsedFile } from "./ast.ts";
+import { MAX_CLEANER_CODE, MAX_QUESTIONS, plainReason } from "./cleaner-judge.ts";
 import type { SinkKind } from "./inventory.ts";
 import type { TaintPath } from "./oracle.ts";
 
 /**
  * The app's own "cleaning" functions on a traced path, so a model can read
- * them (2026-11-10, an experiment measured on the benchmark's home-made
+ * them (2026-11-10, an optional step measured on the benchmark's home-made
  * cleaner cases).
  *
  * The rules recognise cleaners by name, and only when the result is assigned:
@@ -58,8 +59,6 @@ export interface CleanerJudge {
   name: string;
   judge(questions: CleanerQuestion[]): Promise<Map<string, CleanerVerdict>>;
 }
-
-const MAX_CODE = 4_000;
 
 const offsetOf = (id: string): number => {
   const parsed = Number(id.split(":").pop());
@@ -333,7 +332,7 @@ function definedHere(file: ParsedFile, name: string): string | undefined {
   if (found.length > 1 || !found[0]) return "";
   // It is sent to a model: secrets in it are hidden before it is cut, so a
   // secret across the cut is still caught.
-  return redact(found[0]).slice(0, MAX_CODE);
+  return redact(found[0]).slice(0, MAX_CLEANER_CODE);
 }
 
 function joinPath(from: string, relative: string): string {
@@ -349,7 +348,7 @@ function joinPath(from: string, relative: string): string {
  * One question per function and place, however many paths share it, under a
  * short id the model only has to copy back. At most `max` are asked.
  */
-export function questionsFor(uses: CleanerUse[], max = 30): CleanerQuestion[] {
+export function questionsFor(uses: CleanerUse[], max = MAX_QUESTIONS): CleanerQuestion[] {
   const seen = new Map<string, CleanerQuestion>();
   for (const use of uses) {
     let question = seen.get(use.questionId);
@@ -387,7 +386,9 @@ export function applyVerdicts(
   for (const use of uses) {
     const verdict = use.askedAs ? verdicts.get(use.askedAs) : undefined;
     if (!verdict) continue;
-    const cleaner = { name: use.name, protects: verdict.protects, reason: verdict.reason };
+    // Whatever judge answered, its sentence is made fit for the report here:
+    // one plain sentence, no code marks, none of the words the report avoids.
+    const cleaner = { name: use.name, protects: verdict.protects, reason: plainReason(verdict.reason, verdict.protects) };
     if (use.path.verdict === "sanitized" && !verdict.protects && recheck(use)) {
       use.path.verdict = "exploitable";
       use.path.cleaner = cleaner;

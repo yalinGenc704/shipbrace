@@ -271,6 +271,70 @@ test("a review over the daily limit says so, without suggesting an immediate ret
   assert.doesNotMatch(final.output.summary, /Push again/);
 });
 
+// --- the mark when an AI softened a finding -----------------------------------------
+
+// Protective headers and a rate limit are in place, so the home-made cleaner
+// is the only thing the review has to say about this app.
+const HOMEMADE = [
+  'import { Hono } from "hono";',
+  'import { secureHeaders } from "hono/secure-headers";',
+  'import { rateLimiter } from "hono-rate-limiter";',
+  "const app = new Hono();",
+  'app.use("*", secureHeaders());',
+  'app.use("*", rateLimiter({ windowMs: 60000, limit: 60 }));',
+  "const toSafeId = (v) => parseInt(v, 10);",
+  'app.get("/orders", requireUser, async (c) => {',
+  '  const id = toSafeId(c.req.query("id"));',
+  "  return c.json(await db.query(`SELECT * FROM orders WHERE id = ${id}`));",
+  "});",
+].join("\n");
+const saysItWorks = { name: "scripted", judge: async (questions: Array<{ id: string }>) => new Map(questions.map((q) => [q.id, { protects: true, reason: "It turns the value into a number." }])) };
+
+async function finalCheck(review: ReviewDeps["review"]) {
+  const github = fakeGitHub({ "server/src/api.ts": HOMEMADE });
+  const d = deps(github.fetchImpl, { review });
+  const body = push();
+  await handleWebhook(d, { signature: sign(body), event: "push" }, body);
+  await Promise.all(d.done);
+  const patches = github.calls.filter((c) => c.method === "PATCH").map((c) => c.body);
+  return { final: patches.at(-1), output: patches.find((p) => p.output)?.output };
+}
+
+test("a finding an AI moved to 'worth a look' never gives a green check", async () => {
+  // The rules alone: one proven high risk through the home-made cleaner.
+  const rules = await finalCheck((snapshot) => runSecurityReview(snapshot));
+  assert.equal(rules.final.conclusion, "failure");
+
+  // The AI says the cleaner works: no proven problem is left, but the mark is
+  // neutral and the title and summary say an opinion is waiting.
+  const softened = await finalCheck((snapshot) => runSecurityReview(snapshot, { cleanerJudge: saysItWorks }));
+  assert.equal(softened.final.conclusion, "neutral", "an AI's opinion is not a pass");
+  assert.match(softened.output.title, /^1 finding an AI thinks is safe, for you to confirm/);
+  assert.doesNotMatch(softened.output.title, /No proven problems/);
+  assert.match(softened.output.summary, /An AI's opinion is waiting for you to confirm/);
+  assert.match(softened.output.summary, /not marked as passed/);
+  // The line itself still carries a note, naming the function.
+  const note = softened.output.annotations.find((a: { title: string }) => a.title === "Worth a look, not proven");
+  assert.match(note?.message ?? "", /toSafeId/);
+});
+
+test("when the AI could not read the cleaning functions, the check says so and keeps the finding", async () => {
+  const failing = { name: "failing", judge: () => Promise.reject(new Error("network")) };
+  const { final, output } = await finalCheck((snapshot) => runSecurityReview(snapshot, { cleanerJudge: failing }));
+  assert.equal(final.conclusion, "failure", "the rules' finding stands");
+  assert.match(output.summary, /could not be reached to read your app's own cleaning functions/);
+});
+
+test("with nothing softened, a clean review is still a pass", async () => {
+  const github = fakeGitHub({ "server/src/api.ts": 'export const greeting = "hello";' });
+  const d = deps(github.fetchImpl, { review: (snapshot) => runSecurityReview(snapshot, { cleanerJudge: saysItWorks }) });
+  const body = push();
+  await handleWebhook(d, { signature: sign(body), event: "push" }, body);
+  await Promise.all(d.done);
+  const final = github.calls.filter((c) => c.method === "PATCH").at(-1)?.body;
+  assert.equal(final.conclusion, "success");
+});
+
 // --- setup and uninstall ------------------------------------------------------------
 
 test("pushes from an installation nobody has set up are not reviewed", async () => {

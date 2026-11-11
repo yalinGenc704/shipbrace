@@ -45,7 +45,7 @@ export {
   type ProposerContext,
 } from "./analysis/proposer.ts";
 
-// Reading the app's own cleaning functions (experiment, optional).
+// Reading the app's own cleaning functions (an optional step).
 export {
   applyVerdicts,
   findCleaners,
@@ -55,7 +55,14 @@ export {
   type CleanerUse,
   type CleanerVerdict,
 } from "./analysis/cleaners.ts";
-export { createClaudeCleanerJudge, parseVerdicts, type ClaudeCleanerJudgeOptions } from "./analysis/cleaner-judge.ts";
+export {
+  CLEANER_MODEL,
+  createClaudeCleanerJudge,
+  parseQuestions,
+  parseVerdicts,
+  toVerdicts,
+  type ClaudeCleanerJudgeOptions,
+} from "./analysis/cleaner-judge.ts";
 
 // Phase 4: the ten-module review.
 export {

@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import Anthropic from "@anthropic-ai/sdk";
-import { createClaudeProposer, createOsvSource, type RepoSnapshot, type ReviewResult } from "@shipbrace/guardrails";
+import { createClaudeCleanerJudge, createClaudeProposer, createOsvSource, type RepoSnapshot, type ReviewResult } from "@shipbrace/guardrails";
 import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
@@ -115,6 +115,9 @@ async function review(target: string) {
  */
 const recent = new Map<string, Promise<ReviewResult>>();
 const proposer = config.aiReview ? createClaudeProposer(new Anthropic() as never) : undefined;
+const cleanerJudge = config.aiCleanerCheck
+  ? createClaudeCleanerJudge(new Anthropic({ timeout: 120_000, maxRetries: 1 }) as never)
+  : undefined;
 /**
  * Every review reads code sealed off: in the review container when hosted
  * (sandbox/reviewer.ts), otherwise in a sealed process here (sandbox/sandbox.ts).
@@ -133,6 +136,7 @@ function reviewOnce(snapshot: RepoSnapshot): Promise<ReviewResult> {
     pending = sealedReview(snapshot, {
       ...(config.packageLookup ? { vulnerabilities: createOsvSource() } : {}),
       ...(proposer ? { proposer } : {}),
+      ...(cleanerJudge ? { cleanerJudge } : {}),
     });
     // A failed review is not remembered; the next request tries again.
     pending.catch(() => recent.delete(key));

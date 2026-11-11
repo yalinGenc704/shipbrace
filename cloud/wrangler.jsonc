@@ -33,6 +33,10 @@
     "GITHUB_APP_SLUG": "shipbrace",
     "GITHUB_CLIENT_ID": "Iv23liy8pr9ByG3NznCo",
     "AI_REVIEW": "on",
+    // The AI also reads an app's own cleaning functions (CLAUDE.md, "The one
+    // rule"). Only for AI_ALLOWED_GITHUB_IDS, like the rest of the AI step;
+    // "off" here turns just this part off.
+    "AI_CLEANER_CHECK": "on",
     "PACKAGE_LOOKUP": "on",
     // Reviews started per rolling 24 hours, across everyone and per GitHub
     // installation. Low while ShipBrace is private; raise at launch.

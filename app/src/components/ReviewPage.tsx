@@ -114,8 +114,43 @@ export function ReviewView({ review, context }: { review: ReviewResult; context?
         guarantee that the application is secure.
       </p>
       <ModelNote model={review.stats.model} made={review.stats.proposalsMade} confirmed={review.stats.proposalsConfirmed} />
+      <CleanerNote cleaners={review.stats.cleaners} />
     </div>
   );
+}
+
+/**
+ * What the AI's reading of the app's own cleaning functions did, in a
+ * sentence or two. It can add a finding and can move one to "worth a look",
+ * so the reader is told how many of each; and told plainly when it did not
+ * run, rather than left to assume it looked.
+ */
+function CleanerNote({ cleaners }: { cleaners?: ReviewResult["stats"]["cleaners"] }) {
+  if (!cleaners) return null;
+  // The numbers come from the review's own record; anything that is not a
+  // plain count is shown as none rather than trusted.
+  const count = (value: unknown) => (typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0);
+  const asked = count(cleaners.asked);
+  const broken = count(cleaners.broken);
+  const working = count(cleaners.working);
+  const functions = `${asked} cleaning function${asked === 1 ? "" : "s"} your app wrote itself`;
+  const texts: Record<string, string> = {
+    used:
+      `An AI model read ${functions}. ` +
+      (broken > 0
+        ? `It found a gap in ${broken === 1 ? "one" : broken}, which the automated rules then confirmed as open: listed under "needs fixing", marked as the AI's reading. `
+        : "") +
+      (working > 0
+        ? `It thought ${working === 1 ? "one works" : `${working} work`}, which is an opinion and not proof: listed under "worth a look", never as passed.`
+        : broken > 0
+        ? ""
+        : "Its reading changed nothing in this report."),
+    refused: `The AI model declined to read ${functions}, so they were judged by the automated rules alone.`,
+    failed: `The AI model could not be reached to read ${functions}, so they were judged by the automated rules alone.`,
+  };
+  const text = Object.hasOwn(texts, String(cleaners.status)) ? texts[String(cleaners.status)] : undefined;
+  if (!text) return null;
+  return <p className="mt-2 text-xs leading-relaxed text-ink-soft">{text.trim()}</p>;
 }
 
 /**

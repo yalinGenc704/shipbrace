@@ -29,17 +29,26 @@ review     → ten OWASP Top 10:2025 modules for the user
 - The enumerating pass runs *before* the model so its findings exist
   independently; a hostile repository cannot use the model to suppress them.
 - The review must work with no model, no API key, and no cost.
-- **One opt-in exception, not live (Murat's decision, 2026-11-10):** with
-  `ReviewOptions.cleanerJudge` set (off by default; not wired into `server/`
-  or `cloud/`), a model reads the app's own cleaning functions on traced
+- **One opt-in exception (Murat's decisions, 2026-11-10; built that day,
+  live once deployed):** with `ReviewOptions.cleanerJudge` set (off by
+  default in the library; on Cloudflare it is the outside step `judge`, on
+  only for `AI_ALLOWED_GITHUB_IDS` with the installation's AI switch and
+  `AI_CLEANER_CHECK` on, model `CLEANER_MODEL` = Haiku 5.5), a model reads
+  the app's own cleaning functions on traced
   paths (`analysis/cleaners.ts`, `analysis/cleaner-judge.ts`). When it says
   a cleaner the rules trusted does not work, the rules re-trace the path
   without that one cleaner, and only a path still open becomes a risk,
   `confirmedBy: "cleaner-check"`, worded as the AI's reading; this can turn
   a check red. When it says a cleaner the rules did not see works, a traced
   risk becomes "worth a look" (never silence or a pass), worded as an
-  opinion; this can turn a check green, so the hostile-repository guarantee
-  above holds only with the step off. A cleaner is asked about only when
+  opinion; the GitHub check is then neutral, never green
+  (`server/src/github/report.ts`, counting `cleaner/` leads). A hostile
+  repository can still steer the model towards "works" and so turn a red
+  check neutral; the guarantee above holds in full only with the step off.
+  The questions cross the wall from the side that reads the repository, so
+  the side with the key checks them (`parseQuestions`: at most 30, ids
+  `q1`..., a plain name, code capped at 4,000 characters, secrets hidden
+  again) and sends nothing malformed. A cleaner is asked about only when
   every value the operation uses goes through it, in the same handler; when
   the function's name is bound exactly once in its file (a top-level
   definition or an import from this repository; parameters, local
@@ -58,13 +67,13 @@ review     → ten OWASP Top 10:2025 modules for the user
 | `packages/guardrails/src/analysis/verify.ts` | **The verifier.** Decides one claim, following values across functions and files |
 | `packages/guardrails/src/analysis/oracle.ts` | Enumerating pass (`analyseTaint`), scoped to one route handler |
 | `packages/guardrails/src/analysis/proposer.ts` | Provider-agnostic `AttackProposer`; Claude implementation |
-| `packages/guardrails/src/analysis/cleaners.ts`, `cleaner-judge.ts` | Experiment, off by default: the app's own cleaning functions on traced paths, judged by a model (`CleanerJudge`; Claude implementation) |
+| `packages/guardrails/src/analysis/cleaners.ts`, `cleaner-judge.ts` | The optional cleaner step: the app's own cleaning functions on traced paths, judged by a model (`CleanerJudge`; Claude implementation, `parseQuestions`/`toVerdicts` for crossing the wall) |
 | `packages/guardrails/src/review/` | `pipeline.ts` runs everything; `modules.ts` is the ten-module checklist; `checks.ts` holds project-level detectors |
 | `packages/guardrails/src/rules/` | Per-file rules. `injection.ts` reuses the AST sink detection |
 | `packages/scaffold/` | Generates new apps from composable modules; `auth` is a per-app setting |
 | `server/` | Review API (`GET`/`POST /api/review`), GitHub webhook, kept reviews (`/api/reviews/:id`, `/api/history/:id`); serves `app/dist` when built |
 | `server/src/sandbox/` | **Every review runs here**, in a sealed child process: no secrets, no network, reads limited to ShipBrace's code, time and memory limits |
-| `cloud/` | **Where it runs: Cloudflare, live at https://app.shipbrace.com.** Worker (`src/index.ts`: webhook, queue job, kept-review API, dashboard assets), one review in a container (`src/review-container.ts`), daily limits counted at each start (`src/limits.ts`), reviewer container class with internet off (`src/reviewer.ts`), D1 history (`src/history-d1.ts`, `migrations/`), `wrangler.jsonc`. `wall-check/` re-proves the internet wall |
+| `cloud/` | **Where it runs: Cloudflare, live at https://app.shipbrace.com.** Worker (`src/index.ts`: webhook, queue job, kept-review API, dashboard assets), one review in a container (`src/review-container.ts`), daily limits counted at each start (`src/limits.ts`), reviewer container class with internet off (`src/reviewer.ts`; the outside steps `propose`, `judge`, `lookup` and their checks are in `src/outside-steps.ts`), D1 history (`src/history-d1.ts`, `migrations/`), `wrangler.jsonc`. `wall-check/` re-proves the internet wall |
 | `Dockerfile`, `deploy/` | **Hosting.** One image, two roles (server, reviewer); `deploy/compose.yaml` runs shipbrace, reviewer, postgres, backup, cloudflared; `deploy/README.md` is the server setup guide |
 | `server/src/history.ts` | Review history in PostgreSQL: schema migrations, save, read back by unguessable link |
 | `app/` | React dashboard: the live review at `/`, a kept review at `/reviews/:id`, a repository's history at `/history/:id` |
@@ -95,7 +104,7 @@ everywhere:
 # PostgreSQL 18 (Homebrew, not started at login). Databases: shipbrace, shipbrace_test.
 LC_ALL=en_US.UTF-8 /opt/homebrew/opt/postgresql@18/bin/pg_ctl -D /opt/homebrew/var/postgresql@18 -l /opt/homebrew/var/log/postgresql@18.log start
 
-# all tests (expect 375 pass). Without TEST_DATABASE_URL the 6 database tests
+# all tests (expect 400 pass). Without TEST_DATABASE_URL the 6 database tests
 # are skipped and say so; it must name a database ending in _test (it is wiped).
 # CI (.github/workflows/ci.yml) runs typecheck, lint, tests and build on every push.
 TEST_DATABASE_URL=postgres:///shipbrace_test npm test
@@ -115,8 +124,9 @@ npm run dev --workspace @shipbrace/app
 # benchmark scores (add --model, with --env-file=.env, to include Claude; costs credit)
 node --experimental-strip-types scripts/bench.ts
 
-# the cleaner experiment: Haiku 5.5 and Opus 5.5 reading home-made cleaners (costs credit)
+# the cleaner step on the benchmark: Haiku 5.5 and Opus 5.5 reading home-made cleaners (costs credit)
 node --experimental-strip-types --env-file=.env scripts/bench-cleaners.ts --runs 3 --models haiku,opus
+# the same step on the local review API: add AI_REVIEW=on AI_CLEANER_CHECK=on (not with REVIEWER_SOCKET)
 
 # the hosted setup on this Mac (Colima runs Docker; `colima start` first).
 # Throwaway values only in deploy/.env and deploy/secrets/; delete afterwards.
@@ -202,7 +212,10 @@ the server with the AI step, start it with an extra `--env-file` that sets
   browser, keyed by risk id plus its text, and never changes the GitHub check
   or saved counts.
 - **Plain language in user-facing text.** Tests forbid the words taint, sink,
-  sanitiz*, CWE, and payload in risk explanations.
+  sanitiz*, CWE, and payload in risk explanations (`test/plain-words.ts`).
+  A name from the reviewed code shown in code style (`` `sanitizeInput` ``)
+  is exempt, since the report must name the function so it can be found;
+  ShipBrace's own sentences are not.
 - **Pin exact versions** in generated apps. Verify package versions against the
   registry rather than from memory.
 
@@ -224,22 +237,45 @@ the server with the AI step, start it with an extra `--env-file` that sets
   `number-parse-int-direct`). Before them (2026-10-20): 36/40, 39/40, 0 false alarms; the only
   other perfect-suggester miss is a React component pasting a `body` prop
   as raw HTML (stays "worth a look").
-- **Cleaner experiment (2026-11-10, off by default, see "The one rule").**
+- **Cleaner step, as first measured (2026-11-10, see "The one rule").**
   Haiku 5.5 and Opus 5.5, three runs each plus one after the review fixes,
   gave identical answers: all 5 broken home-made cleaners became
   `cleaner-check` risks (37 -> 42 of 46 found) and 5 of the 6 correct ones
   became "worth a look" (6 -> 1 false alarms). Both models judge
   `homemade-clean-host` unsafe (a value starting with a dash would be read
-  by ping as an option); the answer key says safe, since ping then stops
+  by ping as an option); the answer key said safe, since ping then stops
   with no address. Haiku said safe there in 2 of 8 runs, Opus never: the
   only answer that varied. No other case changed. DVNA, NodeGoat, Juice Shop and
   ShipBrace have no home-made cleaner on a traced path, so nothing was asked
   there. Cost per benchmark run: about $0.002 (Haiku) and $0.07-0.08
   (Opus). Not followed yet: CommonJS `require`, chains through a second
-  name. Before it could go live: an outside step `judge` through the sealed
-  reviewer (once per review, AI allowlist and switch), the disclosure text
-  in `docs/legal/third-party-services.md`, and the GitHub check's mark when
-  a risk was softened.
+  name.
+- **Cleaner step built for going live (2026-11-10, Murat's decisions: Haiku
+  5.5, his reviews only, neutral mark when softened, ping sample changed).**
+  The sample's `clean` now also drops leading dashes, so "safe" is plainly
+  right; two fresh Haiku runs: 42 of 46 found (5 by the cleaner check), 49
+  of 49 safe cleared, 0 false alarms, about $0.002 per run, and roughly 830
+  input and 65-400 output tokens per function asked (well under a tenth of
+  a cent each; at most 30 per review). Rules alone are unchanged (37 and 40
+  of 46, the same 6 known false alarms, the ping sample among them). Wiring: the
+  outside step `judge` (`cloud/src/outside-steps.ts` `answerJudge`,
+  `reviewer.ts`, allowed by `review-container.ts`; `sandbox/worker.ts`,
+  `sandbox.ts` and `reviewer-http.ts` on the reviewer's side). The Worker
+  logs the step's token counts (numbers only). The sandbox now refuses a
+  step name it does not know (it used to fall through to the package
+  lookup). The Docker fallback does not carry the step (`remote.ts`,
+  `reviewer.ts` unchanged; `AI_CLEANER_CHECK=on` with `REVIEWER_SOCKET`
+  refuses to start). The dashboard report says what the step did
+  (`CleanerNote`). The model's own sentence is shown only as one plain
+  sentence (`plainReason`, applied to every judge in `applyVerdicts`: no
+  address, markup, hidden characters or attack text, else a fixed sentence)
+  and is left out of the "exact fix" meant for pasting into an AI
+  assistant. A judge given malformed questions fails, and the report says
+  the step did not run. The notices and the AI switch describe the step
+  (`NOTICE_VERSION` bumped, so everyone is asked again), and
+  `docs/legal/third-party-services.md` sections 2 and 5 cover it. Its first
+  true end-to-end run on Cloudflare is the first review after the deploy:
+  read the Worker log line "cleaner check (...)" for the real cost.
 - **Stored attacks (2026-10-20).** A table column a visitor's unchecked
   value is saved into (SQL `INSERT ... VALUES`/`UPDATE ... SET`, model
   `create`/`update` data; never `WHERE` or a filter) makes reads of it a
@@ -432,6 +468,10 @@ the server with the AI step, start it with an extra `--env-file` that sets
 - 16 of 50 checklist items have no detector and are left to the user (counted 2026-10-23; the open-redirect item was split out of file paths). The
   checklist follows OWASP Top 10:2025; the four items added for its new
   categories (A03 supply chain, A10 exceptional conditions) have no detector yet.
+- **The check's mark (2026-10-01, extended 2026-11-10):** failure with a
+  proven high risk; neutral with other proven risks, or with none but a
+  finding an AI moved to "worth a look" (the title then reads "N finding(s)
+  an AI thinks is safe, for you to confirm"); success otherwise.
 - **GitHub App works end to end (first live run 2026-10-01):** App ID 5157570
   (address github.com/apps/shipbrace; it was "yg-aegis-review" until renamed,
   and the old address now gives "not found"), installed only on the private test repo
@@ -695,41 +735,29 @@ Read this first in a new session, then CLAUDE.local.md ("Waiting on Murat")
 for the private items. Do not start any of these unasked: summarise them,
 recommend one, and wait for Murat's choice.
 
-**State:** everything is pushed and deployed (2026-11-10): last deployed
-commit `b3da87f`, live version `ef1f4030`, all six live checks passed. That
-deploy brought `2e89129` live (12 home-made cleaner benchmark cases,
-`Number.parseInt` counted as a number) and `ffd9905` (the cleaner
-experiment, off by default, so it changes nothing live). 375 tests.
+**State:** last deployed commit `b3da87f` (live version `ef1f4030`,
+2026-11-10). Committed after that and **not pushed or deployed** (both wait
+for Murat's go-ahead, as always): the cleaner step made ready for going
+live, and the work listed below it. 400 tests.
 
-1. **The AI cleaner step: go live or not (Murat's decision).** Built and
-   measured (see "Cleaner experiment" in Current state); recommended model
-   Haiku 5.5 (`claude-haiku-5-5`), for the owner's reviews only at first.
-   About a day of work, each part reviewed:
-   - an outside step `judge` through the sealed reviewer, like `propose`:
-     `cloud/src/outside-steps.ts` and `reviewer.ts` (`Reviewer.claim`, at
-     most once per review), `cloud/src/review-container.ts` (allowed
-     steps), `server/src/sandbox/reviewer-http.ts` and `worker.ts` (the
-     judge asks over the channel), gated by `AI_ALLOWED_GITHUB_IDS` and the
-     installation's AI switch (`cloud/src/ai-access.ts`); the Docker
-     fallback (`deploy/`, `server/src/sandbox/remote.ts`) keeps it off;
-   - the disclosure in `docs/legal/third-party-services.md` (sections 2 and
-     5): the AI also reads the app's own cleaning functions, and its
-     reading can create or soften findings, labelled as such;
-   - the GitHub check's mark when a finding was softened to "worth a look"
-     (recommendation: neutral, never a green pass);
-   - measure the real cost per review; `security-auditor` pass on the wiring;
-   - let the plain-words rule (`test/wording.test.ts`, `review.test.ts`)
-     allow banned words inside the user's own names shown in code style
-     (`` `sanitizeInput` ``), while still banning them in ShipBrace's own
-     sentences, and run those wording tests with a scripted cleaner judge
-     (about 15 minutes; the report must name the function so it can be found).
-   Also decide `homemade-clean-host` (both models call it unsafe because of
-   a leading dash; the key says safe): keep the key, or change the sample.
-   Left on purpose (each fails safe, no question asked): CommonJS `require`,
-   values passed through a second name, re-tracing across files; and two
-   known softnesses: comments sent with the code can sway the AI towards
-   "works" (at most a softening), and a function named like `sanitizeInput`
-   puts that word into the report.
+1. **The AI cleaner step: built, waiting for `/ship`** (Murat's decisions,
+   2026-11-10: go live with Haiku 5.5 for his reviews only, neutral mark
+   when softened, ping sample changed). What it is and how it is wired: "The
+   one rule" above and "Cleaner step built for going live" in Current
+   state. After the deploy:
+   - Murat is shown the notices once more (`NOTICE_VERSION` changed) and
+     the AI switch's new description;
+   - the first review of an app with a home-made cleaner is the step's
+     first true end-to-end run on Cloudflare: read the Worker log line
+     "cleaner check (...)" for the real token counts, and check the report
+     (a labelled finding or a "worth a look" note, the footer sentence, and
+     a neutral check when softened);
+   - `AI_CLEANER_CHECK` set to "off" in `cloud/wrangler.jsonc` and a deploy
+     turns just this step off.
+   Not followed, on purpose (each leaves the rules' answer in place):
+   CommonJS `require`, values passed through a second name, re-tracing
+   across files. Opening the step to anyone else waits for the opening-up
+   decisions (privacy policy, the provider's data agreement).
 2. **Offered, not started:**
    - a protection mentioned only in text (a comment naming helmet, say)
      hands its item back instead of passing;

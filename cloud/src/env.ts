@@ -11,6 +11,12 @@ export interface Env {
 
   PUBLIC_URL: string;
   AI_REVIEW: "on" | "off";
+  /**
+   * Whether the AI step may also read the app's own cleaning functions (the
+   * outside step `judge`). Its own switch, so it can be turned off without
+   * touching the rest of the AI step; it does nothing unless AI_REVIEW is on.
+   */
+  AI_CLEANER_CHECK?: "on" | "off";
   PACKAGE_LOOKUP: "on" | "off";
   GITHUB_APP_ID: string;
   /** Who may sign in while ShipBrace is invite-only; empty = everyone. */

@@ -36,6 +36,13 @@ const schema = z.object({
    * docs/legal/third-party-services.md). Needs ANTHROPIC_API_KEY.
    */
   AI_REVIEW: z.enum(["on", "off"]).default("off"),
+  /**
+   * Whether the AI also reads the app's own cleaning functions on traced
+   * paths (see CLAUDE.md, "The one rule"). Off by default, needs AI_REVIEW=on,
+   * and is not carried by the review container of the Docker setup
+   * (REVIEWER_SOCKET), where it stays off.
+   */
+  AI_CLEANER_CHECK: z.enum(["on", "off"]).default("off"),
   ANTHROPIC_API_KEY: z.string().optional(),
   /**
    * The GitHub App. All three or none: with none, the webhook route answers
@@ -91,6 +98,7 @@ export const config = {
   allowedOrigins: parsed.data.ALLOWED_ORIGINS.split(",").map((origin) => origin.trim()),
   packageLookup: parsed.data.PACKAGE_LOOKUP === "on",
   aiReview: aiReviewEnabled(parsed.data),
+  aiCleanerCheck: aiCleanerCheckEnabled(parsed.data),
   github: githubConfig(parsed.data),
   localReview: parsed.data.LOCAL_REVIEW === "on",
   reviewerSocket: parsed.data.REVIEWER_SOCKET ?? null,
@@ -111,6 +119,19 @@ function aiReviewEnabled(env: z.infer<typeof schema>): boolean {
   if (env.AI_REVIEW !== "on") return false;
   if (!env.ANTHROPIC_API_KEY) {
     console.error("AI_REVIEW=on needs ANTHROPIC_API_KEY.");
+    process.exit(1);
+  }
+  return true;
+}
+
+function aiCleanerCheckEnabled(env: z.infer<typeof schema>): boolean {
+  if (env.AI_CLEANER_CHECK !== "on") return false;
+  if (env.AI_REVIEW !== "on") {
+    console.error("AI_CLEANER_CHECK=on needs AI_REVIEW=on.");
+    process.exit(1);
+  }
+  if (env.REVIEWER_SOCKET) {
+    console.error("AI_CLEANER_CHECK=on is not available with REVIEWER_SOCKET: the review container does not carry that step.");
     process.exit(1);
   }
   return true;
