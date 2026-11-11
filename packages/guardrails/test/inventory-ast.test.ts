@@ -75,6 +75,43 @@ test("rate limiting is not mistaken for an access-control guard", () => {
 
 // --- SQL, decided structurally ----------------------------------------------
 
+test("setting a session up for every visitor is not a sign-in check", () => {
+  const guardsOf = (...use: string[]) =>
+    inv("server.js", [
+      'const express = require("express");',
+      "const app = express();",
+      ...use,
+      'app.get("/account", (req, res) => res.json(loadAccount(req.session.userId)));',
+    ]).doors[0]?.guards;
+
+  // Giving everyone a session, or preparing sign-in, requires nothing of anyone.
+  assert.deepEqual(guardsOf("app.use(session({ secret: process.env.SECRET, store: new Store(db) }));"), []);
+  assert.deepEqual(guardsOf('app.use(cookieSession({ name: "s", keys }));'), []);
+  assert.deepEqual(guardsOf("app.use(passport.initialize());", "app.use(passport.session());"), []);
+  assert.deepEqual(guardsOf('app.use(require("express-flash")());'), []);
+  assert.deepEqual(guardsOf('app.use(require("morgan")("tiny"));', 'app.use(require("cookie-parser")());'), []);
+  // The settings passed to middleware are not checks either.
+  assert.deepEqual(guardsOf("app.use(cors({ origin: allowedOrigins, credentials: true }));"), []);
+  assert.deepEqual(guardsOf('app.use(express.static(path.join(__dirname, "public")));'), []);
+  assert.deepEqual(guardsOf("app.use(rateLimit({ skip: isAdmin }));"), []);
+
+  // A real check still counts, beside the session or on its own.
+  assert.deepEqual(guardsOf("app.use(session({ secret }));", "app.use(requireLogin);"), ["requireLogin"]);
+  assert.deepEqual(guardsOf('app.use(passport.authenticate("jwt", { session: false }));'), ["passport"]);
+  assert.deepEqual(guardsOf("app.use(security.isAuthorized());"), ["security"]);
+  assert.deepEqual(guardsOf("app.use(requireSession);"), ["requireSession"]);
+  assert.deepEqual(guardsOf("app.use(sessionGuard());"), ["sessionGuard"]);
+  // The app's own check, loaded where it is used, in any of the usual shapes.
+  for (const use of [
+    'app.use(require("./middleware/auth"));',
+    'app.use(require("./middleware/auth").requireLogin);',
+    'app.use(require("connect-ensure-login").ensureLoggedIn());',
+    'app.use(require("./middleware/auth")());',
+  ]) {
+    assert.deepEqual(guardsOf(use), ["require"], use);
+  }
+});
+
 test("an untagged SQL template is a sink; a tagged one is safe by construction", () => {
   const unsafe = inv("server/src/a.ts", [
     'app.get("/x/:id", async (c) => {',

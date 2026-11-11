@@ -150,6 +150,21 @@ test("an open page is found by the page check, and may be marked as intended", a
   assert.equal(open.risks.find((r) => r.what.includes("/save")), undefined);
 });
 
+test("an Express app with sessions but no sign-in check gets its open pages reported", async () => {
+  const lines = [
+    'const express = require("express");',
+    'const session = require("express-session");',
+    "const app = express();",
+    "app.use(session({ secret: process.env.SESSION_SECRET }));",
+    'app.get("/orders", (req, res) => { Order.findAll().then((orders) => res.json(orders)); });',
+  ];
+  const open = async (extra: string[]) =>
+    (await item([{ path: "server.js", content: [...lines.slice(0, 4), ...extra, lines[4]].join("\n") }], "access-control/unguarded-routes")).item.risks;
+  assert.equal((await open([])).length, 1, "the session alone protects nothing");
+  assert.match((await open([]))[0]!.what, /\/orders can be opened by anyone/);
+  assert.equal((await open(["app.use(requireLogin);"])).length, 0, "a real check after it does");
+});
+
 test("something the app does not have shows as not applying, and is not counted as yours to check", async () => {
   const { review, item: supabase } = await item([{ path: "server.js", content: EXPRESS_APP }], "access-control/database-rules");
   assert.equal(supabase.status, "does-not-apply");

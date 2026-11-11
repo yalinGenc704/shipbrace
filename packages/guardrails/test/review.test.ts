@@ -422,6 +422,150 @@ test("echoing the request back is not answering with fixed text", () => {
   assert.equal(doors[0]?.answersOnlyFixed, undefined);
 });
 
+test("a page that only sends the visitor on has nothing for a sign-in to protect", () => {
+  const flag = (handler: string) => buildInventory(snap("server/routes.js", `app.get("/go", ${handler});`)).doors[0]?.onlyRedirects;
+  assert.equal(flag("(req, res) => res.redirect(req.query.url)"), true);
+  assert.equal(flag('function (req, res) { if (req.query.url) { res.redirect(req.query.url) } else { res.send("invalid redirect url") } }'), true);
+  assert.equal(flag("(req, res) => res.redirect(302, req.params.to)"), true);
+  assert.equal(flag('(c) => c.redirect(c.req.query("url"))'), true);
+  assert.equal(flag('(req, res) => res.status(404).send("nowhere to go")'), undefined, "no redirect: that is answering only");
+
+  // Anything more than that is still a page that may hold something.
+  for (const more of [
+    "(req, res) => { audit(req.query.url); res.redirect(req.query.url); }",
+    "(req, res) => res.redirect(lookUp(req.query.id))",
+    "(req, res) => res.redirect(req.session.returnTo)",
+    "(req, res) => res.redirect(req.cookies.next)",
+    "(req, res) => res.redirect(req.body.url)",
+    "(req, res) => res.redirect(req.user.home)",
+    "(req, res) => res.redirect(req.headers.referer)",
+    "(req, res) => { const url = req.query.url; res.redirect(url); }",
+    "(req, res) => res.redirect(target)",
+    "(req, res) => res.redirect(req.query[key])",
+    "(req, res, next) => { res.redirect(req.query.url); next(); }",
+    '(c) => c.redirect(c.get("user").home)',
+    '(c) => c.redirect(c.req.header("referer"))',
+    // The request as a whole, or the answer's own copy of it, is not one field of the address.
+    "(req, res) => { res.send(res.req); res.redirect(req.query.url); }",
+    "(req, res) => { res.json(req.query); res.redirect(req.query.url); }",
+    '(c) => { c.json(c.req); return c.redirect(c.req.query("url")); }',
+    "(req, res) => res.redirect(res.locals.next)",
+    // Work hidden beside the redirect.
+    '(req, res) => { import("./wipe.js"); res.redirect(req.query.url); }',
+    "async (req, res) => { await 0; res.redirect(req.query.url); }",
+    "(req, res) => { new Job(); res.redirect(req.query.url); }",
+    "(req, res) => { (() => wipe())(); res.redirect(req.query.url); }",
+    "function (req, res) { this.count++; res.redirect(req.query.url); }",
+  ]) {
+    assert.equal(flag(more), undefined, more);
+  }
+  // A step before the handler does work of its own.
+  assert.equal(buildInventory(snap("server/routes.js", 'app.get("/go", upload.single("f"), (req, res) => res.redirect(req.query.url));')).doors[0]?.onlyRedirects, undefined);
+});
+
+test("a redirect-only handler written in another file is found by its name", async () => {
+  const routes = {
+    path: "routes/app.js",
+    content: [
+      'const appHandler = require("../core/appHandler");',
+      "module.exports = function (router) {",
+      '  router.get("/redirect", appHandler.redirect);',
+      '  router.get("/ping", appHandler.ping);',
+      '  router.get("/both", appHandler.twice);',
+      "};",
+    ].join("\n"),
+  };
+  const handlers = {
+    path: "core/appHandler.js",
+    content: [
+      "module.exports.redirect = function (req, res) {",
+      "  if (req.query.url) { res.redirect(req.query.url) } else { res.send('invalid redirect url') }",
+      "}",
+      "module.exports.ping = function (req, res) { exec('ping -c 2 ' + req.body.address, function (err, stdout) { res.send(stdout) }) }",
+    ].join("\n"),
+  };
+  const twice = { path: "core/other.js", content: "exports.twice = (req, res) => res.redirect(req.query.url);\nconst twice = (req, res) => res.send(db.all());" };
+  const review = await runSecurityReview(snapshotFromFiles([routes, handlers, twice]));
+  const open = review.modules.flatMap((m) => m.items).find((i) => i.id === "access-control/unguarded-routes")!.risks.map((r) => r.what);
+  assert.ok(!open.some((w) => w.includes("/redirect")), "nothing to protect on /redirect");
+  assert.ok(open.some((w) => w.includes("/ping")), "a page that does real work is still reported");
+  assert.ok(open.some((w) => w.includes("/both")), "two functions of that name: which one runs can't be told");
+  // Where it sends people is still reported, as its own problem.
+  const redirects = review.modules.flatMap((m) => m.items).find((i) => i.id === "access-control/redirects")!.risks;
+  assert.equal(redirects.length >= 1, true, "the open redirect itself is still found");
+});
+
+test("a handler's name is trusted only when the route's file shows where it comes from", async () => {
+  const openPages = async (files: Array<{ path: string; content: string }>) =>
+    (await runSecurityReview(snapshotFromFiles(files))).modules
+      .flatMap((m) => m.items)
+      .find((i) => i.id === "access-control/unguarded-routes")!
+      .risks.map((r) => r.what);
+  const harmless = { path: "lib/util.js", content: "const redirect = (req, res) => res.redirect(req.query.next);\nmodule.exports = { other: 1 };" };
+
+  // A method on an object made here, which sends data; an unrelated function
+  // of the same name elsewhere only redirects. The route is still reported.
+  const method = {
+    path: "server.js",
+    content: [
+      'const express = require("express");',
+      "const app = express();",
+      "class Admin { redirect(req, res) { res.json(db.allUsers()); } }",
+      "const admin = new Admin();",
+      'app.get("/export", admin.redirect);',
+    ].join("\n"),
+  };
+  assert.ok((await openPages([method, harmless])).some((w) => w.includes("/export")));
+
+  // The same name required from the wrong file, or not handed out by its file.
+  const wrongFile = { path: "server.js", content: 'const app = require("express")();\nconst handlers = require("./lib/handlers");\napp.get("/go", handlers.redirect);' };
+  assert.ok((await openPages([wrongFile, harmless])).some((w) => w.includes("/go")));
+  const notExported = { path: "lib/handlers.js", content: "const redirect = (req, res) => res.redirect(req.query.next);\nmodule.exports = { redirect: (req, res) => res.json(db.all()) };" };
+  assert.ok((await openPages([wrongFile, notExported])).some((w) => w.includes("/go")));
+
+  // A name that means two things in the file: the local one is what the route uses.
+  const shadowed = {
+    path: "routes.js",
+    content: [
+      "function go(req, res) { res.redirect(req.query.url); }",
+      "module.exports = function (router, other) {",
+      "  const go = other;",
+      '  router.get("/go", go);',
+      "};",
+    ].join("\n"),
+  };
+  assert.ok((await openPages([shadowed])).some((w) => w.includes("/go")));
+  const parameter = {
+    path: "routes.js",
+    content: 'const handlers = require("./lib/handlers");\nmodule.exports = function (router, handlers) { router.get("/go", handlers.redirect); };',
+  };
+  assert.ok((await openPages([parameter, { path: "lib/handlers.js", content: "exports.redirect = (req, res) => res.redirect(req.query.next);" }])).some((w) => w.includes("/go")));
+
+  // The file must hand the function out under that name, once, and not replace what it hands out.
+  for (const handlers of [
+    "exports.safe = function go(req, res) { res.redirect(req.query.next); };\nexports.redirect = wrap(danger);",
+    "exports.redirect = (req, res) => res.redirect(req.query.next);\nmodule.exports = new Handlers();",
+    "exports.redirect = (req, res) => res.redirect(req.query.next);\nexports.redirect = wrap(danger);",
+  ]) {
+    assert.ok((await openPages([wrongFile, { path: "lib/handlers.js", content: handlers }])).some((w) => w.includes("/go")), handlers);
+  }
+  // A default import is one value the file chose; its `redirect` is not the file's named function.
+  const byDefault = { path: "server.ts", content: 'import express from "express";\nimport h from "./lib/h";\nconst app = express();\napp.get("/go", h.redirect);' };
+  const defaultFile = { path: "lib/h.ts", content: "export const redirect = (req, res) => res.redirect(req.query.to);\nexport default new Handlers();" };
+  assert.ok((await openPages([byDefault, defaultFile])).some((w) => w.includes("/go")));
+  const byNamespace = { path: "server.ts", content: 'import express from "express";\nimport * as h from "./lib/h";\nconst app = express();\napp.get("/go", h.redirect);' };
+  assert.ok(!(await openPages([byNamespace, defaultFile])).some((w) => w.includes("/go")));
+
+  // Declared in the route's own file, or handed out by the file it is required from.
+  const local = { path: "server.js", content: 'const app = require("express")();\nfunction go(req, res) { res.redirect(req.query.url); }\napp.get("/go", go);' };
+  assert.ok(!(await openPages([local])).some((w) => w.includes("/go")));
+  const exported = { path: "lib/handlers.js", content: "exports.redirect = (req, res) => res.redirect(req.query.next);" };
+  assert.ok(!(await openPages([wrongFile, exported])).some((w) => w.includes("/go")));
+  const named = { path: "server.ts", content: 'import express from "express";\nimport { leave } from "./lib/leave";\nconst app = express();\napp.get("/leave", leave);' };
+  const namedExport = { path: "lib/leave.ts", content: "export const leave = (req, res) => res.redirect(req.query.to);" };
+  assert.ok(!(await openPages([named, namedExport])).some((w) => w.includes("/leave")));
+});
+
 test("a sign-in check at the top of the handler protects the route", () => {
   const doors = buildInventory(snap("server/src/a.ts", [
     'app.post("/api/notes", async (c) => {',

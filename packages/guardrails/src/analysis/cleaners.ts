@@ -202,7 +202,7 @@ const BLOCK = /^(?:BlockStatement|Program|ArrowFunctionExpression)$/;
  * (assignments, destructuring, ++/--, for...in/of). Read by name, not scope:
  * a name bound twice can't be told apart, so it is never trusted.
  */
-function bindings(root: Node, name: string): { declared: number; written: number } {
+export function bindings(root: Node, name: string): { declared: number; written: number } {
   let declared = 0;
   let written = 0;
   const count = (pattern: unknown, into: "declared" | "written") => {

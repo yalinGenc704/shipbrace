@@ -83,14 +83,14 @@ async function answer(request: Request, env: Env, ctx: OutboundHandlerContext): 
     if (!cleanerCheckOffered(env)) return reply({ error: "failed" }, 403);
     // Numbers only, for measuring what the step costs; never the code.
     let asked = 0;
-    const tokens = { input: 0, output: 0 };
+    const counted = { input: 0, output: 0 };
     // A small request to a small model: answered in seconds or not at all.
     const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, timeout: JUDGE_TIMEOUT_MS, maxRetries: 1 });
     const judge = createClaudeCleanerJudge(client as never, {
       model: CLEANER_MODEL,
       onUsage: (usage) => {
-        tokens.input += usage.input_tokens;
-        tokens.output += usage.output_tokens;
+        counted.input += usage.input_tokens;
+        counted.output += usage.output_tokens;
       },
     });
     const answered = await answerJudge(input, {
@@ -101,7 +101,7 @@ async function answer(request: Request, env: Env, ctx: OutboundHandlerContext): 
     });
     console.log(
       `cleaner check (${CLEANER_MODEL}): ${asked} functions asked, status ${answered.status}, ` +
-        `${tokens.input} input and ${tokens.output} output tokens`,
+        `${counted.input} input and ${counted.output} output tokens`,
     );
     return reply(answered.body, answered.status);
   }

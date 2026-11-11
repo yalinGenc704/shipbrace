@@ -23,6 +23,7 @@ import type {
 } from "./inventory.ts";
 import { isFixedText } from "./fixed-text.ts";
 import { visitorInputChecker } from "./oracle.ts";
+import { bindings as bindingsOf } from "./cleaners.ts";
 import { modelFields } from "./schemas.ts";
 
 /**
@@ -40,6 +41,67 @@ const ACCESS_CHECK =
 
 const NOT_A_GUARD =
   /^(?:cors|secureHeaders|logger|compress|compression|etag|prettyJSON|rateLimiter|rateLimit|limiter|helmet|morgan|bodyParser|json|urlencoded|cookieParser|express|upload|multer|serveStatic|cache|validate\w*)$/;
+
+/**
+ * Middleware that gives every visitor a session, or prepares sign-in,
+ * without requiring anyone to be signed in: `session({...})`,
+ * `cookieSession(...)`, `passport.initialize()`, `passport.session()`,
+ * flash messages. Registered site-wide, these used to count as a sign-in
+ * check on every route, so an Express app with sessions and no check at all
+ * got no open-page warning (known gap, 2026-10-23). Matched on the exact
+ * call, so `passport.authenticate(...)` and `requireSession` still count.
+ */
+const SESSION_SETUP = /^(?:session|cookieSession|expressSession|passport\.(?:initialize|session)|flash)$/;
+
+/**
+ * The names that may be a sign-in check in one argument of `app.use(...)`.
+ * For a call such as `session({ secret, store })` or `cors({ origin })` only
+ * what is called counts, never the settings passed to it: a setting named
+ * `allowedOrigins` is not a check. Anything else is read as before.
+ */
+function guardNamesIn(arg: Node): string[] {
+  // `app.use(require("express-flash")())`: a package known to set things up
+  // is not a check. Any other `require(...)` counts as before -- it may well
+  // be the app's own sign-in check (`require("./middleware/auth")`).
+  const required = requiredModule(arg);
+  if (required !== undefined) return SETUP_PACKAGE.test(required) ? [] : ["require"];
+  if (arg.type === "CallExpression") {
+    const called = dottedName(arg.callee);
+    // `dottedName` of a call ends in "()": only a plain `a.b(...)` is read this way.
+    if (called && !called.includes("(")) {
+      return SESSION_SETUP.test(called) ? [] : identifiersIn(arg.callee as Node);
+    }
+  }
+  return identifiersIn(arg);
+}
+
+/** Packages that prepare a request or a session and require nothing of the visitor. */
+const SETUP_PACKAGE =
+  /^(?:express-session|cookie-session|express-flash|connect-flash|cookie-parser|body-parser|morgan|cors|helmet|compression|serve-favicon|express-fileupload|multer|method-override)$/;
+
+/**
+ * The module named by the `require("...")` an expression is built on
+ * (`require("x")`, `require("x")()`, `require("x").y`, `require("x").y()`),
+ * or undefined when it is not built on one.
+ */
+function requiredModule(node: Node): string | undefined {
+  let current: Node | undefined = node;
+  for (let depth = 0; current && depth < 6; depth++) {
+    if (current.type === "CallExpression") {
+      const callee = current.callee as Node | undefined;
+      const args = (current.arguments ?? []) as Node[];
+      if (callee?.type === "Identifier" && callee.name === "require") {
+        return args.length === 1 && isStringLiteral(args[0]) ? String(args[0].value) : undefined;
+      }
+      current = callee;
+    } else if (current.type.endsWith("MemberExpression")) {
+      current = current.object as Node | undefined;
+    } else {
+      return undefined;
+    }
+  }
+  return undefined;
+}
 
 const SOURCE_NAMES: Array<{ match: RegExp; kind: SourceKind }> = [
   // Express with multer: `req.file.originalname` is whatever the uploader named it.
@@ -231,7 +293,20 @@ export function buildInventoryFromAst(snapshot: RepoSnapshot): Inventory {
   for (const door of inventory.doors) {
     if (!door.handlerRef) continue;
     const matches = (inventory.functions ?? []).filter((f) => f.name === door.handlerRef);
-    if (matches.length === 1) door.handlerAt = { path: matches[0]!.path, range: matches[0]!.bodyRange };
+    if (matches.length !== 1) continue;
+    door.handlerAt = { path: matches[0]!.path, range: matches[0]!.bodyRange };
+    // The named function is the whole route only when nothing runs before
+    // it, and the name is trusted only when the route's own file shows where
+    // it comes from: a same-named method on some object, or an unrelated
+    // function elsewhere, must not stand in for the code that really runs.
+    const fn = matches[0]!;
+    const home = handlerHomes.get(door);
+    if (
+      fn.onlyRedirects && home?.files.includes(fn.path) && (fn.onlyRedirects === "exported" || !home.imported) &&
+      (!home.imported || handsOutOnce(snapshot, fn.path, fn.name))
+    ) {
+      door.onlyRedirects = true;
+    }
   }
   addStoredSources(inventory);
   addMassAssignment(inventory, snapshot);
@@ -700,7 +775,7 @@ function findDoors(parsed: ParsedFile): Door[] {
       const prefix = isStringLiteral(args[0]) ? String(args[0].value).replace(/\*+$/, "") : "";
       const names = args
         .filter((a) => !isStringLiteral(a))
-        .flatMap((a) => identifiersIn(a))
+        .flatMap((a) => guardNamesIn(a))
         .filter((n) => !NOT_A_GUARD.test(n));
 
       if (names.length > 0) registered.push({ prefix, names });
@@ -755,7 +830,7 @@ function findDoors(parsed: ParsedFile): Door[] {
       ? dottedName(handler)?.split(".").pop()
       : undefined;
 
-    return {
+    const door: Door = {
       id: `${parsed.path}:${method}:${path}`,
       method,
       path,
@@ -766,8 +841,110 @@ function findDoors(parsed: ParsedFile): Door[] {
       // Steps named before the handler (an upload, a body parser) do work of
       // their own, so such a route is never treated as answering only.
       ...(middleware.length === 0 && answersOnlyFixed(handler) ? { answersOnlyFixed: true } : {}),
+      ...(middleware.length === 0 && onlyRedirects(handler) ? { onlyRedirects: true } : {}),
     };
+    if (named && middleware.length === 0) {
+      const home = handlerHome(parsed, handler);
+      if (home) handlerHomes.set(door, home);
+    }
+    return door;
   });
+}
+
+/**
+ * True when `path` hands `name` out exactly once and never replaces
+ * everything it hands out (`module.exports = ...`): otherwise what a route in
+ * another file receives under that name may not be the function that was read.
+ * Read from the text, comments included, so anything unclear counts against.
+ */
+function handsOutOnce(snapshot: RepoSnapshot, path: string, name: string): boolean {
+  const content = snapshot.files.find((f) => f.path === path)?.content ?? "";
+  if (!/^[A-Za-z_$][\w$]*$/.test(name)) return false;
+  if (/\bmodule\s*\.\s*exports\s*=(?!=)/.test(content)) return false;
+  const assigned = content.match(new RegExp(`\\bexports\\s*\\.\\s*${name.replace(/\$/g, "\\$")}\\s*=(?!=)`, "g"))?.length ?? 0;
+  const declared = content.match(new RegExp(`\\bexport\\s+(?:async\\s+)?(?:function\\s+|const\\s+|let\\s+|var\\s+)${name.replace(/\$/g, "\\$")}\\b`, "g"))?.length ?? 0;
+  return assigned + declared === 1;
+}
+
+/**
+ * For routes that name their handler and run nothing before it: the files
+ * the named function must be written in, read from how the route's own file
+ * binds the name. `imported` means it comes from another file, so only a
+ * function that file exports under that name will do.
+ */
+const handlerHomes = new WeakMap<Door, { files: string[]; imported: boolean }>();
+
+function handlerHome(parsed: ParsedFile, handler: Node): { files: string[]; imported: boolean } | undefined {
+  // `appHandler.redirect` is bound through `appHandler`; `redirect` through itself.
+  const member = handler.type.endsWith("MemberExpression");
+  const object = member ? (handler.object as Node | undefined) : handler;
+  if (!object || object.type !== "Identifier" || (member && handler.computed)) return undefined;
+  const bound = String(object.name);
+
+  const requireOf = (init: Node | undefined): string | undefined => {
+    if (init?.type !== "CallExpression") return undefined;
+    const callee = init.callee as Node | undefined;
+    const args = (init.arguments ?? []) as Node[];
+    return callee?.type === "Identifier" && callee.name === "require" && args.length === 1 && isStringLiteral(args[0])
+      ? String(args[0].value)
+      : undefined;
+  };
+
+  let from: string | undefined;
+  let bindings = 0;
+  for (const statement of (parsed.program.body ?? []) as Node[]) {
+    if (statement.type === "ImportDeclaration") {
+      for (const specifier of (statement.specifiers ?? []) as Node[]) {
+        if ((specifier.local as Node | undefined)?.name !== bound) continue;
+        bindings++;
+        // A member needs the whole module, which only `import * as x` is: a
+        // default import is whatever one value that file chose to hand out.
+        const whole = specifier.type === "ImportNamespaceSpecifier";
+        const sameName = specifier.type === "ImportSpecifier" && ((specifier.imported as Node | undefined)?.name ?? bound) === bound;
+        if (member ? whole : sameName) from = String((statement.source as Node | undefined)?.value ?? "");
+      }
+    }
+    if (statement.type === "VariableDeclaration") {
+      for (const declarator of (statement.declarations ?? []) as Node[]) {
+        const id = declarator.id as Node | undefined;
+        const source = requireOf(declarator.init as Node | undefined);
+        if (id?.type === "Identifier" && id.name === bound) {
+          bindings++;
+          if (member && source) from = source;
+        } else if (!member && id?.type === "ObjectPattern" && source) {
+          // `const { redirect } = require("./handlers")`, not renamed.
+          for (const property of (id.properties ?? []) as Node[]) {
+            const key = property.key as Node | undefined;
+            const value = property.value as Node | undefined;
+            if (value?.type === "Identifier" && value.name === bound) {
+              bindings++;
+              if (key?.type === "Identifier" && key.name === bound) from = source;
+            }
+          }
+        }
+      }
+    }
+    if (statement.type === "FunctionDeclaration" && (statement.id as Node | undefined)?.name === bound) bindings++;
+  }
+  // The name must mean one thing in the whole file: bound once (at any
+  // depth -- a parameter or a local of the same name would be what the
+  // route really uses) and never written again.
+  const everywhere = bindingsOf(parsed.program, bound);
+  if (bindings !== 1 || everywhere.declared !== 1 || everywhere.written !== 0) return undefined;
+  if (from === undefined) return member ? undefined : { files: [parsed.path], imported: false };
+  if (!from.startsWith(".")) return undefined;
+
+  const parts = parsed.path.split("/").slice(0, -1);
+  for (const piece of from.split("/")) {
+    if (piece === "..") parts.pop();
+    else if (piece !== "." && piece !== "") parts.push(piece);
+  }
+  const base = parts.join("/");
+  const stem = base.replace(/\.[cm]?[jt]s$/, "");
+  return {
+    files: [base, ...["js", "ts", "mjs", "cjs"].map((ext) => `${stem}.${ext}`), `${stem}/index.js`, `${stem}/index.ts`],
+    imported: true,
+  };
 }
 
 /** The visitor's whole request: `req.body`, `req.query`... */
@@ -971,6 +1148,117 @@ function answersOnlyFixed(handler: Node): boolean {
   return fixed;
 }
 
+/** What a handler may call on its own parameters and still count as only redirecting. */
+const REDIRECT_OR_ANSWER = /^(?:redirect|json|text|html|body|notFound|status|send|sendStatus|end|type)$/;
+
+/**
+ * True for a handler that only sends the visitor on to an address from
+ * their own request, or answers with fixed text: `(req, res) => { if
+ * (req.query.url) res.redirect(req.query.url); else res.send("no"); }`.
+ *
+ * Its code may name nothing but its own parameters. The answering one (the
+ * second, or Hono's only one) may only have `redirect` or an answer method
+ * called on it; the request may only be read for one field of the address
+ * or the query (`req.query.x`, `req.params.x`, Hono's `c.req.query("x")`).
+ * No other name, no other call, no variable, no nested function, no
+ * `await`, `new` or `import()`, no body, cookie, header or session read,
+ * and never the request as a whole. Anything it cannot read that plainly is
+ * false, and the route is still reported. It must redirect at least once;
+ * answering only is `answersOnlyFixed`.
+ */
+const PLAIN_NODE =
+  /^(?:BlockStatement|ExpressionStatement|IfStatement|ReturnStatement|CallExpression|\w*MemberExpression|Identifier|Literal|StringLiteral|NumericLiteral|BooleanLiteral|NullLiteral|TemplateLiteral|TemplateElement|UnaryExpression|LogicalExpression|BinaryExpression|ConditionalExpression|ParenthesizedExpression|ObjectExpression|Property|ObjectProperty)$/;
+
+function onlyRedirects(handler: Node): boolean {
+  if (!/^(?:ArrowFunctionExpression|FunctionExpression|FunctionDeclaration)$/.test(handler.type)) return false;
+  if (handler.async || handler.generator) return false;
+  const params = ((handler.params ?? []) as Node[]).map((p) => (p.type === "Identifier" ? String(p.name) : ""));
+  if (params.length === 0 || params.length > 2 || params.some((p) => p === "")) return false;
+  const body = handler.body as Node | undefined;
+  if (!body) return false;
+  // Express hands over the request and the answer; Hono one context for both.
+  const request = params[0]!;
+  const answer = params[1] ?? params[0]!;
+  const hono = params.length === 1;
+
+  const isMember = (node: Node | undefined): boolean => node !== undefined && node.type.endsWith("MemberExpression");
+  /** `req.query.url` as ["req", "query", "url"]; undefined for anything else. */
+  const chain = (node: Node): string[] | undefined => {
+    if (node.type === "Identifier") return [String(node.name)];
+    if (!isMember(node) || node.computed) return undefined;
+    const property = node.property as Node | undefined;
+    const rest = chain(node.object as Node);
+    return rest && property?.type === "Identifier" ? [...rest, String(property.name)] : undefined;
+  };
+
+  let plain = true;
+  let redirects = false;
+  walk(body, (node, parents) => {
+    if (!plain) return;
+    if (!PLAIN_NODE.test(node.type) || node.regex) return void (plain = false);
+    const parent = parents[0];
+    const called = parent?.type === "CallExpression" && parent.callee === node;
+    const objectOfMember = parent !== undefined && isMember(parent) && parent.object === node;
+
+    if (isMember(node)) {
+      const property = node.property as Node | undefined;
+      if (node.computed || property?.type !== "Identifier") return void (plain = false);
+      const name = String(property.name);
+      if (called && REDIRECT_OR_ANSWER.test(name)) {
+        // On the answering parameter, or on the answer of another such call (`res.status(404).send`).
+        const object = node.object as Node;
+        const onAnswer = object.type === "Identifier" && object.name === answer;
+        if (!onAnswer && object.type !== "CallExpression") return void (plain = false);
+        if (name === "redirect") redirects = true;
+        return;
+      }
+      const names = chain(node);
+      if (!names || names[0] !== request) return void (plain = false);
+      const ok = hono
+        // `c.req.query("url")`, and the `c.req` inside it.
+        ? (names.length === 3 && names[1] === "req" && /^(?:query|param)$/.test(names[2]!) && called) ||
+          (names.length === 2 && names[1] === "req" && objectOfMember)
+        // `req.query.url`, and the `req.query` inside it.
+        : (names.length === 3 && /^(?:query|params)$/.test(names[1]!) && !called) ||
+          (names.length === 2 && /^(?:query|params)$/.test(names[1]!) && objectOfMember);
+      if (!ok) plain = false;
+      return;
+    }
+    if (node.type !== "Identifier") return;
+    if (parent && isMember(parent) && parent.property === node) return;
+    if (parent && (parent.type === "Property" || parent.type === "ObjectProperty") && parent.key === node && !parent.computed) return;
+    // A parameter may only be the thing a member is read from or called on.
+    if (!params.includes(String(node.name)) || !objectOfMember) plain = false;
+  });
+  return plain && redirects;
+}
+
+/**
+ * A redirect-only function, with how a route could reach it by name:
+ * `exported` when its file hands it out under that name (`module.exports.x
+ * =`, `exports.x =`, `export function x`, `export const x =`), `local` when
+ * it is only declared at the top of its file. A function inside another
+ * function or a class, or a value in an object, gets nothing: its name says
+ * too little about what a route would run.
+ */
+function redirectOnlyAs(node: Node, parents: Node[]): { onlyRedirects?: "exported" | "local" } {
+  if (!onlyRedirects(node)) return {};
+  if (parents.some((p) => /Function|Class|Method/.test(p.type))) return {};
+  const parent = parents[0];
+  const exportedAs = parent?.type === "AssignmentExpression" && parent.right === node
+    ? /^(?:module\.)?exports\.([A-Za-z_$][\w$]*)$/.exec(dottedName(parent.left) ?? "")?.[1]
+    : undefined;
+  if (exportedAs !== undefined) {
+    // `exports.safe = function go() {...}` is recorded under its own name,
+    // `go`, which is not the name its file hands it out under.
+    const own = (node.id as Node | undefined)?.name;
+    return own === undefined || own === exportedAs ? { onlyRedirects: "exported" } : {};
+  }
+  const declared = node.type === "FunctionDeclaration" || parent?.type === "VariableDeclarator";
+  if (!declared) return {};
+  return { onlyRedirects: parents.some((p) => p.type === "ExportNamedDeclaration") ? "exported" : "local" };
+}
+
 function collect(
   parsed: ParsedFile,
   doors: Door[],
@@ -1124,6 +1412,7 @@ function collect(
         ),
         bodyRange: [body.start, body.end],
         path: parsed.path,
+        ...redirectOnlyAs(node, parents),
       });
     }
 

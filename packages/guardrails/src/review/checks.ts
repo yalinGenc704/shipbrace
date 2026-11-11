@@ -1,4 +1,4 @@
-import { codeOnly, codeOnlyLines, dottedName, locationOf, parseFile, walk, type Node } from "../analysis/ast.ts";
+import { codeOnly, codeOnlyLines, dottedName, locationOf, parseFile, walk, withoutComments, type Node } from "../analysis/ast.ts";
 import type { Inventory } from "../analysis/inventory.ts";
 import { modelFields } from "../analysis/schemas.ts";
 import { COMPOSE, dependencyNames, fileChecks, outOfSight } from "./project-files.ts";
@@ -119,11 +119,25 @@ const anyMatch = (files: SourceFile[], re: RegExp): boolean =>
 /**
  * Like `anyMatch`, but only real code counts: not comments, and not sentences
  * or sample code inside quotes (see `codeOnly`). For patterns that look for a
- * danger. Patterns that look for a protection keep using `anyMatch`, so a
- * protection mentioned anywhere still counts, as it always has.
+ * danger. A pattern that looks for a protection goes through
+ * `protectionShown`, which tells real code from a mere mention.
  */
 const anyCodeMatch = (files: SourceFile[], re: RegExp): boolean =>
   files.some((f) => re.test(codeOnly(f)));
+
+/**
+ * Where a protection shows up: in real code, only in text about code (a
+ * comment, a sentence in quotes), or nowhere.
+ *
+ * Only real code lets an item pass. A mention alone -- `// TODO: add helmet`
+ * -- used to pass it, on an app that had no protection at all. It still never
+ * becomes an alarm: the item goes back to the user (2026-11-10). `read`
+ * chooses what counts as code; `withoutComments` is for protections that are
+ * written inside quoted text when they are real.
+ */
+type Shown = "code" | "text" | "none";
+const protectionShown = (files: SourceFile[], re: RegExp, read: (file: SourceFile) => string = codeOnly): Shown =>
+  files.some((f) => re.test(read(f))) ? "code" : anyMatch(files, re) ? "text" : "none";
 
 /** `lineOf` for a danger: the first line where the pattern matches real code. */
 const codeLineOf = (file: SourceFile, re: RegExp): CodeLocation => lineOf(file, re, codeOnlyLines(file));
@@ -410,8 +424,19 @@ const securityHeaders: ProjectCheck = {
         reason: "No pages were found in this code, so there was nothing to check. If your app does have pages, confirm it switches on the browser's built-in protections.",
       };
     }
-    if (anyMatch(files, /\b(secureHeaders|helmet|Content-Security-Policy)\b/)) {
-      return { status: "pass" };
+    const shown: Shown[] = [
+      protectionShown(files, /\b(secureHeaders|helmet|Content-Security-Policy)\b/),
+      // A policy set by a tag in the page is real inside the page's quoted text.
+      protectionShown(files, /http-equiv\s*=\s*\\?["']Content-Security-Policy/i, withoutComments),
+    ];
+    const headers: Shown = shown.includes("code") ? "code" : shown.includes("text") ? "text" : "none";
+    if (headers === "code") return { status: "pass" };
+    if (headers === "text") {
+      return {
+        status: "not-applicable",
+        reason:
+          "Protective headers are mentioned in this app's comments or text, but we couldn't see them switched on in its code. Confirm your site asks visitors' browsers to switch on their built-in protections.",
+      };
     }
 
     const entry = files.find((f) => /\b(new Hono|express\(\))/.test(codeOnly(f))) ?? files[0]!;
@@ -477,7 +502,8 @@ const errorDetail: ProjectCheck = {
      */
     const files = sourceFiles(snapshot);
     const usesExpress = anyCodeMatch(files, /\bexpress\s*\(\s*\)/);
-    const ownHandler = anyMatch(files, /\.use\s*\(\s*(?:async\s*)?(?:function\s*\w*\s*)?\(\s*\w+\s*,\s*\w+\s*,\s*\w+\s*,\s*\w+\s*\)/);
+    // In real code only: an error handler shown in a comment handles nothing.
+    const ownHandler = anyCodeMatch(files, /\.use\s*\(\s*(?:async\s*)?(?:function\s*\w*\s*)?\(\s*\w+\s*,\s*\w+\s*,\s*\w+\s*,\s*\w+\s*\)/);
     if (usesExpress && !ownHandler) {
       return {
         status: "not-applicable",
@@ -614,13 +640,26 @@ const webhookSignatures: ProjectCheck = {
 
     const files = sourceFiles(snapshot);
     const fileOf = (path: string): SourceFile | undefined => files.find((f) => f.path === path);
-    const unchecked = hooks.filter((door) => !VERIFIES.test(fileOf(door.location.path)?.content ?? ""));
+    // A check counts when it is real code in the webhook's own file; a
+    // comment about one ("TODO: verify the signature") checks nothing.
+    const checkedInCode = (door: (typeof hooks)[number]): boolean => {
+      const file = fileOf(door.location.path);
+      return file !== undefined && VERIFIES.test(codeOnly(file));
+    };
+    const unchecked = hooks.filter((door) => !checkedInCode(door));
     if (unchecked.length === 0) return { status: "pass" };
-    if (anyMatch(files, VERIFIES) || anyMatch(files, SHARED_SECRET)) {
+    if (anyCodeMatch(files, VERIFIES) || anyCodeMatch(files, SHARED_SECRET)) {
       return {
         status: "not-applicable",
         reason:
           "Some of your code checks that messages from other services are genuine, but not next to every address that receives them, so we couldn't confirm each one is covered. Check each webhook verifies its messages.",
+      };
+    }
+    if (anyMatch(files, VERIFIES) || anyMatch(files, SHARED_SECRET)) {
+      return {
+        status: "not-applicable",
+        reason:
+          "Checking that messages from other services are genuine is mentioned in this app's comments or text, but we couldn't see it done in its code. Confirm each webhook verifies a message's signature before acting on it.",
       };
     }
 
@@ -767,7 +806,15 @@ const passwordStorage: ProjectCheck = {
         reason: "Passwords are only mentioned in this app's text, not in code we could follow. If it does store passwords, confirm they are scrambled with argon2id or bcrypt.",
       };
     }
-    if (anyMatch(files, /\b(argon2|bcrypt|scrypt|Bun\.password)\b/i)) return { status: "pass" };
+    const scrambled = protectionShown(files, /\b(argon2|bcrypt|scrypt|Bun\.password)\b/i);
+    if (scrambled === "code") return { status: "pass" };
+    if (scrambled === "text") {
+      return {
+        status: "not-applicable",
+        reason:
+          "A method for scrambling passwords (argon2, bcrypt or scrypt) is mentioned in this app's comments or text, but we couldn't see it used in its code. Confirm passwords are scrambled with one before they are saved.",
+      };
+    }
     // Bun's built-in hashing is only worth suggesting to apps that run on Bun.
     const bun = snapshot.files.some((f) => /(^|\/)bun\.lockb?$/.test(f.path)) || anyMatch(files, /\bBun\./);
 
@@ -841,7 +888,14 @@ const sessionExpiry: ProjectCheck = {
           absent: true,
         };
     }
-    if (/\b(setExpirationTime|expiresIn|exp\s*:)/.test(signer.content)) return { status: "pass" };
+    const EXPIRES = /\b(setExpirationTime|expiresIn|exp\s*:)/;
+    if (EXPIRES.test(codeOnly(signer))) return { status: "pass" };
+    if (EXPIRES.test(signer.content)) {
+      return {
+        status: "not-applicable",
+        reason: `An expiry for sign-ins is mentioned in the comments or text of ${signer.path}, but we couldn't see one set in its code. Confirm sign-ins end after a while.`,
+      };
+    }
 
     return {
       status: "risks",
@@ -870,8 +924,30 @@ const rateLimiting: ProjectCheck = {
     if (inventory.doors.length === 0) {
       return { status: "not-applicable", reason: "No pages were found in this code, so there was nothing to check. If your app does have pages, confirm sign-in and paid actions have a limit." };
     }
-    if (anyMatch(sourceFiles(snapshot), /\b(rateLimit|rate_limit|rateLimiter|throttle|slowDown)\b/i)) {
-      return { status: "pass" };
+    // In code, the word must be a name being used -- not part of a header's
+    // name read from another service (`"x-ratelimit-remaining"`) or a piece
+    // of text (`"rate_limit"`), which passed this item with no limit at all.
+    const LIMIT_WORD = /\b(rateLimit|rate_limit|rateLimiter|throttle|slowDown)\b/i;
+    const LIMIT_IN_USE = /(?<![\w"'`-])(?:rateLimit|rate_limit|rateLimiter|throttle|slowDown)(?![\w-])/i;
+    const limitFiles = sourceFiles(snapshot);
+    const limited: Shown = limitFiles.some((f) => LIMIT_IN_USE.test(codeOnly(f))) ? "code" : anyMatch(limitFiles, LIMIT_WORD) ? "text" : "none";
+    if (limited === "code") return { status: "pass" };
+    if (limited === "text") {
+      return {
+        status: "not-applicable",
+        reason:
+          "A limit on how often one person can use the app is mentioned in its comments or text, but we couldn't see one switched on in its code. Confirm sign-in and anything that costs you money have a limit.",
+      };
+    }
+    // Answering "too many requests" (429) is what a home-made limit does, and
+    // also what code relaying another service's answer does. Not proof either
+    // way, so it is neither a pass nor an alarm.
+    if (anyCodeMatch(limitFiles, /\.(?:status|sendStatus)\s*\(\s*429\s*\)|,\s*429\s*\)|\bstatus\s*:\s*429\b/)) {
+      return {
+        status: "not-applicable",
+        reason:
+          "Your code can answer \"too many requests\", which suggests a limit of your own, but we couldn't recognise the limit itself. Confirm sign-in and anything that costs you money have one.",
+      };
     }
 
     return {
@@ -894,6 +970,15 @@ const rateLimiting: ProjectCheck = {
 // --- A09: logs must not contain secrets --------------------------------------
 
 const SECRET_NAME = /password|passwd|token|secret|apikey|api_key|credential/i;
+/**
+ * A count of an AI model's tokens (`input_tokens`, `total_tokens`,
+ * `maxTokens`, `tokenCount`) is a number, not a sign-in token. Logging one
+ * was reported as leaking a secret, on correct code. A bare `token` or
+ * `tokens` still counts: that can be the real thing.
+ */
+const TOKEN_COUNT =
+  /^(?:\w*_)?(?:input|output|total|max|min|prompt|completion|cached?|reasoning|thinking|used|remaining|num|n)_?tokens$|^tokens?_?(?:count|usage|limit|budget|total|used)s?$/i;
+const namesASecret = (name: string): boolean => SECRET_NAME.test(name) && !TOKEN_COUNT.test(name);
 const LOG_CALL = /^console\.(?:log|info|warn|error|debug)$/;
 
 /**
@@ -912,7 +997,7 @@ function secretLogged(file: SourceFile): CodeLocation | null {
     if (found || node.type !== "CallExpression" || !LOG_CALL.test(dottedName(node.callee) ?? "")) return;
     for (const argument of (node.arguments ?? []) as Node[]) {
       walk(argument, (inner) => {
-        if (!found && inner.type === "Identifier" && SECRET_NAME.test(String(inner.name ?? ""))) {
+        if (!found && inner.type === "Identifier" && namesASecret(String(inner.name ?? ""))) {
           found = locationOf(parsed, node);
         }
       });
@@ -1035,10 +1120,29 @@ const csrfProtection: ProjectCheck = {
       };
     }
 
-    const protectedBy =
-      anyMatch(files, /\b(?:csurf|lusca\.csrf|csrf\s*\(|doubleCsrf|csrfSync)\b|from\s+["']hono\/csrf["']/) ||
-      anyMatch(files, /sameSite\s*:\s*["'`](?:strict|lax)["'`]|SameSite=(?:Strict|Lax)\b/i);
-    if (protectedBy) return { status: "pass" };
+    const protections: Shown[] = [
+      // `csrf(` stands outside the word-boundary group: inside it, `csrf()`
+      // and `csrf({` never matched, so an app calling it that way was reported.
+      protectionShown(files, /\b(?:csurf|lusca\.csrf|doubleCsrf|csrfSync)\b|\bcsrf\s*\(|from\s+["']hono\/csrf["']/),
+      // As an option, or as one whole piece of a cookie built from parts.
+      protectionShown(files, /sameSite\s*:\s*["'`](?:strict|lax)["'`]|["'`]SameSite=(?:Strict|Lax)["'`]/i),
+      // In a cookie header the setting is real inside quoted text: one of the
+      // cookie's `;`-separated parts. A sentence about it has no such shape,
+      // and is a mention like any other.
+      files.some((f) => /;\s*SameSite=(?:Strict|Lax)\b/i.test(withoutComments(f)))
+        ? "code"
+        : anyMatch(files, /SameSite=(?:Strict|Lax)\b/i)
+        ? "text"
+        : "none",
+    ];
+    if (protections.includes("code")) return { status: "pass" };
+    if (protections.includes("text")) {
+      return {
+        status: "not-applicable",
+        reason:
+          "A protection against other websites triggering actions for a signed-in visitor is mentioned in this app's comments or text, but we couldn't see it switched on in its code. Confirm your sign-in cookie is not sent on requests other sites start.",
+      };
+    }
 
     return {
       status: "risks",
@@ -1130,6 +1234,23 @@ const passwordHashesSent: ProjectCheck = {
     // Only a project whose user records actually carry a password.
     const hasPasswordField = anyCodeMatch(files, /\bpassword\w*\s*:\s*(?:\{|DataTypes|Sequelize|String|text\(|varchar|type\b)/i);
     if (!hasPasswordField) {
+      // The tables this project describes, when it describes any (SQL,
+      // Prisma, Sequelize, Mongoose, Drizzle), and none has a column that
+      // could hold a password under any usual name: said plainly, because
+      // "couldn't find a description" sent people looking for one that isn't
+      // there. Still handed back, not passed or called absent: passwords can
+      // live in a store with no written description, or with a sign-in
+      // service outside this code.
+      const tables = modelFields(snapshot);
+      const couldHoldPassword = /pass|pwd|^pw$|_pw$|^pw_|hash|digest|salt|secret|credential/i;
+      const described = tables.size > 0 && outOfSight(snapshot) === undefined;
+      if (described && ![...tables.values()].some((t) => t.fields.some((f) => couldHoldPassword.test(f)))) {
+        const count = `${tables.size === 1 ? "The one database table" : `None of the ${tables.size} database tables`} described in this project`;
+        return {
+          status: "not-applicable",
+          reason: `${count} ${tables.size === 1 ? "has no" : "has a"} password column. If passwords are kept somewhere this check can't see, such as a sign-in service or a database with no written description, confirm pages that load users leave them out.`,
+        };
+      }
       // Records can hold passwords without a written description (MongoDB), so
       // not finding one is not proof there are none.
       return {
@@ -1139,11 +1260,21 @@ const passwordHashesSent: ProjectCheck = {
     }
     // Any sign that the password is removed before records leave counts --
     // in the model (a default scope, toJSON) or at the lookup.
-    const removedSomewhere = anyMatch(
+    const removedSomewhere = protectionShown(
       files,
       /exclude\s*:\s*\[[^\]]*["'`]password|select\s*\(\s*["'`]-password|password\w*\s*:\s*(?:false|0)\b|delete\s+[\w.]+\.password|toJSON|toSafe\w*|defaultScope|omit\s*\(/i,
     );
-    if (removedSomewhere) return { status: "pass" };
+    // Mongoose's form is real inside quoted text with other fields beside it:
+    // `.select("-password -__v")`. Only comments are left out for that one.
+    const selectedOut = files.some((f) => /\.select\s*\(\s*["'`][^"'`]*-password/i.test(withoutComments(f)));
+    if (removedSomewhere === "code" || selectedOut) return { status: "pass" };
+    if (removedSomewhere === "text") {
+      return {
+        status: "not-applicable",
+        reason:
+          "Leaving the password out of user records is mentioned in this app's comments or text, but we couldn't see it done in its code. Confirm pages that load users leave the password out.",
+      };
+    }
 
     const lookups = [
       new RegExp(`(?:const|let|var)\\s+(\\w+)\\s*=\\s*await\\s+[\\w.]*\\b${USER_MODEL}\\.find\\w*\\(`, "g"),

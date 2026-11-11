@@ -248,6 +248,149 @@ test("a missing lockfile is flagged only when there is a manifest", () => {
 
 // --- A04 / A07 --------------------------------------------------------------
 
+// --- a protection that is only mentioned ----------------------------------------
+
+/**
+ * For each protection: real code passes, a mention in a comment or a
+ * sentence hands the item back (never a pass, never an alarm), and nothing
+ * at all is the risk it always was.
+ */
+const reasonOf = (files: File[], itemId: string): string => {
+  const outcome = outcomes(files).get(itemId);
+  return outcome?.status === "not-applicable" ? outcome.reason : "";
+};
+const hono = (...lines: string[]): File => ({
+  path: "server/src/index.ts",
+  content: ['import { Hono } from "hono";', "const app = new Hono();", ...lines, 'app.get("/a", (c) => c.json({}));'].join("\n"),
+});
+const express = (...lines: string[]): File => ({
+  path: "server.js",
+  content: ['const express = require("express");', "const app = express();", ...lines, 'app.post("/save", (req, res) => { db.save(req.body); res.send("ok"); });'].join("\n"),
+});
+
+test("protective headers that are only mentioned do not pass, and are not an alarm", () => {
+  const item = "config/security-headers";
+  for (const mention of [
+    "// TODO: add helmet before launch",
+    "/* app.use(helmet()); */",
+    'const advice = "Add helmet to switch on protective headers.";',
+  ]) {
+    assert.equal(statusOf([hono(mention)], item), "not-applicable", mention);
+    assert.match(reasonOf([hono(mention)], item), /mentioned in this app's comments or text/);
+  }
+  assert.equal(statusOf([hono('app.use("*", secureHeaders());')], item), "pass");
+  assert.equal(statusOf([hono('app.use((c, next) => { c.header("Content-Security-Policy", policy); return next(); });')], item), "pass");
+  assert.equal(statusOf([express('app.use(require("helmet")());')], item), "pass");
+  assert.equal(statusOf([hono()], item), "risks");
+});
+
+test("a rate limit that is only mentioned does not pass, and is not an alarm", () => {
+  const item = "design/rate-limiting";
+  assert.equal(statusOf([hono("// rateLimit goes here once we have users")], item), "not-applicable");
+  assert.equal(statusOf([hono('const note = "Remember the rateLimit on sign-in.";')], item), "not-applicable");
+  assert.equal(statusOf([hono('app.use(rateLimiter({ windowMs: 60000, limit: 60 }));')], item), "pass");
+  // Answering "too many requests" is what a home-made limit does, and also
+  // what relaying another service's answer does: neither a pass nor an alarm.
+  for (const code of [
+    'app.use(async (c, next) => ((await underLimit(c)) ? next() : c.json({ error: "Slow down." }, 429)));',
+    'app.get("/ai", async (c) => { const r = await ask(); if (r.status === 429) return c.json({ error: "The AI is busy." }, 429); return c.json(r); });',
+    "const RETRY = { status: 429, wait: 1000 };",
+  ]) {
+    assert.equal(statusOf([hono(code)], item), "not-applicable", code);
+    assert.match(reasonOf([hono(code)], item), /couldn't recognise the limit itself/);
+  }
+  assert.equal(statusOf([express('app.use((req, res, next) => (tooFast(req) ? res.sendStatus(429) : next()));')], item), "not-applicable");
+  // A header read from another service, or a word in an answer, is not a limit.
+  for (const code of [
+    'const left = upstream.headers.get("x-ratelimit-remaining");',
+    'app.get("/ai", (c) => c.json({ error: "rate_limit" }));',
+  ]) {
+    assert.equal(statusOf([hono(code)], item), "not-applicable", code);
+  }
+  // Real ones, in the shapes frameworks use.
+  assert.equal(statusOf([hono('import rateLimit from "@fastify/rate-limit";', "fastify.register(rateLimit, { max: 100 });")], item), "pass");
+  assert.equal(statusOf([hono("const limiter = new Ratelimit({ limiter: Ratelimit.slidingWindow(10, '10 s') });")], item), "pass");
+  assert.equal(statusOf([hono("app.use(throttle({ rate: 5 }));")], item), "pass");
+  assert.equal(statusOf([hono("// answer 429 when someone goes too fast: res.status(429)")], item), "risks", "a comment about 429 is nothing");
+  assert.equal(statusOf([hono()], item), "risks");
+});
+
+test("password scrambling that is only mentioned does not pass, and is not an alarm", () => {
+  const item = "crypto/password-storage";
+  const saves = "export const save = (user, password) => db.users.insert({ ...user, password });";
+  const auth = (...lines: string[]): File => ({ path: "server/src/auth.ts", content: [...lines, saves].join("\n") });
+  assert.equal(statusOf([auth("// TODO: switch to bcrypt")], item), "not-applicable");
+  assert.match(reasonOf([auth("// TODO: switch to bcrypt")], item), /scrambling passwords/);
+  assert.equal(statusOf([auth('import bcrypt from "bcrypt";', "const hash = (p) => bcrypt.hash(p, 12);")], item), "pass");
+  assert.equal(statusOf([auth()], item), "risks");
+  // A quick hash in real code beside a comment about a slow one: still not a
+  // pass, and still not turned into an alarm by this check alone.
+  assert.equal(statusOf([auth("// argon2 later", 'const h = createHash("md5").update(password).digest("hex");')], item), "not-applicable");
+});
+
+test("a sign-in expiry that is only mentioned does not pass", () => {
+  const item = "auth/session-expiry";
+  const sign = 'const t = await new SignJWT({ sub: id }).setProtectedHeader({ alg: "HS256" }).sign(key);';
+  const tokens = (...lines: string[]): File => ({ path: "server/src/tokens.ts", content: [...lines, sign].join("\n") });
+  assert.equal(statusOf([tokens("// TODO: call setExpirationTime here")], item), "not-applicable");
+  assert.match(reasonOf([tokens("// TODO: call setExpirationTime here")], item), /server\/src\/tokens\.ts/);
+  assert.equal(statusOf([tokens()], item), "risks");
+});
+
+test("protection against other sites' requests that is only mentioned does not pass", () => {
+  const item = "access-control/csrf";
+  const session = 'app.use(session({ secret: process.env.SECRET }));';
+  assert.equal(statusOf([express(session)], item), "risks");
+  assert.equal(statusOf([express(session, "// const csrf = require('csurf'); app.use(csrf());")], item), "not-applicable");
+  assert.equal(statusOf([express(session, "// set sameSite: 'lax' on the cookie")], item), "not-applicable");
+  assert.equal(statusOf([express(session, 'const csrf = require("csurf");', "app.use(csrf());")], item), "pass");
+  assert.equal(statusOf([express('app.use(session({ secret: process.env.SECRET, cookie: { sameSite: "lax" } }));')], item), "pass");
+  // Real inside a cookie header's text: quoted, but not a comment.
+  assert.equal(
+    statusOf([express(session, 'app.use((req, res, next) => { res.setHeader("Set-Cookie", "sid=" + id + "; HttpOnly; SameSite=Lax"); next(); });')], item),
+    "pass",
+  );
+  // A cookie built from parts, and csurf-style protection called with no settings.
+  assert.equal(statusOf([express(session, 'const cookie = ["sid=" + id, "HttpOnly", "SameSite=Lax"].join("; ");')], item), "pass");
+  assert.equal(statusOf([express(session, 'const csrf = require("tiny-csrf");', "app.use(csrf());")], item), "pass");
+  assert.equal(statusOf([express(session, "app.use(csrf({ cookie: true }));")], item), "pass");
+  assert.equal(statusOf([express(session, "// app.use(csrf());")], item), "not-applicable");
+  // A sentence about the setting is a mention, whichever way it is spelled.
+  for (const sentence of [
+    "const tip = \"Remember to set sameSite: 'lax' on the cookie one day\";",
+    'app.get("/help", (req, res) => res.send("Cookies should use SameSite=Lax to be safe."));',
+  ]) {
+    assert.equal(statusOf([express(session, sentence)], item), "not-applicable", sentence);
+  }
+});
+
+test("protections that are real inside quoted text still pass", async () => {
+  // A policy set by a tag in the page the app sends.
+  const page = hono("const page = `<html><head><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'self'\"></head></html>`;");
+  assert.equal(statusOf([page], "config/security-headers"), "pass");
+  // Mongoose's way of leaving the password out, with another field beside it.
+  const files = [
+    { path: "models/user.js", content: "const User = mongoose.model('User', new Schema({ name: String, password: { type: String } }));" },
+    { path: "routes.js", content: 'app.get("/users", requireUser, async (req, res) => { const users = await User.find().select("-password -__v"); res.json(users); });' },
+  ];
+  assert.equal(statusOf(files, "crypto/no-password-hashes-sent"), "pass");
+});
+
+test("a webhook signature check that is only mentioned does not pass", () => {
+  const item = "integrity/webhook-signatures";
+  const hook = 'app.post("/api/webhooks/stripe", async (c) => { const event = await c.req.json(); await markPaid(event); return c.json({ ok: true }); });';
+  const commented = [{ path: "server/src/index.ts", content: `// TODO: stripe.webhooks.constructEvent(raw, sig, secret)\n${hook}` }];
+  assert.equal(statusOf(commented, item), "not-applicable", "it used to pass");
+  assert.match(reasonOf(commented, item), /mentioned in this app's comments or text/);
+});
+
+test("an error handler that only appears in a comment does not replace Express's own", () => {
+  const item = "exceptions/error-pages";
+  const outcome = outcomes([express("// app.use((err, req, res, next) => res.status(500).send('Sorry'));")]);
+  const found = [...outcome.entries()].find(([, o]) => o.status === "not-applicable" && /Express's default error page/.test(o.reason));
+  assert.ok(found, `expected the error-page item to go back to the user (looked for ${item})`);
+});
+
 test("password storage: slow hash passes, fast hash is high risk, absent is not-applicable", () => {
   const slow: File = {
     path: "server/src/auth.ts",
@@ -295,6 +438,21 @@ test("logging a secret is a high risk; logging anything else is not", () => {
   assert.equal(flagged?.status, "risks");
   assert.equal((flagged as { risks: { grade: string }[] }).risks[0]?.grade, "high");
   assert.equal(statusOf([fine], "logging/no-secrets"), "pass");
+});
+
+test("logging how many AI tokens a call used is not logging a secret", () => {
+  const logs = (line: string): File => ({ path: "server/src/ai.ts", content: line });
+  for (const counts of [
+    "console.log(`used ${usage.input_tokens} in, ${usage.output_tokens} out`);",
+    "console.log(response.usage.total_tokens);",
+    'console.info("budget", maxTokens, tokenCount, cache_read_input_tokens);',
+  ]) {
+    assert.equal(statusOf([logs(counts)], "logging/no-secrets"), "pass", counts);
+  }
+  // The real thing is still reported, singular or plural.
+  for (const leak of ["console.log(token);", "console.log(session.tokens);", "console.log(accessToken);", "console.log(refresh_token);"]) {
+    assert.equal(statusOf([logs(leak)], "logging/no-secrets"), "risks", leak);
+  }
 });
 
 test("a log message that only names a setting is not a leak; passing its value is", () => {
@@ -408,6 +566,37 @@ test("sending whole user records with their password is reported", async () => {
     content: 'router.get("/api/users", requireLogin, (req, res) => { db.User.findAll({}).then(users => res.json({ users: users })); });',
   }], "crypto/no-password-hashes-sent");
   assert.equal(item.status, "action-needed");
+});
+
+test("the password item says so when the described tables have no password column", () => {
+  const item = "crypto/no-password-hashes-sent";
+  // The app talks about passwords (a sign-in service handles them), and its
+  // own tables are described and hold none.
+  const app: File = {
+    path: "server/src/index.ts",
+    content: ['import { Hono } from "hono";', "const app = new Hono();", "// Passwords are handled by the sign-in service.", 'app.get("/users", async (c) => c.json(await db.query("SELECT id, name FROM users")));'].join("\n"),
+  };
+  const table = (columns: string): File => ({ path: "migrations/0001.sql", content: `CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT${columns});` });
+
+  const none = outcomes([app, table("")]).get(item);
+  assert.equal(none?.status, "not-applicable");
+  assert.match((none as { reason: string }).reason, /^The one database table described in this project has no password column\. If passwords are kept somewhere/);
+  assert.equal((none as { absent?: boolean }).absent, undefined, "handed back, not called absent");
+
+  const two = outcomes([app, table(""), { path: "migrations/0002.sql", content: "CREATE TABLE orders (id INTEGER PRIMARY KEY, total INTEGER);" }]).get(item);
+  assert.match((two as { reason: string }).reason, /^None of the 2 database tables described in this project has a password column/);
+
+  // A column that could hold one under any usual name: the old wording stays.
+  for (const column of [", password_hash TEXT", ", pwd TEXT", ", pw TEXT", ", hashed TEXT", ", secret TEXT"]) {
+    const kept = outcomes([app, table(column)]).get(item);
+    assert.match((kept as { reason: string }).reason, /couldn't find a description of user records/, column);
+  }
+  // No tables described at all: nothing can be said about them.
+  assert.match((outcomes([app]).get(item) as { reason: string }).reason, /couldn't find a description of user records/);
+  // A file the review could not read might describe one.
+  const unread = snapshotFromFiles([app, table("")], undefined, { unread: ["app/models.py"] });
+  const blind = runProjectChecks(unread, buildInventory(unread)).get(item);
+  assert.match((blind as { reason: string }).reason, /couldn't find a description of user records/);
 });
 
 test("leaving the password out of the lookup passes", async () => {

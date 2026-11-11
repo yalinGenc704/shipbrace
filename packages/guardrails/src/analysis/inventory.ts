@@ -94,6 +94,15 @@ export interface Door {
    * It reads nothing and does nothing, so there is nothing behind it to lock.
    */
   answersOnlyFixed?: boolean;
+  /**
+   * True when the handler -- inline, or the one function its name points to
+   * -- only sends the visitor on to an address taken from their own request,
+   * or answers with fixed text: `res.redirect(req.query.url)`. It shows and
+   * changes nothing of anyone's, so there is nothing for a sign-in to
+   * protect. Where it sends people is a separate question, answered by the
+   * traced open-redirect check.
+   */
+  onlyRedirects?: boolean;
 }
 
 export interface TaintSource {
@@ -176,6 +185,12 @@ export interface FunctionDef {
   /** Character range of the body. */
   bodyRange: [number, number];
   path: string;
+  /**
+   * See `Door.onlyRedirects`: judged here, where the function's code is at
+   * hand, with how a route could reach it by name -- handed out by its file
+   * under that name, or only declared at the top of it.
+   */
+  onlyRedirects?: "exported" | "local";
 }
 
 /**

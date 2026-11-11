@@ -104,7 +104,7 @@ everywhere:
 # PostgreSQL 18 (Homebrew, not started at login). Databases: shipbrace, shipbrace_test.
 LC_ALL=en_US.UTF-8 /opt/homebrew/opt/postgresql@18/bin/pg_ctl -D /opt/homebrew/var/postgresql@18 -l /opt/homebrew/var/log/postgresql@18.log start
 
-# all tests (expect 400 pass). Without TEST_DATABASE_URL the 6 database tests
+# all tests (expect 415 pass). Without TEST_DATABASE_URL the 6 database tests
 # are skipped and say so; it must name a database ending in _test (it is wiped).
 # CI (.github/workflows/ci.yml) runs typecheck, lint, tests and build on every push.
 TEST_DATABASE_URL=postgres:///shipbrace_test npm test
@@ -191,8 +191,27 @@ the server with the AI step, start it with an extra `--env-file` that sets
   text holding a space, and regular-expression patterns are blanked, single-word strings (package names,
   `'md5'`, header names) are kept. Use `codeHits` in `rules/auth.ts` and
   `anyCodeMatch`/`codeLineOf` in `review/checks.ts`. A pattern that looks for
-  a protection keeps reading the whole file (`anyMatch`), so a mention of one
-  anywhere never turns into a new alarm. Found by reviewing ShipBrace itself:
+  a protection has three answers (`protectionShown`, 2026-11-10): in real
+  code the item passes; only mentioned in a comment or a sentence (`// TODO:
+  add helmet`, a commented-out `app.use(csrf())`) the item goes back to the
+  user, where it used to pass; nowhere is the risk it always was. So a
+  mention never passes an item and never turns into a new alarm. Applies to
+  protective headers, rate limits, password scrambling, sign-in expiry,
+  CSRF, webhook signatures, leaving passwords out of user records, and
+  Express's error handler. Three protections are real inside quoted text
+  and are read with `withoutComments` in their exact shape only: `;
+  SameSite=Lax` as part of a cookie header, a `<meta http-equiv>` policy
+  tag, and Mongoose's `.select("-password ...")`. Code that answers 429
+  ("too many requests") with no limiter the check knows hands the
+  rate-limit item back: a home-made limit does that, and so does relaying
+  another service's answer. Three older faults in the same checks were
+  fixed with it: a rate-limit word inside a header's name or a piece of
+  text (`"x-ratelimit-remaining"`, `"rate_limit"`) passed the item with no
+  limit; `csrf()` and `csrf({...})` were never recognised (the pattern
+  only matched `csrf(name`), so an app protected that way was reported;
+  and logging a count of AI tokens (`usage.input_tokens`, `maxTokens`) was
+  reported as logging a secret (`TOKEN_COUNT`; a bare `token` or `tokens`
+  still counts). Found by reviewing ShipBrace itself:
   its advice strings, `bench/cases.ts` sample apps and a test's Supabase
   example gave 11 false alarms. A query whose pasted pieces are all fixed
   text (`?` per item, a fixed `const`, `$${i + 1}`) is safe
@@ -416,6 +435,15 @@ the server with the AI step, start it with an extra `--env-file` that sets
   Templates added afterwards (DVNA reflected XSS now caught). Not detected yet: NoSQL injection,
   CSRF, a session secret left at a default. Sign-in checks written inside a
   handler (Juice Shop `dataErasure`) are recognised since 2026-10-20.
+- **Practice apps after the 2026-11-10 changes:** DVNA 21 risks (the
+  `/redirect` false alarm gone, nothing else changed), NodeGoat 7 and Juice
+  Shop 53 as before. NodeGoat's protective-headers and CSRF items went from
+  pass to handed back: its helmet and csurf lines are inside a commented-out
+  block, so both had been false passes. ShipBrace reviewing itself (rules
+  alone, no package lookup): 0 risks; "how passwords are stored" and the
+  rate-limit item went from pass to handed back (both had passed on words
+  in ShipBrace's own text; its real limiter has names the check does not
+  know, and answers 429).
 - **Practice apps re-run with the smarter checker (2026-10-21; DVNA 9ba473a,
   NodeGoat c5cb68a, Juice Shop 399fba7).** Every new finding checked by hand
   and real: DVNA's XML upload hole (XXE), node-serialize now under unsafe
@@ -461,10 +489,42 @@ the server with the AI step, start it with an extra `--env-file` that sets
   across files. It does not follow method calls (`obj.fn(x)`), and a helper
   name defined twice, unknown code, or destructured parameters make the
   claim `undecidable` (never `no-path`).
-- **Known gap (2026-10-23):** a site-wide `app.use(session(...))` (or any
-  middleware not in `NOT_A_GUARD`) counts as a sign-in check for every route,
-  so such Express apps get no open-page warnings. Juice Shop's open redirect
-  is guarded by a bypassable allowlist and its redirect item shows a pass.
+- **Site-wide middleware as a sign-in check (gap noted 2026-10-23, narrowed
+  2026-11-10).** `app.use(...)` of session set-up (`session({...})`,
+  `cookieSession`, `passport.initialize()`/`.session()`, flash) no longer
+  counts as a sign-in check, and for any call only what is called counts,
+  not the settings passed to it (`cors({ origin: allowedOrigins })`), so an
+  Express app with sessions and no check gets its open pages reported
+  (`SESSION_SETUP`, `guardNamesIn`). `app.use(require("..."))` in any shape
+  still counts, as the app's own check may be loaded that way, unless the
+  package is one known only to set things up (`SETUP_PACKAGE`). Still
+  counted, erring to silence: any other name not in `NOT_A_GUARD`, and a
+  function written inline in `app.use`. Measured on DVNA, NodeGoat and Juice Shop: no change, since
+  their routes sit in router files or behind other site-wide names. Juice
+  Shop's open redirect is guarded by a bypassable allowlist and its
+  redirect item shows a pass.
+- **Redirect-only pages (2026-11-10, `Door.onlyRedirects`).** A handler
+  with nothing running before it that only calls `redirect` or an answer
+  method on its answering parameter, and reads only one field of the
+  address or the query, has nothing for a sign-in to protect, so it is not
+  reported as open. Its code may hold nothing else: no other name, call,
+  variable, nested function, `await`, `new` or `import()`. A handler named
+  rather than written inline is trusted only when the route's own file
+  shows where the name comes from and that file hands the function out
+  under it (`const h = require("./f")` with `module.exports.name =`, a
+  named import of an exported function, `import * as h`, or a declaration
+  at the top of the same file; the name bound once in the route's file,
+  and handed out exactly once by a file that never replaces
+  `module.exports`): a same-named method on some object, a default
+  import, or an unrelated function elsewhere, never stands in. Where the page sends people is still the
+  traced open-redirect risk. DVNA's `/redirect` was its one false alarm
+  (22 -> 21 risks; its open-pages item now passes).
+- **The password-hashes item names what it found (2026-11-10).** When the
+  project describes its tables (`modelFields`) and none has a column that
+  could hold a password under any usual name, the item says so instead of
+  "couldn't find a description"; still handed back, never passed or absent,
+  and it does not claim there are no passwords (they can live in a store
+  with no written description).
 - 16 of 50 checklist items have no detector and are left to the user (counted 2026-10-23; the open-redirect item was split out of file paths). The
   checklist follows OWASP Top 10:2025; the four items added for its new
   categories (A03 supply chain, A10 exceptional conditions) have no detector yet.
@@ -738,7 +798,7 @@ recommend one, and wait for Murat's choice.
 **State:** last deployed commit `b3da87f` (live version `ef1f4030`,
 2026-11-10). Committed after that and **not pushed or deployed** (both wait
 for Murat's go-ahead, as always): the cleaner step made ready for going
-live, and the work listed below it. 400 tests.
+live, and the work listed below it. 415 tests.
 
 1. **The AI cleaner step: built, waiting for `/ship`** (Murat's decisions,
    2026-11-10: go live with Haiku 5.5 for his reviews only, neutral mark
@@ -758,13 +818,12 @@ live, and the work listed below it. 400 tests.
    CommonJS `require`, values passed through a second name, re-tracing
    across files. Opening the step to anyone else waits for the opening-up
    decisions (privacy policy, the provider's data agreement).
-2. **Offered, not started:**
-   - a protection mentioned only in text (a comment naming helmet, say)
-     hands its item back instead of passing;
-   - the password-hashes item says when the database tables have no
-     password column;
-   - a site-wide `app.use(session(...))` stops counting as a sign-in check
-     (see Known gap 2026-10-23), and DVNA's `/redirect` false alarm;
+2. **Smaller checker improvements: done 2026-11-10, committed, waiting for
+   `/ship`** (see Current state: `protectionShown`, the password-hashes
+   item, session set-up, redirect-only pages).
+   **Offered, not started:**
+   - a function written inline in `app.use(...)`, and names the checker
+     does not know, still count as a sign-in check for every route;
    - a map of the checker per OWASP category (detects / misses / effort);
    - scoring NodeGoat and Juice Shop against their documented holes, like
      DVNA;

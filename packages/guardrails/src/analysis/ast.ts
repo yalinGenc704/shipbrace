@@ -210,10 +210,11 @@ export function isStringLiteral(node: unknown): node is Node & { value: string }
  * code names things: a package (`"express-session"`), a hash (`'md5'`), a
  * header (`"Content-Security-Policy"`).
  *
- * Meant for patterns that look for a danger. A pattern looking for a
- * protection should keep reading the whole file: a mention of one anywhere is
- * a reason to ask rather than to raise an alarm. A file that does not parse is
- * returned unchanged, which is how it was read before.
+ * Meant for patterns that look for a danger, and for telling a protection
+ * in real code from one that is only mentioned (`protectionShown` in
+ * `review/checks.ts`: a mention is a reason to ask, never a pass and never
+ * an alarm). A file that does not parse is returned unchanged, which is how
+ * it was read before.
  */
 export function codeOnly(file: SourceFile): string {
   const cached = codeOnlyCache.get(file);
@@ -262,6 +263,35 @@ export function codeOnly(file: SourceFile): string {
 }
 
 const codeOnlyCache = new WeakMap<SourceFile, string>();
+
+/**
+ * The file's text with only its comments blanked out. For a protection that
+ * is written inside quoted text when it is real -- `SameSite=Lax` in a
+ * cookie header -- where `codeOnly` would blank the real thing too. A file
+ * that does not parse is returned unchanged.
+ */
+export function withoutComments(file: SourceFile): string {
+  const cached = withoutCommentsCache.get(file);
+  if (cached !== undefined) return cached;
+  const parsed = parseFile(file);
+  let text = file.content;
+  if (parsed) {
+    const pieces: string[] = [];
+    let at = 0;
+    for (const { start, end } of [...parsed.comments].sort((a, b) => a.start - b.start)) {
+      if (end <= at) continue;
+      const from = Math.max(start, at);
+      pieces.push(text.slice(at, from), text.slice(from, end).replace(/[^\r\n]/g, " "));
+      at = end;
+    }
+    pieces.push(text.slice(at));
+    text = pieces.join("");
+  }
+  withoutCommentsCache.set(file, text);
+  return text;
+}
+
+const withoutCommentsCache = new WeakMap<SourceFile, string>();
 
 /** The code-only text of each line, aligned with the original lines. */
 export const codeOnlyLines = (file: SourceFile): string[] => codeOnly(file).split(/\r?\n/);
