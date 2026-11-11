@@ -689,6 +689,63 @@ claims against the source, and read any outside skill before installing it.
 
 ## Roadmap
 
+### Next steps (where work stopped, 2026-11-10)
+
+Read this first in a new session, then CLAUDE.local.md ("Waiting on Murat")
+for the private items. Do not start any of these unasked: summarise them,
+recommend one, and wait for Murat's choice.
+
+**State:** two commits are local and not pushed: `2e89129` (12 home-made
+cleaner benchmark cases, `Number.parseInt` counted as a number) and
+`ffd9905` (the cleaner experiment, off by default). Pushing changes nothing
+live; the `Number.parseInt` fix reaches the live checker only after `/ship`.
+Last deployed: `2f660a4` (live version `9fe6d454`). 375 tests.
+
+1. **The AI cleaner step: go live or not (Murat's decision).** Built and
+   measured (see "Cleaner experiment" in Current state); recommended model
+   Haiku 5.5 (`claude-haiku-5-5`), for the owner's reviews only at first.
+   About a day of work, each part reviewed:
+   - an outside step `judge` through the sealed reviewer, like `propose`:
+     `cloud/src/outside-steps.ts` and `reviewer.ts` (`Reviewer.claim`, at
+     most once per review), `cloud/src/review-container.ts` (allowed
+     steps), `server/src/sandbox/reviewer-http.ts` and `worker.ts` (the
+     judge asks over the channel), gated by `AI_ALLOWED_GITHUB_IDS` and the
+     installation's AI switch (`cloud/src/ai-access.ts`); the Docker
+     fallback (`deploy/`, `server/src/sandbox/remote.ts`) keeps it off;
+   - the disclosure in `docs/legal/third-party-services.md` (sections 2 and
+     5): the AI also reads the app's own cleaning functions, and its
+     reading can create or soften findings, labelled as such;
+   - the GitHub check's mark when a finding was softened to "worth a look"
+     (recommendation: neutral, never a green pass);
+   - measure the real cost per review; `security-auditor` pass on the wiring.
+   Also decide `homemade-clean-host` (both models call it unsafe because of
+   a leading dash; the key says safe): keep the key, or change the sample.
+   Left on purpose (each fails safe, no question asked): CommonJS `require`,
+   values passed through a second name, re-tracing across files; and two
+   known softnesses: comments sent with the code can sway the AI towards
+   "works" (at most a softening), and a function named like `sanitizeInput`
+   puts that word into the report.
+2. **Offered, not started:**
+   - a protection mentioned only in text (a comment naming helmet, say)
+     hands its item back instead of passing;
+   - the password-hashes item says when the database tables have no
+     password column;
+   - a site-wide `app.use(session(...))` stops counting as a sign-in check
+     (see Known gap 2026-10-23), and DVNA's `/redirect` false alarm;
+   - a map of the checker per OWASP category (detects / misses / effort);
+   - scoring NodeGoat and Juice Shop against their documented holes, like
+     DVNA;
+   - testing whether the reports' suggested fixes really fix things
+     (Murat's idea, 2026-10-25): apply each to the practice apps and the
+     benchmark, re-run, check the problem is gone and nothing broke;
+   - README refresh: its DVNA count (5 of 19) and "ShipBrace reviewing
+     itself" paragraph predate the October work;
+   - a `.claude/claude-security-guidance.md` note telling the
+     security-guidance plugin that `packages/guardrails/bench/` and test
+     samples are deliberately vulnerable.
+3. **Opening up** (needs Murat's product decisions): see "Before anyone else
+   uses it" below.
+
 Done: review history (2026-10-09), the sealed reviewer (2026-10-09), hosting
 on Cloudflare (2026-10-10), sign-in with GitHub, paste-a-link, notices and
 per-installation switches (2026-10-10), the name ShipBrace, a public
