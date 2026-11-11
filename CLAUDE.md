@@ -29,8 +29,8 @@ review     → ten OWASP Top 10:2025 modules for the user
 - The enumerating pass runs *before* the model so its findings exist
   independently; a hostile repository cannot use the model to suppress them.
 - The review must work with no model, no API key, and no cost.
-- **One opt-in exception (Murat's decisions, 2026-11-10; built that day,
-  live once deployed):** with `ReviewOptions.cleanerJudge` set (off by
+- **One opt-in exception (Murat's decisions, 2026-11-10; live since
+  2026-11-11):** with `ReviewOptions.cleanerJudge` set (off by
   default in the library; on Cloudflare it is the outside step `judge`, on
   only for `AI_ALLOWED_GITHUB_IDS` with the installation's AI switch and
   `AI_CLEANER_CHECK` on, model `CLEANER_MODEL` = Haiku 5.5), a model reads
@@ -292,9 +292,10 @@ the server with the AI step, start it with an extra `--env-file` that sets
   assistant. A judge given malformed questions fails, and the report says
   the step did not run. The notices and the AI switch describe the step
   (`NOTICE_VERSION` bumped, so everyone is asked again), and
-  `docs/legal/third-party-services.md` sections 2 and 5 cover it. Its first
-  true end-to-end run on Cloudflare is the first review after the deploy:
-  read the Worker log line "cleaner check (...)" for the real cost.
+  `docs/legal/third-party-services.md` sections 2 and 5 cover it. Deployed
+  2026-11-11. Its first true end-to-end run on Cloudflare is the first
+  review, after that, of an app with a home-made cleaner: read the Worker
+  log line "cleaner check (...)" for the real cost.
 - **Stored attacks (2026-10-20).** A table column a visitor's unchecked
   value is saved into (SQL `INSERT ... VALUES`/`UPDATE ... SET`, model
   `create`/`update` data; never `WHERE` or a filter) makes reads of it a
@@ -789,22 +790,22 @@ claims against the source, and read any outside skill before installing it.
 
 ## Roadmap
 
-### Next steps (where work stopped, 2026-11-10)
+### Next steps (where work stopped, 2026-11-11)
 
 Read this first in a new session, then CLAUDE.local.md ("Waiting on Murat")
 for the private items. Do not start any of these unasked: summarise them,
 recommend one, and wait for Murat's choice.
 
-**State:** last deployed commit `b3da87f` (live version `ef1f4030`,
-2026-11-10). Committed after that and **not pushed or deployed** (both wait
-for Murat's go-ahead, as always): the cleaner step made ready for going
-live, and the work listed below it. 415 tests.
+**State:** everything is pushed and deployed (2026-11-11): last deployed
+commit `891d6d0`, live version `bba4b863`, all six live checks passed. That
+deploy brought live the AI cleaner step (`6801381`) and the smaller checker
+improvements (`891d6d0`). 415 tests.
 
-1. **The AI cleaner step: built, waiting for `/ship`** (Murat's decisions,
-   2026-11-10: go live with Haiku 5.5 for his reviews only, neutral mark
-   when softened, ping sample changed). What it is and how it is wired: "The
-   one rule" above and "Cleaner step built for going live" in Current
-   state. After the deploy:
+1. **The AI cleaner step: live since 2026-11-11, not yet seen running**
+   (Murat's decisions, 2026-11-10: Haiku 5.5 for his reviews only, neutral
+   mark when softened, ping sample changed). What it is and how it is
+   wired: "The one rule" above and "Cleaner step built for going live" in
+   Current state. Still to see:
    - Murat is shown the notices once more (`NOTICE_VERSION` changed) and
      the AI switch's new description;
    - the first review of an app with a home-made cleaner is the step's
@@ -818,8 +819,8 @@ live, and the work listed below it. 415 tests.
    CommonJS `require`, values passed through a second name, re-tracing
    across files. Opening the step to anyone else waits for the opening-up
    decisions (privacy policy, the provider's data agreement).
-2. **Smaller checker improvements: done 2026-11-10, committed, waiting for
-   `/ship`** (see Current state: `protectionShown`, the password-hashes
+2. **Smaller checker improvements: done 2026-11-10, live since
+   2026-11-11** (see Current state: `protectionShown`, the password-hashes
    item, session set-up, redirect-only pages).
    **Offered, not started:**
    - a function written inline in `app.use(...)`, and names the checker
