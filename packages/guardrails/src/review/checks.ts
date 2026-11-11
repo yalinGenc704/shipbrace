@@ -297,14 +297,14 @@ function composeServices(file: SourceFile): { services: ComposeService[]; unread
       if (/^network_mode:\s*["']?host\b/.test(text)) current.hostNetwork = index;
       // Sharing another service's network: its ports are this one's.
       if (/^network_mode:\s*["']?(?:service|container):/.test(text)) current.indirect = true;
-      if (/^build:/.test(text)) current.built = true;
+      if (text.startsWith("build:")) current.built = true;
       const merged = /^<<:\s*(.*)$/.exec(text);
       if (merged) {
         // `<<: *base` or `<<: [*a, *b]`: only blocks that touch ports or images matter.
         const names = [...merged[1]!.matchAll(/\*([\w-]+)/g)].map((m) => m[1]!);
         if (names.length === 0 || names.some((n) => risky.has(n) || !lines.some((l) => new RegExp(`&${n}\\s*$`).test(l)))) current.indirect = true;
       }
-      if (/^extends:/.test(text) || /^ports:\s*\*/.test(text)) current.indirect = true;
+      if (text.startsWith("extends:") || /^ports:\s*\*/.test(text)) current.indirect = true;
       if (/^ports:$/.test(text)) inPorts = true;
       const inline = /^ports:\s*\[(.*)\]$/.exec(text);
       if (inline) {

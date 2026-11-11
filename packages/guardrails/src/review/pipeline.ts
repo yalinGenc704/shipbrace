@@ -13,6 +13,7 @@ import {
 } from "../analysis/verify.ts";
 import type { Inventory } from "../analysis/inventory.ts";
 import { nullProposer, ProposerRefusedError, type AttackProposer } from "../analysis/proposer.ts";
+import { applyVerdicts, findCleaners, questionsFor, type CleanerJudge } from "../analysis/cleaners.ts";
 import { scan } from "../engine.ts";
 import type { RepoSnapshot } from "../types.ts";
 import { isTestPath, redact } from "../util.ts";
@@ -35,6 +36,13 @@ export interface ReviewOptions {
    * library never contacts anything outside on its own. The server opts in.
    */
   vulnerabilities?: VulnerabilitySource;
+  /**
+   * Reads the app's own cleaning functions on traced paths (experiment,
+   * 2026-11-10, off by default). A cleaner it says does not work turns its
+   * path into a finding labelled as its reading; one it says works can only
+   * turn a finding into "worth a look". It never removes anything.
+   */
+  cleanerJudge?: CleanerJudge;
 }
 
 export interface ReviewResult extends SecurityReview {
@@ -53,6 +61,8 @@ export interface ReviewResult extends SecurityReview {
      * rules alone, and the user is told so -- never silently.
      */
     model: { status: "not-used" | "used" | "refused" | "failed"; name?: string };
+    /** The cleaner step: functions asked about, and paths each kind of answer changed. */
+    cleaners?: { status: "used" | "refused" | "failed"; name: string; asked: number; broken: number; working: number };
   };
 }
 
@@ -183,6 +193,30 @@ export async function runSecurityReview(
     }
   }
 
+  let cleaners: ReviewResult["stats"]["cleaners"];
+  if (options.cleanerJudge) {
+    const uses = findCleaners(snapshot, paths);
+    const questions = questionsFor(uses);
+    if (questions.length > 0) {
+      const name = options.cleanerJudge.name;
+      try {
+        const verdicts = await options.cleanerJudge.judge(questions);
+        // The rules re-trace a path without the one cleaner said not to work.
+        const recheck = (use: (typeof uses)[number]): boolean => {
+          const without = { ...inventory, sanitizers: inventory.sanitizers.filter((s) => s.id !== use.path.sanitizer?.id) };
+          return analyseTaint(without).some(
+            (p) => p.verdict === "exploitable" && p.source.id === use.path.source.id && p.sink.id === use.path.sink.id,
+          );
+        };
+        const changed = applyVerdicts(uses, verdicts, recheck);
+        cleaners = { status: "used", name, asked: questions.length, ...changed };
+      } catch (error) {
+        // The rules' answer stands, and the review says the step did not run.
+        cleaners = { status: error instanceof ProposerRefusedError ? "refused" : "failed", name, asked: questions.length, broken: 0, working: 0 };
+      }
+    }
+  }
+
   const checks: Map<string, Awaited<ReturnType<typeof checkKnownVulnerabilities>> & { detector: string }> =
     runProjectChecks(snapshot, inventory);
   checks.set("components/known-vulnerabilities", {
@@ -203,6 +237,7 @@ export async function runSecurityReview(
       proposalsConfirmed: confirmed.length,
       durationMs: performance.now() - started,
       model,
+      ...(cleaners ? { cleaners } : {}),
     },
   };
 }

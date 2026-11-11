@@ -29,6 +29,24 @@ review     → ten OWASP Top 10:2025 modules for the user
 - The enumerating pass runs *before* the model so its findings exist
   independently; a hostile repository cannot use the model to suppress them.
 - The review must work with no model, no API key, and no cost.
+- **One opt-in exception, not live (Murat's decision, 2026-11-10):** with
+  `ReviewOptions.cleanerJudge` set (off by default; not wired into `server/`
+  or `cloud/`), a model reads the app's own cleaning functions on traced
+  paths (`analysis/cleaners.ts`, `analysis/cleaner-judge.ts`). When it says
+  a cleaner the rules trusted does not work, the rules re-trace the path
+  without that one cleaner, and only a path still open becomes a risk,
+  `confirmedBy: "cleaner-check"`, worded as the AI's reading; this can turn
+  a check red. When it says a cleaner the rules did not see works, a traced
+  risk becomes "worth a look" (never silence or a pass), worded as an
+  opinion; this can turn a check green, so the hostile-repository guarantee
+  above holds only with the step off. A cleaner is asked about only when
+  every value the operation uses goes through it, in the same handler; when
+  the function's name is bound exactly once in its file (a top-level
+  definition or an import from this repository; parameters, local
+  look-alikes and later writes count as bindings) and never written; and,
+  for `const x = clean(v)`, when `x` is bound once in the handler and never
+  written. The re-trace uses `analyseTaint`, so a cleaned path found only by
+  pairing or a proposal (across functions) is never turned into a finding.
 
 ## Layout
 
@@ -40,6 +58,7 @@ review     → ten OWASP Top 10:2025 modules for the user
 | `packages/guardrails/src/analysis/verify.ts` | **The verifier.** Decides one claim, following values across functions and files |
 | `packages/guardrails/src/analysis/oracle.ts` | Enumerating pass (`analyseTaint`), scoped to one route handler |
 | `packages/guardrails/src/analysis/proposer.ts` | Provider-agnostic `AttackProposer`; Claude implementation |
+| `packages/guardrails/src/analysis/cleaners.ts`, `cleaner-judge.ts` | Experiment, off by default: the app's own cleaning functions on traced paths, judged by a model (`CleanerJudge`; Claude implementation) |
 | `packages/guardrails/src/review/` | `pipeline.ts` runs everything; `modules.ts` is the ten-module checklist; `checks.ts` holds project-level detectors |
 | `packages/guardrails/src/rules/` | Per-file rules. `injection.ts` reuses the AST sink detection |
 | `packages/scaffold/` | Generates new apps from composable modules; `auth` is a per-app setting |
@@ -55,6 +74,7 @@ review     → ten OWASP Top 10:2025 modules for the user
 | `docs/legal/third-party-services.md` | What leaves the platform, what users must be told, draft privacy-policy text |
 | `README.md` | Plain-language overview for anyone: the vision, how a review decides, the rules, honest numbers, what is built |
 | `scripts/bench.ts` | Prints the benchmark scores: rules alone, perfect suggester, optionally a real model |
+| `scripts/bench-cleaners.ts` | The cleaner experiment on the benchmark, per model and run, with token cost (costs credit) |
 
 ### Removed legacy (2026-10-20)
 
@@ -75,7 +95,7 @@ everywhere:
 # PostgreSQL 18 (Homebrew, not started at login). Databases: shipbrace, shipbrace_test.
 LC_ALL=en_US.UTF-8 /opt/homebrew/opt/postgresql@18/bin/pg_ctl -D /opt/homebrew/var/postgresql@18 -l /opt/homebrew/var/log/postgresql@18.log start
 
-# all tests (expect 357 pass). Without TEST_DATABASE_URL the 6 database tests
+# all tests (expect 375 pass). Without TEST_DATABASE_URL the 6 database tests
 # are skipped and say so; it must name a database ending in _test (it is wiped).
 # CI (.github/workflows/ci.yml) runs typecheck, lint, tests and build on every push.
 TEST_DATABASE_URL=postgres:///shipbrace_test npm test
@@ -94,6 +114,9 @@ npm run dev --workspace @shipbrace/app
 
 # benchmark scores (add --model, with --env-file=.env, to include Claude; costs credit)
 node --experimental-strip-types scripts/bench.ts
+
+# the cleaner experiment: Haiku 5.5 and Opus 5.5 reading home-made cleaners (costs credit)
+node --experimental-strip-types --env-file=.env scripts/bench-cleaners.ts --runs 3 --models haiku,opus
 
 # the hosted setup on this Mac (Colima runs Docker; `colima start` first).
 # Throwaway values only in deploy/.env and deploy/secrets/; delete afterwards.
@@ -201,6 +224,22 @@ the server with the AI step, start it with an extra `--env-file` that sets
   `number-parse-int-direct`). Before them (2026-10-20): 36/40, 39/40, 0 false alarms; the only
   other perfect-suggester miss is a React component pasting a `body` prop
   as raw HTML (stays "worth a look").
+- **Cleaner experiment (2026-11-10, off by default, see "The one rule").**
+  Haiku 5.5 and Opus 5.5, three runs each plus one after the review fixes,
+  gave identical answers: all 5 broken home-made cleaners became
+  `cleaner-check` risks (37 -> 42 of 46 found) and 5 of the 6 correct ones
+  became "worth a look" (6 -> 1 false alarms). Both models judge
+  `homemade-clean-host` unsafe (a value starting with a dash would be read
+  by ping as an option); the answer key says safe, since ping then stops
+  with no address. Haiku said safe there in 2 of 8 runs, Opus never: the
+  only answer that varied. No other case changed. DVNA, NodeGoat, Juice Shop and
+  ShipBrace have no home-made cleaner on a traced path, so nothing was asked
+  there. Cost per benchmark run: about $0.002 (Haiku) and $0.07-0.08
+  (Opus). Not followed yet: CommonJS `require`, chains through a second
+  name. Before it could go live: an outside step `judge` through the sealed
+  reviewer (once per review, AI allowlist and switch), the disclosure text
+  in `docs/legal/third-party-services.md`, and the GitHub check's mark when
+  a risk was softened.
 - **Stored attacks (2026-10-20).** A table column a visitor's unchecked
   value is saved into (SQL `INSERT ... VALUES`/`UPDATE ... SET`, model
   `create`/`update` data; never `WHERE` or a filter) makes reads of it a

@@ -55,6 +55,13 @@ export interface TaintPath {
   via: string[];
   sanitizer?: Sanitizer;
   location: CodeLocation;
+  /**
+   * What a model said about the app's own cleaning function on this path
+   * (`analysis/cleaners.ts`, optional). Set only where it changes the
+   * outcome: a cleaner it says does not work (the path is then exploitable),
+   * or one it says works on a path the rules call exploitable.
+   */
+  cleaner?: { name: string; protects: boolean; reason: string };
 }
 
 /** Scope for a single analysis unit: one route handler, or one file's top level. */

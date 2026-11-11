@@ -23,7 +23,11 @@ review" and "Conventions that are load-bearing".
 
 1. **Only rules decide.** Nothing a model says becomes a finding unless
    `verifyClaim` returns `valid`; `verifyClaim` and every detector never call
-   a model. The enumerating pass still runs before the model.
+   a model. The enumerating pass still runs before the model. The one
+   exception is the opt-in cleaner step (`ReviewOptions.cleanerJudge`, see
+   CLAUDE.md "The one rule"): it must stay off by default, re-trace a path
+   with rules before calling it a finding, word its results as the AI's
+   reading, and only ever soften a finding to "worth a look", never remove it.
 2. **No false "pass".** A checklist item reports `pass` only when its
    detector actually ran. A new detector that cannot run on a project must
    say `not-applicable`, never pass. An item gains a `detector` name only

@@ -4,7 +4,7 @@ import type { AttackProposal } from "../src/analysis/oracle.ts";
 import { ProposerRefusedError, type AttackProposer } from "../src/analysis/proposer.ts";
 import { verifyClaim, verifyOwnership } from "../src/analysis/verify.ts";
 import type { Risk } from "../src/review/modules.ts";
-import { runSecurityReview } from "../src/review/pipeline.ts";
+import { runSecurityReview, type ReviewOptions } from "../src/review/pipeline.ts";
 import { snapshotFromFiles } from "../src/snapshot.ts";
 import type { BenchCase, KeyEntry } from "./cases.ts";
 
@@ -58,7 +58,7 @@ export interface Unexpected {
 
 export interface Score {
   mode: Mode;
-  real: { total: number; found: number; proven: number; leads: number };
+  real: { total: number; found: number; proven: number; leads: number; byCleaner: number };
   safe: { total: number; cleared: number; leads: number };
   outcomes: Outcome[];
   /** Risks on lines the key does not mark. Counted as false alarms. */
@@ -179,6 +179,7 @@ async function gradeCase(
   benchCase: BenchCase,
   mode: Mode,
   model?: AttackProposer,
+  extra: Pick<ReviewOptions, "cleanerJudge"> = {},
 ): Promise<Omit<Score, "mode">> {
   const lines = markerLines(benchCase);
   const snapshot = snapshotFromFiles(benchCase.files);
@@ -189,7 +190,7 @@ async function gradeCase(
     ? perfectSuggester(benchCase)
     : recorder?.proposer;
 
-  const review = await runSecurityReview(snapshot, proposer ? { proposer } : {});
+  const review = await runSecurityReview(snapshot, { ...extra, ...(proposer ? { proposer } : {}) });
   const risks = review.modules
     .flatMap((m) => m.items.flatMap((i) => i.risks))
     .filter((r) => isAboutAnOperation(r, inventory));
@@ -233,6 +234,7 @@ async function gradeCase(
       found: outcomes.filter((o) => o.entry.real && o.reported).length,
       proven: outcomes.filter((o) => o.entry.real && o.by === "oracle").length,
       leads: outcomes.filter((o) => o.entry.real && o.lead).length,
+      byCleaner: outcomes.filter((o) => o.entry.real && o.by === "cleaner-check").length,
     },
     safe: {
       total: outcomes.filter((o) => !o.entry.real).length,
@@ -250,10 +252,11 @@ export async function grade(
   cases: BenchCase[],
   mode: Mode,
   model?: AttackProposer,
+  extra: Pick<ReviewOptions, "cleanerJudge"> = {},
 ): Promise<Score> {
   const score: Score = {
     mode,
-    real: { total: 0, found: 0, proven: 0, leads: 0 },
+    real: { total: 0, found: 0, proven: 0, leads: 0, byCleaner: 0 },
     safe: { total: 0, cleared: 0, leads: 0 },
     outcomes: [],
     unexpected: [],
@@ -262,11 +265,12 @@ export async function grade(
   };
 
   for (const benchCase of cases) {
-    const result = await gradeCase(benchCase, mode, model);
+    const result = await gradeCase(benchCase, mode, model, extra);
     score.real.total += result.real.total;
     score.real.found += result.real.found;
     score.real.proven += result.real.proven;
     score.real.leads += result.real.leads;
+    score.real.byCleaner += result.real.byCleaner;
     score.safe.leads += result.safe.leads;
     score.safe.total += result.safe.total;
     score.safe.cleared += result.safe.cleared;

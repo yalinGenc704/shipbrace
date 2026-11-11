@@ -44,10 +44,13 @@ export interface Risk {
    * `oracle`      - a deterministic analyser reproduced the path from the code.
    * `rule`        - a pattern rule matched.
    * `route-check` - the list of pages was checked for a sign-in step.
+   * `cleaner-check` - the path was traced, and a model reading the app's own
+   *                   cleaning function on it said the function does not make
+   *                   the value safe (optional step, `analysis/cleaners.ts`).
    * Nothing reaches a user with any other provenance; model proposals that the
    * oracle could not confirm are not risks and are not listed here.
    */
-  confirmedBy: "oracle" | "rule" | "route-check";
+  confirmedBy: "oracle" | "rule" | "route-check" | "cleaner-check";
 }
 
 /**
@@ -874,6 +877,36 @@ function riskFromPath(path: TaintPath): Risk {
   };
 }
 
+/**
+ * A traced path whose own cleaning function a model read and said does not
+ * work there, and which the rules then traced as open without it. Said
+ * plainly as the model's reading, with its reason.
+ */
+function riskFromBrokenCleaner(path: TaintPath, cleaner: NonNullable<TaintPath["cleaner"]>): Risk {
+  const base = riskFromPath(path);
+  const copy = SINK_COPY[path.sink.kind];
+  const entry = SOURCE_COPY[path.source.kind] ?? "Something a visitor controls";
+  return {
+    ...base,
+    what: `${path.door ? `${entry} on ${pageName(path.door)}` : entry} goes through your function \`${cleaner.name}\` before ${copy?.operation ?? "it is used"}, and an AI reading that function found it does not make the value safe there. ${cleaner.reason}`,
+    fix: "Replace this home-made cleaning step with a well-known, tested way of doing the same job, or close the gap the AI describes.",
+    fixDetail: `Replace \`${cleaner.name}\` with a library function made for ${copy?.operation ?? "this use"}, or fix it. ${cleaner.reason}`,
+    confirmedBy: "cleaner-check",
+  };
+}
+
+/** A traced path the rules call open, whose cleaning function a model says works. */
+function leadFromWorkingCleaner(path: TaintPath, cleaner: NonNullable<TaintPath["cleaner"]>): Unproven {
+  const copy = SINK_COPY[path.sink.kind];
+  return {
+    id: riskId(`cleaner/${path.sink.kind}`, path.sink.location),
+    what: `The checker traced a visitor's value to ${copy?.operation ?? "a risky operation"} through your function \`${cleaner.name}\`. An AI reading that function thought it makes the value safe, which is an opinion, not proof. ${cleaner.reason}`,
+    why: copy?.impact ?? "If the function lets something through, a visitor could change what this line does.",
+    check: "Make sure that function really handles every possible value; if it does, nothing needs to change.",
+    location: path.sink.location,
+  };
+}
+
 function riskFromFinding(finding: Finding): Risk {
   return {
     id: riskId(finding.ruleId, finding.location),
@@ -1035,7 +1068,17 @@ export function buildReview(input: ReviewInput): SecurityReview {
   for (const path of input.paths) {
     if (path.verdict !== "exploitable") continue;
     const itemId = ITEM_FOR_SINK[path.sink.kind];
-    if (itemId) attach(itemId, riskFromPath(path));
+    if (!itemId) continue;
+    // A model said the app's own cleaner works: at most "worth a look", never silence.
+    if (path.cleaner?.protects) {
+      const leads = unprovenByItem.get(itemId) ?? [];
+      if (!leads.some((l) => l.location?.path === path.sink.location.path && l.location?.line === path.sink.location.line)) {
+        leads.push(leadFromWorkingCleaner(path, path.cleaner));
+      }
+      unprovenByItem.set(itemId, leads);
+      continue;
+    }
+    attach(itemId, path.cleaner ? riskFromBrokenCleaner(path, path.cleaner) : riskFromPath(path));
   }
 
   for (const finding of input.findings) {
@@ -1051,6 +1094,13 @@ export function buildReview(input: ReviewInput): SecurityReview {
         r.location?.path === finding.location?.path && r.location?.line === finding.location?.line,
     );
     if (proven) continue;
+    // The AI already left a note on this line about its cleaner: one note is enough.
+    const noted = finding.location !== undefined && (unprovenByItem.get(itemId) ?? []).some(
+      (l) =>
+        l.id.startsWith("cleaner/") &&
+        l.location?.path === finding.location?.path && l.location?.line === finding.location?.line,
+    );
+    if (noted) continue;
     const leads = unprovenByItem.get(itemId) ?? [];
     leads.push(unprovenFromFinding(finding));
     unprovenByItem.set(itemId, leads);

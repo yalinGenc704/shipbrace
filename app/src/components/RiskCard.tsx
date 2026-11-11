@@ -123,6 +123,7 @@ const FOUND_BY: Record<Risk["confirmedBy"], string> = {
   oracle: "tracing the value through the code",
   rule: "a pattern check",
   "route-check": "checking each page for a sign-in step",
+  "cleaner-check": "tracing the value, then an AI reading your own cleaning function",
 };
 
 /**
