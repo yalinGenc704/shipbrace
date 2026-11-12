@@ -705,9 +705,11 @@ the server with the AI step, start it with an extra `--env-file` that sets
   Installations, repository settings and audit-log entries stay. *Dashboard*:
   an address that leads nowhere shows "This page doesn't exist" (the answer
   is still 200: Cloudflare serves the page itself for every address), a
-  favicon, a description, and a year's caching for `/assets/*`. After the
-  first deploy with it, check with `curl -I` that a made-up name under
-  `/assets/` is not answered with that year-long caching.
+  favicon and a description. A year's caching for `/assets/*` was tried
+  and taken out the same day: Cloudflare answers a made-up name under
+  `/assets/` with the page itself, and the rule gave that answer the
+  year-long caching too. To bring it back, missing assets must first
+  answer 404 instead of the page.
 - **Dashboard: pick or paste, push switch, clearing history (2026-10-21, user
   decisions).** A new user with no repositories sees one step, "Choose
   repositories on GitHub" (the App's install page); afterwards "Your
@@ -828,11 +830,10 @@ Read this first in a new session, then CLAUDE.local.md ("Waiting on Murat")
 for the private items. Do not start any of these unasked: summarise them,
 recommend one, and wait for Murat's choice.
 
-**State:** last deployed commit `891d6d0` (live version `bba4b863`,
-2026-11-11: the AI cleaner step and the smaller checker improvements).
-Committed after that and **not yet pushed or deployed**: the audit fixes
-and the set-aside work (see "Audit fixes" and "Set-aside work" in Current
-state). The deploy needs migration 0008 applied first (`/ship` does it).
+**State:** last deployed commit `45f239b` (live version `7beef143`,
+2026-11-11, migration 0008 applied, all six live checks passed): the audit
+fixes and the set-aside work are live. Committed after that and **not yet
+deployed**: taking the asset caching rule out again (see "Set-aside work").
 431 tests.
 
 1. **The AI cleaner step: live since 2026-11-11, not yet seen running**
