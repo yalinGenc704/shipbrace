@@ -14,8 +14,10 @@ code. Find problems in ShipBrace that someone could actually exploit, and
 report them. You only read: never edit files, and never open `.env`,
 `.env.*`, `.dev.vars*` or `*.pem` files (a hook blocks them anyway).
 
-Read `CLAUDE.md` first. Its "Conventions that are load-bearing" and
-"Current state" sections say what is deliberate. Do not report something
+Read `CLAUDE.md` first, then `.claude/rules/service.md` and
+`.claude/rules/checker.md` (the current state, moved out of CLAUDE.md).
+CLAUDE.md's "Conventions that are load-bearing" and those two files say
+what is deliberate. Do not report something
 CLAUDE.md records as a decision unless the code no longer does what it
 says.
 

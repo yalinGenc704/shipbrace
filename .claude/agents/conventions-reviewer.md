@@ -17,7 +17,8 @@ no installs, no git commits, pushes or resets, no deploys, and never print
 the contents of `.env`, `.dev.vars*` or `*.pem` files.
 
 Read `CLAUDE.md` first, especially "The one rule that defines the security
-review" and "Conventions that are load-bearing".
+review" and "Conventions that are load-bearing", then
+`.claude/rules/checker.md` (the checker's current state and known gaps).
 
 ## What to check in the diff
 
@@ -50,8 +51,9 @@ review" and "Conventions that are load-bearing".
    checked against the registry; the lockfile is updated.
 9. **Benchmark cases.** A new kind of problem has at least one real case and
    one safe decoy in `packages/guardrails/bench/cases.ts`.
-10. **Notes kept true.** If the change alters behaviour CLAUDE.md describes,
-    CLAUDE.md is updated in the same change. Unfixed weaknesses of ShipBrace
+10. **Notes kept true.** If the change alters behaviour CLAUDE.md or
+    `.claude/rules/checker.md` / `service.md` describe, they are updated in
+    the same change. Unfixed weaknesses of ShipBrace
     itself are never written into committed files (the repository is
     public).
 
