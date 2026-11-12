@@ -85,14 +85,9 @@ review     → ten OWASP Top 10:2025 modules for the user
 | `scripts/bench.ts` | Prints the benchmark scores: rules alone, perfect suggester, optionally a real model |
 | `scripts/bench-cleaners.ts` | The cleaner experiment on the benchmark, per model and run, with token cost (costs credit) |
 
-### Removed legacy (2026-10-20)
-
-The old regex inventory (`buildInventory`, `findDoors`, `findAssignments`...)
-and the old matcher (`confirmProposal`, `confirmAll`) are gone: the regex
-version read code inside string literals as real code, and the matcher could
-never let a proposal contribute. `analysis/inventory.ts` now holds only the
-shared types; build an inventory with `buildInventoryFromAst` and decide
-claims with `verifyClaim`.
+`analysis/inventory.ts` holds only shared types: build an inventory with
+`buildInventoryFromAst` and decide claims with `verifyClaim` (the old regex
+inventory and matcher were removed on 2026-10-20).
 
 ## Running things
 
@@ -264,38 +259,22 @@ practice apps) and `.claude/rules/service.md` (`cloud/`, `server/`,
 `app/`, `deploy/`, `Dockerfile`: hosting, limits, audits, the dashboard).
 Open them directly to answer a question without touching code.
 
-## Claude Code setup for this project (2026-10-18)
+## Claude Code setup for this project
 
-- **Hooks** (`.claude/settings.json`, scripts in `.claude/hooks/`):
-  `protect-secrets.sh` blocks Read/Edit/Write of `.env`, `.env.*`,
-  `.dev.vars*` and `*.pem` (not `*.example`); `lint-edited.sh` runs
-  `oxlint --deny-warnings` on each edited `.ts/.tsx/.js/.mjs` file and hands
-  problems back. Shell commands are not covered by the secret hook; the rule
-  "never print secret values" still applies there.
-- **Skill** `/ship` (`.claude/skills/ship/`): user-only. Checks a clean,
-  pushed tree, runs typecheck, lint, tests and the benchmark, applies pending
-  D1 migrations, deploys, then checks the live site (health, sign-in, CSP,
-  robots, unsigned webhook refused, no folder review).
-- **Sub-agent** `security-auditor` (`.claude/agents/`, added 2026-10-18):
-  a read-only (Read, Grep, Glob) audit of ShipBrace itself, adapted from
-  Osmani's agent-skills (MIT) with ShipBrace's own risky areas: webhook,
-  sign-in, hostile repositories, the reviewer's internet wall, D1. It skips
-  the benchmark's deliberately vulnerable apps. Its findings are leads that
-  the main session verifies. It cannot run `npm audit`, so the main session
-  does. First run 2026-10-18.
-  **Rule since 2026-10-21:** every change to ShipBrace's own service
+What each hook, skill and sub-agent does, and the outside tools evaluated,
+are in `docs/claude-code-tools.md`. What always applies:
+
+- `protect-secrets.sh` blocks Read/Edit/Write of `.env`, `.env.*`,
+  `.dev.vars*` and `*.pem` (not `*.example`). Shell commands are not
+  covered by the secret hook; the rule "never print secret values" still
+  applies there.
+- **Rule since 2026-10-21:** every change to ShipBrace's own service
   (`cloud/`, `server/`, `app/`, `deploy/`, `Dockerfile`) gets a
   `security-auditor` pass scoped to the changed files before it is
   committed, and a full audit runs before opening up to other users.
   Checker changes (`packages/guardrails`) get `conventions-reviewer`
   instead. In a session opened from the parent folder, project agents do not
   load: give a general-purpose agent the agent file to follow.
-- **Sub-agent** `conventions-reviewer` (`.claude/agents/`, added 2026-10-20):
-  checks a finished change against the load-bearing conventions above and
-  runs typecheck, lint, tests and the benchmark (never with `--model`). It
-  reads and runs checks only; use it before committing checker changes.
-- **Planned:** the Cloudflare Observability MCP server, when live debugging
-  is needed.
 
 **Outside tools** were evaluated on 2026-10-18; the verdicts and reasons
 are in `docs/claude-code-tools.md`. Two still apply: run Fallow only on
@@ -305,106 +284,10 @@ read any skill from outside the Anthropic Directory before installing it.
 
 ## Roadmap
 
-### Next steps (where work stopped, 2026-11-11)
-
-Read this first in a new session, then CLAUDE.local.md ("Waiting on Murat")
-for the private items. Do not start any of these unasked: summarise them,
-recommend one, and wait for Murat's choice.
-
-**State:** everything is pushed and deployed (2026-11-11): last deployed
-commit `97fbf54`, live version `40ddc80d`, all six live checks passed. The
-audit fixes and the set-aside work are live, migration 0008 is applied, and
-the year-long asset caching is taken out again. Murat signed in after the
-deploy with the invite list by account number (audit log, 2026-11-12), and
-accepted the new notices. 431 tests.
-
-1. **The AI cleaner step: live since 2026-11-11, not yet seen running**
-   (Murat's decisions, 2026-11-10: Haiku 5.5 for his reviews only, neutral
-   mark when softened, ping sample changed). What it is and how it is
-   wired: "The one rule" above and "Cleaner step built for going live" in
-   `.claude/rules/checker.md`. Still to see:
-   - Murat is shown the notices once more (`NOTICE_VERSION` changed) and
-     the AI switch's new description;
-   - the first review of an app with a home-made cleaner is the step's
-     first true end-to-end run on Cloudflare: read the Worker log line
-     "cleaner check (...)" for the real token counts, and check the report
-     (a labelled finding or a "worth a look" note, the footer sentence, and
-     a neutral check when softened);
-   - `AI_CLEANER_CHECK` set to "off" in `cloud/wrangler.jsonc` and a deploy
-     turns just this step off.
-   Not followed, on purpose (each leaves the rules' answer in place):
-   CommonJS `require`, values passed through a second name, re-tracing
-   across files. Opening the step to anyone else waits for the opening-up
-   decisions (privacy policy, the provider's data agreement).
-2. **Smaller checker improvements: done 2026-11-10, live since
-   2026-11-11** (`protectionShown` in the conventions above; the
-   password-hashes item, session set-up and redirect-only pages in
-   `.claude/rules/checker.md`).
-   **Offered, not started:**
-   - bringing the unused Docker setup in `deploy/` in line with Cloudflare
-     (limits, records, who may use the AI step) before anyone uses it;
-   - requiring CI to pass before changes land on `master`: a GitHub
-     setting Murat switches on; walk him through it when he asks;
-   - a function written inline in `app.use(...)`, and names the checker
-     does not know, still count as a sign-in check for every route;
-   - a map of the checker per OWASP category (detects / misses / effort);
-   - scoring NodeGoat and Juice Shop against their documented holes, like
-     DVNA;
-   - testing whether the reports' suggested fixes really fix things
-     (Murat's idea, 2026-10-25): apply each to the practice apps and the
-     benchmark, re-run, check the problem is gone and nothing broke. Its
-     own project of several days, to be planned first;
-   - a `.claude/claude-security-guidance.md` note telling the
-     security-guidance plugin that `packages/guardrails/bench/` and test
-     samples are deliberately vulnerable.
-3. **Opening up** (needs Murat's product decisions): see "Before anyone else
-   uses it" below.
-
-Done: review history (2026-10-09), the sealed reviewer (2026-10-09), hosting
-on Cloudflare (2026-10-10), sign-in with GitHub, paste-a-link, notices and
-per-installation switches (2026-10-10), the name ShipBrace, a public
-repository with CI and a README screenshot, a dead-code cleanup, and the
-Claude Code setup above (2026-10-18).
-
-**The smarter checker (agreed 2026-10-18, widened and built 2026-10-20),**
-roadmap item 6 below. Steps 1-5 are done, tried on the practice apps (see
-`.claude/rules/checker.md`) and deployed (2026-10-21).
-Every new check gets benchmark cases (a real problem and a safe look-alike),
-adds no false alarm beyond the known list in `test/bench.test.ts`, is tried on the practice apps, and fills a checklist
-item only once it can actually run ("no false pass"). In order:
-
-1. **Groundwork (done 2026-10-20).** `conventions-reviewer` added; legacy
-   regex inventory and matcher removed.
-2. **The agreed gaps.** Done 2026-10-20: stored attacks; matching each
-   sanitizer to the kinds of operation it protects; not flagging routes that
-   only return constants; sign-in checks written inside a handler;
-   transactions written `` tx`...` ``; SQL-looking text in documentation
-   templates; XXE.
-3. **New proven checks** (done 2026-10-20) (input traced to the problem, so they are risks):
-   mass assignment (a request body saved whole, e.g. `User.create(req.body)`,
-   so a visitor can set `role` or `owner_id`); unsafe decoding of input
-   (extend the existing `unserialize` detection to unsafe YAML loading and
-   similar, and give `integrity/untrusted-deserialization` its detector);
-   webhooks acted on without checking their signature.
-4. **New project checks** (done 2026-10-20; read from files, no tracing): secret keys in code
-   that runs in the browser (`NEXT_PUBLIC_`/`VITE_` names holding secrets, a
-   Supabase service-role key in client code); Supabase tables without row
-   level security and public storage buckets, from SQL migrations; session
-   cookies missing `HttpOnly`/`Secure`/`SameSite`; debug mode left on in
-   production settings; a Dockerfile that runs as root; uploads with no size
-   limit; packages nothing imports, names one typo away from a popular
-   package (fixed list in the code, no network), and packages with install
-   scripts (from the lockfile).
-5. **Leads only ("worth a look", never risks; done 2026-10-20):** AI features where visitor
-   input reaches a model prompt and the model's answer reaches a database,
-   command or tool (prompt injection); routes that send whole tables back
-   without a limit.
-
-Not in this plan (each needs a product decision first): checking a user's
-live site (exposed files, headers, speed, search-engine basics; the
-reviewer's internet is off on purpose), secrets in git history (reviews get
-a snapshot without history), and branch protection (needs a wider GitHub
-App permission).
+**Where work stopped, what is offered and what is done:**
+`docs/status.md`. Read it first in a new session, then CLAUDE.local.md
+("Waiting on Murat") for the private items. Do not start any of these
+unasked: summarise them, recommend one, and wait for Murat's choice.
 
 ### Before anyone else uses it
 

@@ -1,4 +1,36 @@
-# Outside tools evaluated for Claude Code (2026-10-18)
+# Claude Code setup and outside tools
+
+## This project's setup (2026-10-18)
+
+Moved from CLAUDE.md on 2026-11-12. The rules that always apply (the
+secret hook, which reviewer runs before a commit, agents in a session
+opened from the parent folder, outside tools) stay in CLAUDE.md.
+
+- **Hooks** (`.claude/settings.json`, scripts in `.claude/hooks/`):
+  `protect-secrets.sh` blocks Read/Edit/Write of `.env`, `.env.*`,
+  `.dev.vars*` and `*.pem` (not `*.example`); `lint-edited.sh` runs
+  `oxlint --deny-warnings` on each edited `.ts/.tsx/.js/.mjs` file and hands
+  problems back. Shell commands are not covered by the secret hook; the rule
+  "never print secret values" still applies there.
+- **Skill** `/ship` (`.claude/skills/ship/`): user-only. Checks a clean,
+  pushed tree, runs typecheck, lint, tests and the benchmark, applies pending
+  D1 migrations, deploys, then checks the live site (health, sign-in, CSP,
+  robots, unsigned webhook refused, no folder review).
+- **Sub-agent** `security-auditor` (`.claude/agents/`, added 2026-10-18):
+  a read-only (Read, Grep, Glob) audit of ShipBrace itself, adapted from
+  Osmani's agent-skills (MIT) with ShipBrace's own risky areas: webhook,
+  sign-in, hostile repositories, the reviewer's internet wall, D1. It skips
+  the benchmark's deliberately vulnerable apps. Its findings are leads that
+  the main session verifies. It cannot run `npm audit`, so the main session
+  does. First run 2026-10-18.
+- **Sub-agent** `conventions-reviewer` (`.claude/agents/`, added 2026-10-20):
+  checks a finished change against the load-bearing conventions in CLAUDE.md and
+  runs typecheck, lint, tests and the benchmark (never with `--model`). It
+  reads and runs checks only; use it before committing checker changes.
+- **Planned:** the Cloudflare Observability MCP server, when live debugging
+  is needed.
+
+## Outside tools evaluated (2026-10-18)
 
 **Tools evaluated (2026-10-18), for reference.** *Claude Code Setup*
 (Anthropic, official) is installed; its read-only scan recommended the hooks,
