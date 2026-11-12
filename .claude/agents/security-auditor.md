@@ -48,7 +48,9 @@ says.
 ### Who can reach what
 - Every `/api/*` route that reads or changes private data requires a
   session, and checks that the person may see that repository or
-  installation before returning anything (`canRead`, `ALLOWED_GITHUB_USERS`).
+  installation before returning anything (`repoAccess`/`repoAccessById` in
+  `github-user.ts`, `mayManage` in `accounts.ts`; who may sign in at all is
+  `ALLOWED_GITHUB_IDS`).
   Check every D1 and PostgreSQL read, update and delete: it either filters
   by owner in its `WHERE` clause or checks ownership before the data is used.
 - No response carries another person's data, a GitHub token, a refresh
@@ -143,9 +145,10 @@ says.
   paste-a-link).
 - Paste-a-link accepts only GitHub repository addresses; ShipBrace never
   fetches an arbitrary URL a user supplied.
-- Rate limits: `REVIEWS_PER_HOUR` per person, `DAILY_REVIEW_LIMIT` overall,
-  and whether `/api/*` has Cloudflare rate limiting yet (CLAUDE.md says not
-  yet; report it as still open, not as new).
+- Rate limits: `REVIEWS_PER_HOUR` per person (`cloud/src/accounts.ts`),
+  `MONTHLY_REVIEW_LIMIT` and `ACCOUNT_DAILY_REVIEW_LIMIT` per account,
+  `DAILY_REVIEW_LIMIT` overall (`cloud/src/limits.ts`), and the per-minute
+  limits on `/api/*` and sign-in (`cloud/src/rate-counter.ts`, `rate-window.ts`).
 - Calls to GitHub, OSV.dev and Anthropic have timeouts and fail plainly.
 - Runaway costs: Cloudflare has no dollar cut-off, so ShipBrace's own limits
   are the real cap. No retry loops (queue `max_retries` 0, no fetch retried in
