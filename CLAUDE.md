@@ -830,11 +830,12 @@ Read this first in a new session, then CLAUDE.local.md ("Waiting on Murat")
 for the private items. Do not start any of these unasked: summarise them,
 recommend one, and wait for Murat's choice.
 
-**State:** last deployed commit `45f239b` (live version `7beef143`,
-2026-11-11, migration 0008 applied, all six live checks passed): the audit
-fixes and the set-aside work are live. Committed after that and **not yet
-deployed**: taking the asset caching rule out again (see "Set-aside work").
-431 tests.
+**State:** everything is pushed and deployed (2026-11-11): last deployed
+commit `97fbf54`, live version `40ddc80d`, all six live checks passed. The
+audit fixes and the set-aside work are live, migration 0008 is applied, and
+the year-long asset caching is taken out again. Murat signed in after the
+deploy with the invite list by account number (audit log, 2026-11-12), and
+accepted the new notices. 431 tests.
 
 1. **The AI cleaner step: live since 2026-11-11, not yet seen running**
    (Murat's decisions, 2026-11-10: Haiku 5.5 for his reviews only, neutral
