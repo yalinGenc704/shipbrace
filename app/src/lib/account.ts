@@ -50,6 +50,9 @@ export const acceptNotice = (version: string) => send<{ ok?: boolean; error?: st
 export const pasteLink = (link: string) => send<PasteResult>("/api/repos", { link });
 export const setUpInstallation = (id: number) => send<{ ok?: boolean; error?: string }>(`/api/installations/${id}/setup`);
 
+/** Deletes the signed-in person's account; `confirm` is their own GitHub name, typed. */
+export const deleteAccount = (confirm: string) => send<{ ok?: boolean; error?: string }>("/api/account/delete", { confirm });
+
 export async function signOut(): Promise<void> {
   await fetch("/auth/logout", { method: "POST" });
   window.location.href = "/";

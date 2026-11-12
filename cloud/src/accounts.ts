@@ -11,6 +11,7 @@ import {
   parseRepoLink,
   repoAccess,
   repoAccessById,
+  revokeGrant,
   userInstallations,
   type OAuthApp,
 } from "./github-user.ts";
@@ -165,7 +166,11 @@ export function accountRoutes() {
       const tokens = await exchangeCode(oauthApp(c.env), code);
       const user = await currentUser(tokens.accessToken);
       // Not on the invite list: no session, nothing stored about them.
-      if (!allowed(c.env, user.id)) return c.redirect("/?invite-only=1");
+      if (!allowed(c.env, user.id)) {
+        // Counted for the nightly alert; who it was is deliberately not kept.
+        await record(c.env.DB, { action: "refused", detail: { attempt: "sign in" } });
+        return c.redirect("/?invite-only=1");
+      }
       const value = await openSession(c.env.DB, c.env.SESSION_KEY!, user, tokens);
       await record(c.env.DB, { actor: user.id, action: "sign-in", target: user.login });
       c.header("Set-Cookie", sessionCookie(value), { append: true });
@@ -215,6 +220,56 @@ export function accountRoutes() {
     if (c.req.header("origin") !== new URL(c.env.PUBLIC_URL).origin) return c.json({ error: "Refused." }, 403);
     const who = await closeSession(c.env.DB, c.req.header("cookie"));
     if (who !== undefined) await record(c.env.DB, { actor: who, action: "sign-out" });
+    c.header("Set-Cookie", clearedSessionCookie());
+    return c.json({ ok: true });
+  });
+
+  /**
+   * Deletes the signed-in person's account: every session (with its stored
+   * GitHub token), their record, and the reviews they started -- by the same
+   * rule as "Clear the reviews I started": deleted in repositories they
+   * administer, elsewhere only unlinked from them, so a collaborator cannot
+   * erase the record of their own failed push from its admins' view. GitHub
+   * is asked to end ShipBrace's access to their account as well. What stays:
+   * installations and repository settings (they belong to the GitHub account
+   * the App is installed on, and go when it is uninstalled), and the audit
+   * log's entries, kept up to a year as the security record.
+   */
+  app.post("/api/account/delete", async (c) => {
+    const session = c.get("session");
+    const body = (await c.req.json().catch(() => ({}))) as { confirm?: unknown };
+    // Typed by the person, so a stray request cannot delete an account.
+    if (body.confirm !== session.login) return c.json({ error: "Type your GitHub name to confirm." }, 400);
+
+    // Which reports are deleted depends on what GitHub says this person
+    // administers. If GitHub is not answering, nothing is deleted yet:
+    // otherwise their reports would only be unlinked, with the account gone.
+    try {
+      await currentUser(session.token);
+    } catch {
+      return c.json({ error: "GitHub did not answer, so nothing was deleted. Please try again in a moment." }, 502);
+    }
+
+    const installations = (await userInstallations(session.token)).slice(0, 10);
+    const adminOf = (await Promise.all(installations.map(({ id }) => installationRepos(session.token, id))))
+      .flat()
+      .filter((r) => r.admin)
+      .map((r) => r.githubId)
+      .slice(0, 90);
+    const inAdminRepos = `repository_id IN (SELECT id FROM repositories WHERE github_id IN (${adminOf.map(() => "?").join(",")}))`;
+    const [deleted] = await c.env.DB.batch([
+      c.env.DB.prepare(`DELETE FROM reviews WHERE ran_by = ? AND ${adminOf.length > 0 ? inAdminRepos : "0"}`).bind(session.githubId, ...adminOf),
+      c.env.DB.prepare("UPDATE reviews SET ran_by = NULL WHERE ran_by = ?").bind(session.githubId),
+      c.env.DB.prepare("UPDATE installations SET set_up_by = NULL WHERE set_up_by = ?").bind(session.githubId),
+      c.env.DB.prepare("UPDATE repo_settings SET changed_by = NULL WHERE changed_by = ?").bind(session.githubId),
+      c.env.DB.prepare("DELETE FROM review_requests WHERE github_id = ?").bind(session.githubId),
+      c.env.DB.prepare("DELETE FROM sessions WHERE github_id = ?").bind(session.githubId),
+      c.env.DB.prepare("DELETE FROM users WHERE github_id = ?").bind(session.githubId),
+    ]);
+    await record(c.env.DB, { actor: session.githubId, action: "account-deleted", detail: { reviews: deleted?.meta.changes ?? 0 } });
+    // Best effort: the account is already gone here; GitHub's side can also
+    // be ended by the person, under their GitHub settings.
+    await revokeGrant(oauthApp(c.env), session.token).catch(() => {});
     c.header("Set-Cookie", clearedSessionCookie());
     return c.json({ ok: true });
   });

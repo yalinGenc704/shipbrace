@@ -15,6 +15,7 @@ import {
   setPushReviews,
   setUpInstallation,
   signInUrl,
+  deleteAccount,
   signOut,
   takeRememberedLink,
   type ConnectedRepo,
@@ -263,7 +264,84 @@ function Paste({ login }: { login: string }) {
         </a>
       )}
       <ClearMine />
+      <DeleteAccount login={login} />
     </Shell>
+  );
+}
+
+/**
+ * Deleting the account. Nothing happens on the first click: it opens a short
+ * explanation of what goes and what stays, and the button that really
+ * deletes works only once the person has typed their own GitHub name.
+ */
+function DeleteAccount({ login }: { login: string }) {
+  const [open, setOpen] = useState(false);
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function remove(event: FormEvent) {
+    event.preventDefault();
+    if (busy || typed.trim() !== login) return;
+    setBusy(true);
+    setError("");
+    const result = await deleteAccount(typed.trim());
+    if (result.ok) {
+      window.location.href = "/";
+      return;
+    }
+    setBusy(false);
+    setError(result.error ?? "That didn't work. Please try again.");
+  }
+
+  if (!open) {
+    return (
+      <div className="mt-3">
+        <button type="button" onClick={() => setOpen(true)} className="text-sm text-ink-soft underline hover:text-danger">
+          Delete my account
+        </button>
+      </div>
+    );
+  }
+  return (
+    <form onSubmit={(event) => void remove(event)} className="mt-4 rounded-xl border border-line p-4">
+      <h2 className="text-sm font-semibold text-ink">Delete my account</h2>
+      <p className="mt-2 text-sm leading-relaxed text-ink-soft">
+        This signs you out everywhere and deletes what ShipBrace holds about you: your sign-ins and the reports you
+        started in repositories you administer. Reports you started in other people's repositories stay in the history
+        their admins see, no longer linked to you. ShipBrace's access to your GitHub account is ended too.
+      </p>
+      <p className="mt-2 text-sm leading-relaxed text-ink-soft">
+        It does not remove ShipBrace from your repositories: to stop reviews and delete their reports, uninstall it on
+        GitHub. While it stays installed, reviews of your later pushes are still recorded as yours. A record of account
+        actions (such as this one) is kept for up to a year for security.
+      </p>
+      <label htmlFor="delete-confirm" className="mt-3 block text-sm text-ink">
+        Type your GitHub name, <span className="font-mono">{login}</span>, to confirm
+      </label>
+      <input
+        id="delete-confirm"
+        value={typed}
+        onChange={(event) => setTyped(event.target.value)}
+        autoComplete="off"
+        spellCheck={false}
+        disabled={busy}
+        className="mt-1 w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink"
+      />
+      <div className="mt-3 flex items-center gap-3">
+        <button
+          type="submit"
+          disabled={busy || typed.trim() !== login}
+          className="inline-flex items-center gap-2 rounded-lg bg-danger px-4 py-2 text-sm font-medium text-surface hover:opacity-90 disabled:opacity-50"
+        >
+          {busy && <Loader2 className="size-4 animate-spin" aria-hidden />}Delete my account
+        </button>
+        <button type="button" onClick={() => { setOpen(false); setTyped(""); setError(""); }} disabled={busy} className="text-sm text-ink-soft hover:text-ink">
+          Cancel
+        </button>
+      </div>
+      {error && <p className="mt-3 text-sm text-danger">{error}</p>}
+    </form>
   );
 }
 

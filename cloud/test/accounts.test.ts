@@ -658,3 +658,96 @@ test("uninstalling forgets the push switches, so a reinstall starts from the def
   await forgetInstallation(env.DB, 7, "all");
   assert.equal(await reviewsPushes(env.DB, 101), true);
 });
+
+// --- deleting an account ----------------------------------------------------------------
+
+const count = (table: string, where = "1") =>
+  env.DB.prepare(`SELECT count(*) AS n FROM ${table} WHERE ${where}`).first<{ n: number }>().then((r) => r?.n ?? 0);
+
+test("deleting an account needs the person's own name typed, and comes from this site", async () => {
+  const cookie = await signIn();
+  assert.equal((await post("/api/account/delete", {}, cookie)).status, 400);
+  assert.equal((await post("/api/account/delete", { confirm: "someone-else" }, cookie)).status, 400);
+  assert.equal((await post("/api/account/delete", { confirm: "ada" }, cookie, "https://evil.example")).status, 403);
+  assert.equal(await count("users"), 1, "nothing deleted yet");
+});
+
+test("deleting an account removes the person, their sessions and tokens, and the reviews that are theirs", async () => {
+  REPOS["ada/shop"]!.admin = true;
+  const asked: Array<{ url: string; method: string; auth: string | null }> = [];
+  const base = fakeGitHub();
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(typeof input === "string" || input instanceof URL ? input : input.url);
+    asked.push({ url, method: init?.method ?? "GET", auth: new Headers(init?.headers).get("authorization") });
+    if (url.includes("/applications/")) return new Response(null, { status: 204 });
+    return base(input as never, init);
+  }) as typeof fetch;
+  try {
+    const mine = await keep(101, "ada/shop", ME);
+    const teammates = await keep(101, "ada/shop", 99);
+    const elsewhere = await keep(201, "stranger/bank", ME);
+    const cookie = await signIn();
+    const second = await signIn();
+    await post("/api/repos", { link: "ada/shop" }, cookie);
+    assert.equal(await count("sessions"), 2);
+
+    const gone = await post("/api/account/delete", { confirm: "ada" }, cookie);
+    assert.equal(gone.status, 200);
+    assert.match(gone.headers.get("set-cookie") ?? "", /__Host-shipbrace=; .*Max-Age=0/);
+
+    assert.equal(await count("users"), 0);
+    assert.equal(await count("sessions"), 0, "every session, with its stored token");
+    assert.equal(await count("review_requests"), 0);
+    assert.equal(await d1History(env.DB).review(mine.reviewId), null, "deleted where she is an admin");
+    assert.notEqual(await d1History(env.DB).review(teammates.reviewId), null, "a teammate's review stays");
+    assert.notEqual(await d1History(env.DB).review(elsewhere.reviewId), null, "kept for that repository's admins");
+    assert.equal(await count("reviews", "ran_by = 5"), 0, "and no longer linked to her");
+    assert.equal(await count("installations", "set_up_by = 5"), 0);
+    assert.equal(await count("installations"), 1, "the installation belongs to the GitHub account, not the person");
+    assert.equal(await count("audit_log", "action = 'account-deleted'"), 1);
+
+    // Both cookies are dead, and GitHub was asked to end ShipBrace's access as the App, not as her.
+    assert.equal((await call("/api/repos", {}, cookie)).status, 401);
+    assert.equal((await call("/api/repos", {}, second)).status, 401);
+    const revoke = asked.find((a) => a.url.includes("/applications/client-id/grant"));
+    assert.equal(revoke?.method, "DELETE");
+    assert.match(revoke?.auth ?? "", /^Basic /);
+  } finally {
+    REPOS["ada/shop"]!.admin = false;
+  }
+});
+
+test("when GitHub cannot say what the person administers, nothing is deleted yet", async () => {
+  const base = fakeGitHub();
+  const cookie = await signIn();
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(String(typeof input === "string" || input instanceof URL ? input : input.url));
+    if (url.pathname === "/user") return new Response("rate limited", { status: 403 });
+    return base(input as never, init);
+  }) as typeof fetch;
+  const answer = await post("/api/account/delete", { confirm: "ada" }, cookie);
+  assert.equal(answer.status, 502);
+  assert.equal(await count("users"), 1);
+  assert.equal(await count("sessions"), 1);
+});
+
+test("an account is deleted even when GitHub does not answer the request to end its access", async () => {
+  const base = fakeGitHub();
+  const cookie = await signIn();
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    if (String(typeof input === "string" || input instanceof URL ? input : input.url).includes("/applications/")) throw new Error("network");
+    return base(input as never, init);
+  }) as typeof fetch;
+  assert.equal((await post("/api/account/delete", { confirm: "ada" }, cookie)).status, 200);
+  assert.equal(await count("users"), 0);
+});
+
+test("a refused sign-in is counted without keeping who it was", async () => {
+  env.ALLOWED_GITHUB_IDS = "999";
+  const start = await call("/auth/login");
+  const stateCookie = start.headers.get("set-cookie")!.split(";")[0]!;
+  const state = new URL(start.headers.get("location")!).searchParams.get("state")!;
+  await call(`/auth/callback?code=abc&state=${state}`, {}, stateCookie);
+  const row = await env.DB.prepare("SELECT actor, target, detail FROM audit_log WHERE action = 'refused'").first<{ actor: number | null; target: string | null; detail: string }>();
+  assert.deepEqual({ ...row }, { actor: null, target: null, detail: '{"attempt":"sign in"}' });
+});

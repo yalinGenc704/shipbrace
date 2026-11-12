@@ -104,7 +104,7 @@ everywhere:
 # PostgreSQL 18 (Homebrew, not started at login). Databases: shipbrace, shipbrace_test.
 LC_ALL=en_US.UTF-8 /opt/homebrew/opt/postgresql@18/bin/pg_ctl -D /opt/homebrew/var/postgresql@18 -l /opt/homebrew/var/log/postgresql@18.log start
 
-# all tests (expect 419 pass). Without TEST_DATABASE_URL the 6 database tests
+# all tests (expect 431 pass). Without TEST_DATABASE_URL the 6 database tests
 # are skipped and say so; it must name a database ending in _test (it is wiped).
 # CI (.github/workflows/ci.yml) runs typecheck, lint, tests and build on every push.
 TEST_DATABASE_URL=postgres:///shipbrace_test npm test
@@ -688,6 +688,26 @@ the server with the AI step, start it with an extra `--env-file` that sets
   retry, like the cleaner call's 2 minutes. wrangler 4.160.0 and seroval
   1.8.1 (a dashboard dependency of the router): `npm audit` reports no
   known flaws.
+- **Set-aside work built 2026-11-11 (Murat's go-ahead).**
+  *Repeated webhook deliveries* (`cloud/src/deliveries.ts`, migration
+  0008): a push GitHub delivers twice (its retry, or Redeliver) is
+  acknowledged and not reviewed or counted again; ids kept a week, and only
+  for signed messages that start a review. To review a commit again, use
+  "Review now" on the dashboard. *Nightly alert* (`refusedLastDay`,
+  `alertLine` in `cloud/src/audit.ts`): five or more refused attempts in 24
+  hours write one log line starting `SHIPBRACE-ALERT`; a sign-in refused by
+  the invite list is counted without keeping who it was. It is a log line
+  only: nothing emails anyone. *Delete my account* (`POST
+  /api/account/delete`, the person's own GitHub name typed to confirm):
+  deletes every session and stored token, the person's record, and the
+  reviews they started by the same rule as "Clear the reviews I started";
+  asks GitHub to end the App's access to their account (best effort).
+  Installations, repository settings and audit-log entries stay. *Dashboard*:
+  an address that leads nowhere shows "This page doesn't exist" (the answer
+  is still 200: Cloudflare serves the page itself for every address), a
+  favicon, a description, and a year's caching for `/assets/*`. After the
+  first deploy with it, check with `curl -I` that a made-up name under
+  `/assets/` is not answered with that year-long caching.
 - **Dashboard: pick or paste, push switch, clearing history (2026-10-21, user
   decisions).** A new user with no repositories sees one step, "Choose
   repositories on GitHub" (the App's install page); afterwards "Your
@@ -811,7 +831,9 @@ recommend one, and wait for Murat's choice.
 **State:** last deployed commit `891d6d0` (live version `bba4b863`,
 2026-11-11: the AI cleaner step and the smaller checker improvements).
 Committed after that and **not yet pushed or deployed**: the audit fixes
-(see "Audit fixes" in Current state). 419 tests.
+and the set-aside work (see "Audit fixes" and "Set-aside work" in Current
+state). The deploy needs migration 0008 applied first (`/ship` does it).
+431 tests.
 
 1. **The AI cleaner step: live since 2026-11-11, not yet seen running**
    (Murat's decisions, 2026-11-10: Haiku 5.5 for his reviews only, neutral
@@ -835,6 +857,12 @@ Committed after that and **not yet pushed or deployed**: the audit fixes
    2026-11-11** (see Current state: `protectionShown`, the password-hashes
    item, session set-up, redirect-only pages).
    **Offered, not started:**
+   - testing whether the reports' suggested fixes really fix things: its
+     own project of several days, to be planned first (see below);
+   - bringing the unused Docker setup in `deploy/` in line with Cloudflare
+     (limits, records, who may use the AI step) before anyone uses it;
+   - requiring CI to pass before changes land on `master`: a GitHub
+     setting Murat switches on; walk him through it when he asks;
    - a function written inline in `app.use(...)`, and names the checker
      does not know, still count as a sign-in check for every route;
    - a map of the checker per OWASP category (detects / misses / effort);
@@ -843,8 +871,6 @@ Committed after that and **not yet pushed or deployed**: the audit fixes
    - testing whether the reports' suggested fixes really fix things
      (Murat's idea, 2026-10-25): apply each to the practice apps and the
      benchmark, re-run, check the problem is gone and nothing broke;
-   - README refresh: its DVNA count (5 of 19) and "ShipBrace reviewing
-     itself" paragraph predate the October work;
    - a `.claude/claude-security-guidance.md` note telling the
      security-guidance plugin that `packages/guardrails/bench/` and test
      samples are deliberately vulnerable.

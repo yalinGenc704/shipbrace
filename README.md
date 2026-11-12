@@ -171,19 +171,27 @@ all 56. The one problem never found: a stored comment later rendered as raw
 HTML. The scores are ratcheted by a test, so a change that loses one fails CI.
 
 **Outside validation** on deliberately vulnerable practice apps (DVNA, OWASP
-NodeGoat, OWASP Juice Shop): 5 of DVNA's 19 documented holes found
-automatically. Not yet detected: XXE, some MongoDB-style injection, default
-session secrets, and sign-in checks written inside a handler. The false alarms
-these apps exposed were fixed and added to the benchmark.
+NodeGoat, OWASP Juice Shop). On DVNA, 12 of its 19 documented holes are found
+automatically, with no false alarm: SQL and command injection, the session
+secret in code, password hashes sent to the browser, sensitive data in logs,
+XXE, admin pages open to any signed-in user, missing protective headers,
+reflected XSS, insecure deserialisation, CSRF and the open redirect. The
+seven it misses: the insecure password reset, a missing ownership check on
+editing users, stack traces shown to visitors (raised as a question only),
+stored and DOM-based XSS, a package with a known flaw (the app has no
+lockfile to check) and sign-ins not being recorded. It also reports four real
+problems DVNA does not list. The false alarms these apps exposed were fixed
+and added to the benchmark.
 
-**ShipBrace reviewing itself:** no proven vulnerabilities. It reports two
-routes as open, and they are: catch-alls that only ever answer "not found",
-which the checker cannot yet tell apart from a route that returns data (a
-known gap). It also lists three "worth a look" notes on queries that build
-`?` placeholders, with every value bound. Each false alarm it raised on its
-own code along the way (fake keys in tests, a log message naming a setting,
-requests to a fixed public API, webhook and sign-in routes) was fixed in the
-checker itself, so users' apps no longer get them either.
+**ShipBrace reviewing itself:** no proven vulnerabilities in its own code,
+and no false alarm. Four items come back as questions it cannot settle
+alone: how passwords are stored, whether stored passwords could be sent to
+a browser, and upload limits (ShipBrace has none of the three, but its own
+text talks about all of them), and rate limiting (it has limits, under names
+the check does not know). Each false alarm it raised on its own code along
+the way (fake keys in tests, a log message naming a setting, a count of AI
+tokens in a log line, requests to a fixed public API, webhook and sign-in
+routes, text about code read as code) was fixed in the checker.
 
 The principle throughout: **missing a problem is a gap; inventing one is a
 defect.** A warning about correct code teaches people to ignore the tool.

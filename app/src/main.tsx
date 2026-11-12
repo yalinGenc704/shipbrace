@@ -13,7 +13,26 @@ import { HistoryPage, StoredReviewPage } from "./components/HistoryPages.tsx";
 import { ReviewPage } from "./components/ReviewPage.tsx";
 import "./styles.css";
 
-const rootRoute = createRootRoute({ component: () => <Outlet /> });
+/**
+ * An address that leads nowhere says so in plain words, with a way back,
+ * instead of showing the front page as if it were what was asked for.
+ */
+function NotFound() {
+  return (
+    <main className="mx-auto max-w-2xl px-4 py-16">
+      <p className="text-lg font-semibold text-ink">ShipBrace</p>
+      <h1 className="mt-8 text-xl font-semibold text-ink sm:text-2xl">This page doesn't exist</h1>
+      <p className="mt-2 text-sm leading-relaxed text-ink-soft">
+        The address may be mistyped, or the report it pointed to may have been deleted.
+      </p>
+      <a href="/" className="mt-6 inline-block text-sm font-medium text-ink underline">
+        Go to the front page
+      </a>
+    </main>
+  );
+}
+
+const rootRoute = createRootRoute({ component: () => <Outlet />, notFoundComponent: NotFound });
 
 const reviewRoute = createRoute({
   getParentRoute: () => rootRoute,

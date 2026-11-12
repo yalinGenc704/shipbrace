@@ -58,6 +58,19 @@ export const exchangeCode = (app: OAuthApp, code: string, fetchImpl: typeof fetc
 export const refreshTokens = (app: OAuthApp, refreshToken: string, fetchImpl: typeof fetch = fetch) =>
   tokenRequest(app, { grant_type: "refresh_token", refresh_token: refreshToken }, fetchImpl);
 
+/**
+ * Ends this App's access to the person's GitHub account (their grant and
+ * every token under it). Asked as the App itself, with its client secret.
+ */
+export async function revokeGrant(app: OAuthApp, accessToken: string, fetchImpl: typeof fetch = fetch): Promise<void> {
+  await fetchImpl(`${API}/applications/${encodeURIComponent(app.clientId)}/grant`, {
+    method: "DELETE",
+    signal: AbortSignal.timeout(TIMEOUT_MS),
+    headers: { ...HEADERS, authorization: `Basic ${btoa(`${app.clientId}:${app.clientSecret}`)}`, "content-type": "application/json" },
+    body: JSON.stringify({ access_token: accessToken }),
+  });
+}
+
 async function get<T>(token: string, path: string, fetchImpl: typeof fetch): Promise<{ status: number; body: T | null }> {
   const response = await fetchImpl(`${API}${path}`, { headers: { ...HEADERS, authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(TIMEOUT_MS) });
   return { status: response.status, body: response.ok ? ((await response.json()) as T) : null };

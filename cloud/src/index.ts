@@ -2,7 +2,8 @@ import { handleWebhook, reviewPush, type PushJob, type ReviewDeps } from "@shipb
 import { Hono } from "hono";
 import { secureHeaders } from "hono/secure-headers";
 import { accountRoutes, forgetInstallation, installationIsSetUp, reviewsPushes } from "./accounts.ts";
-import { forgetOldAudit } from "./audit.ts";
+import { alertLine, forgetOldAudit, refusedLastDay } from "./audit.ts";
+import { forgetOldDeliveries, queueOnce } from "./deliveries.ts";
 import type { Env } from "./env.ts";
 import { d1History } from "./history-d1.ts";
 import { forgetOldStarts } from "./limits.ts";
@@ -55,8 +56,15 @@ app.post("/api/github/webhook", webhookBodyLimit, async (c) => {
     { signature: c.req.header("x-hub-signature-256"), event: c.req.header("x-github-event") },
     await c.req.text(),
   );
+  // The same message delivered again (GitHub's retry, or Redeliver) is not a
+  // second push: it is acknowledged, and not reviewed or counted again.
   // Queued before answering, so an accepted push is never lost.
-  for (const job of jobs) await c.env.REVIEWS.send(job);
+  if (jobs.length > 0) {
+    const queued = await queueOnce(c.env.DB, c.req.header("x-github-delivery"), async () => {
+      for (const job of jobs) await c.env.REVIEWS.send(job);
+    });
+    if (!queued) return c.json({ accepted: false, reason: "This delivery was already received." }, 202);
+  }
   return result.status === 204 ? c.body(null, 204) : c.json(result.body, result.status as 200);
 });
 
@@ -90,12 +98,21 @@ export default {
    * year-old audit records, and repositories and people nothing refers to.
    */
   async scheduled(_event: ScheduledController, env: Env): Promise<void> {
+    // First, so a failed clean-up never hides it: one line in the log when
+    // more attempts were refused in the last day than happens by accident.
+    try {
+      const line = alertLine(await refusedLastDay(env.DB));
+      if (line) console.error(line);
+    } catch (error) {
+      console.error("could not count refused attempts:", error instanceof Error ? error.message : "");
+    }
     await env.DB.batch([
       env.DB.prepare("DELETE FROM reviews WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?)").bind(`-${KEEP_DAYS} days`),
       env.DB.prepare("DELETE FROM sessions WHERE expires_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"),
       env.DB.prepare("DELETE FROM review_requests WHERE requested_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 day')"),
       forgetOldStarts(env.DB),
       forgetOldAudit(env.DB),
+      forgetOldDeliveries(env.DB),
       // Repositories with no reviews left, and people with no session and no
       // installation to their name, once older than the reviews' own limit.
       env.DB.prepare(
