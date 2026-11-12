@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHmac, createVerify, generateKeyPairSync } from "node:crypto";
 import { test } from "node:test";
-import { runSecurityReview } from "@shipbrace/guardrails";
+import { runSecurityReview, snapshotFromFiles } from "@shipbrace/guardrails";
 import { appJwt, verifyWebhookSignature } from "../src/github/auth.ts";
 import { handleWebhook, type PushJob, reviewPush, type ReviewDeps, type WebhookDeps } from "../src/github/webhook.ts";
 import { ReviewStoppedError } from "../src/sandbox/sandbox.ts";
@@ -323,6 +323,39 @@ test("when the AI could not read the cleaning functions, the check says so and k
   const { final, output } = await finalCheck((snapshot) => runSecurityReview(snapshot, { cleanerJudge: failing }));
   assert.equal(final.conclusion, "failure", "the rules' finding stands");
   assert.match(output.summary, /could not be reached to read your app's own cleaning functions/);
+});
+
+test("every sentence in the check's summary is escaped, whoever wrote it", async () => {
+  const { checkOutput } = await import("../src/github/report.ts");
+  const review = await runSecurityReview(snapshotFromFiles([{ path: "server/src/api.ts", content: VULNERABLE }]));
+  // As if the sealed reviewer had been taken over and wrote these itself.
+  const item = review.modules.flatMap((m) => m.items).find((i) => i.risks.length > 0)!;
+  item.risks[0]!.impact = "See [the fix](https://evil.example) ![x](https://evil.example/p.png)";
+  item.risks[0]!.fix = "Run <script>alert(1)</script> now";
+  item.notice = "Checked by [us](https://evil.example)";
+  const { summary } = checkOutput(review);
+  assert.doesNotMatch(summary, /(?<!\\)\]\(https:\/\/evil\.example/, "no working link or image");
+  assert.doesNotMatch(summary, /<script>/);
+  assert.match(summary, /\\\[the fix\\\]/);
+
+  // Three backticks do not open a span the escaping never sees, and a bare
+  // address does not become a link on its own.
+  item.risks[0]!.impact = "```[the fix](https://evil.example)` and see https://evil.example or www.evil.example";
+  item.risks[0]!.fix = "```<a href=https://evil.example>fix</a>`";
+  const whole = checkOutput(review).summary;
+  assert.doesNotMatch(whole, /```/);
+  // What is left inside a code span shows as plain code; the rest is checked.
+  const again = whole.replace(/`[^`]*`/g, "CODE");
+  assert.doesNotMatch(again, /(?<!\\)\]\(/);
+  assert.doesNotMatch(again, /https:\/\/evil/, "no bare address left for GitHub to link");
+  assert.doesNotMatch(again, /\bwww\.evil/);
+  // Ordinary report text reads as before.
+  assert.match(again, /\*\*HIGH RISK\.\*\* Part of the web address on the page \/api\/reports\/:id/);
+});
+
+test("a large webhook is still accepted: the small limit is only for signed-in requests", async () => {
+  const { MAX_WEBHOOK_BYTES } = await import("../../cloud/src/webhook-limit.ts");
+  assert.ok(MAX_WEBHOOK_BYTES > 1024 * 1024);
 });
 
 test("with nothing softened, a clean review is still a pass", async () => {

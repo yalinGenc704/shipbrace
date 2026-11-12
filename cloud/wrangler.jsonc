@@ -44,8 +44,9 @@
     "MONTHLY_REVIEW_LIMIT": "50",
     "ACCOUNT_DAILY_REVIEW_LIMIT": "10",
     "AI_ALLOWED_GITHUB_IDS": "174497899",
-    // Invite-only until launch: only these GitHub accounts can sign in.
-    "ALLOWED_GITHUB_USERS": "yalinGenc704"
+    // Invite-only until launch: only these GitHub accounts (by number) can
+    // sign in. "everyone" opens it; empty lets nobody in.
+    "ALLOWED_GITHUB_IDS": "174497899"
   },
 
   // Review history. Create once with `npx wrangler d1 create aegis-history`

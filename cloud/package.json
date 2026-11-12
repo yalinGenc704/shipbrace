@@ -9,15 +9,15 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@shipbrace/guardrails": "*",
-    "@shipbrace/server": "*",
     "@anthropic-ai/sdk": "0.131.0",
     "@cloudflare/containers": "0.3.7",
+    "@shipbrace/guardrails": "*",
+    "@shipbrace/server": "*",
     "hono": "4.13.12"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "5.20261010.1",
+    "@cloudflare/workers-types": "5.20261110.1",
     "typescript": "7.0.2",
-    "wrangler": "4.149.0"
+    "wrangler": "4.160.0"
   }
 }

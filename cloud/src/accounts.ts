@@ -1,5 +1,6 @@
 import { appJwt } from "@shipbrace/server/github/auth.ts";
 import { Hono, type Context } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { randomToken } from "./crypto.ts";
 import type { Env } from "./env.ts";
 import {
@@ -36,6 +37,8 @@ import { clearedSessionCookie, closeSession, cookieValue, openSession, readSessi
 /** Bump when the notices change; everyone is asked again. */
 export const NOTICE_VERSION = "2026-11-10.1";
 const REVIEWS_PER_HOUR = 10;
+/** The largest body any signed-in request may send, counted as it arrives. */
+const MAX_API_BYTES = 16 * 1024;
 const GITHUB_TIMEOUT_MS = 15_000;
 const STATE_COOKIE = "__Host-shipbrace-state";
 
@@ -53,13 +56,16 @@ const configured = (env: Env) => Boolean(env.GITHUB_CLIENT_SECRET && env.SESSION
 const safeReturn = (path: string | undefined) => (path && /^\/(?!\/)[\w\-./?=&%]*$/.test(path) ? path : "/");
 
 /**
- * While ShipBrace is not open to the public, only these GitHub accounts may
- * sign in (ALLOWED_GITHUB_USERS, comma-separated, any case). Empty means open
- * to everyone.
+ * Who may sign in (ALLOWED_GITHUB_IDS): GitHub's permanent account numbers,
+ * comma-separated, or the single word `everyone` once ShipBrace is open.
+ * Numbers, not names: a name can be given up and taken by someone else, a
+ * number cannot. A missing or empty setting lets nobody in, so a deploy that
+ * loses the setting closes sign-in instead of opening it.
  */
-function allowed(env: Env, login: string): boolean {
-  const list = (env.ALLOWED_GITHUB_USERS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
-  return list.length === 0 || list.includes(login.toLowerCase());
+export function allowed(env: { ALLOWED_GITHUB_IDS?: string }, githubId: number): boolean {
+  const list = (env.ALLOWED_GITHUB_IDS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  if (list.length === 1 && list[0] === "everyone") return true;
+  return Number.isSafeInteger(githubId) && list.includes(String(githubId));
 }
 
 /** Two strings compared without leaking, through timing, how much matched. */
@@ -159,7 +165,7 @@ export function accountRoutes() {
       const tokens = await exchangeCode(oauthApp(c.env), code);
       const user = await currentUser(tokens.accessToken);
       // Not on the invite list: no session, nothing stored about them.
-      if (!allowed(c.env, user.login)) return c.redirect("/?invite-only=1");
+      if (!allowed(c.env, user.id)) return c.redirect("/?invite-only=1");
       const value = await openSession(c.env.DB, c.env.SESSION_KEY!, user, tokens);
       await record(c.env.DB, { actor: user.id, action: "sign-in", target: user.login });
       c.header("Set-Cookie", sessionCookie(value), { append: true });
@@ -173,6 +179,9 @@ export function accountRoutes() {
 
   // --- everything below needs a session ---------------------------------------------
 
+  // Nothing a signed-in person sends here is more than a link or a switch.
+  app.use("/api/*", bodyLimit({ maxSize: MAX_API_BYTES, onError: (c) => c.json({ error: "Too large." }, 413) }));
+
   app.use("/api/*", async (c, next) => {
     // Changes must come from this site's own pages: same origin, sent as JSON
     // (which another site cannot do without the browser asking first).
@@ -185,7 +194,9 @@ export function accountRoutes() {
     if (!configured(c.env)) return c.json({ error: "Sign-in is not set up yet." }, 503);
     const session = await readSession(c.env.DB, c.env.SESSION_KEY!, oauthApp(c.env), c.req.header("cookie"));
     // Someone taken off the invite list loses access at once, not at session expiry.
-    const current = session && allowed(c.env, session.login) ? session : null;
+    const current = session && allowed(c.env, session.githubId) ? session : null;
+    // And nothing of theirs is kept: the session and its stored GitHub token go.
+    if (session && !current) await closeSession(c.env.DB, c.req.header("cookie"));
     if (!current && c.req.path === "/api/me") return c.json({ signedIn: false, noticeVersion: NOTICE_VERSION });
     if (!current) return c.json({ error: "Please sign in." }, 401);
     if (!(await underLimit(c.env.RATE_COUNTER, `api:${current.githubId}`, PER_MINUTE.api))) return c.json(TOO_MANY, 429);

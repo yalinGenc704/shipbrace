@@ -46,6 +46,7 @@ export class Reviewer extends Container<Env> {
 
 const MAX_ASK_BYTES = 4 * 1024 * 1024;
 const JUDGE_TIMEOUT_MS = 120_000;
+const PROPOSE_TIMEOUT_MS = 5 * 60_000;
 const reply = (body: unknown, status = 200) => Response.json(body, { status });
 
 async function answer(request: Request, env: Env, ctx: OutboundHandlerContext): Promise<Response> {
@@ -72,7 +73,10 @@ async function answer(request: Request, env: Env, ctx: OutboundHandlerContext): 
   if (step === "propose") {
     if (env.AI_REVIEW !== "on" || !env.ANTHROPIC_API_KEY) return reply({ error: "failed" }, 403);
     try {
-      const proposer = createClaudeProposer(new Anthropic({ apiKey: env.ANTHROPIC_API_KEY }) as never);
+      // A larger request to a larger model than the judge's, still bounded:
+      // one retry, and no single try outlasts the review's own time limit.
+      const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, timeout: PROPOSE_TIMEOUT_MS, maxRetries: 1 });
+      const proposer = createClaudeProposer(client as never);
       return reply({ value: await proposer.propose(input as never) });
     } catch (error) {
       return reply({ error: error instanceof ProposerRefusedError ? "refused" : "failed" }, 502);

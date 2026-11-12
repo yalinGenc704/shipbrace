@@ -4,7 +4,7 @@ import { beforeEach, test } from "node:test";
 import { runSecurityReview, snapshotFromFiles } from "@shipbrace/guardrails";
 import { Hono } from "hono";
 import { allowHit } from "../src/rate-window.ts";
-import { accountRoutes, forgetInstallation, networkOf, PER_MINUTE, reviewsPushes, installationIsSetUp, installationSwitches, NOTICE_VERSION } from "../src/accounts.ts";
+import { accountRoutes, allowed, forgetInstallation, networkOf, PER_MINUTE, reviewsPushes, installationIsSetUp, installationSwitches, NOTICE_VERSION } from "../src/accounts.ts";
 import { decrypt, encrypt, randomToken } from "../src/crypto.ts";
 import type { Env } from "../src/env.ts";
 import { parseRepoLink } from "../src/github-user.ts";
@@ -81,6 +81,7 @@ beforeEach(() => {
     ASSETS: {} as never,
     PUBLIC_URL: ORIGIN,
     AI_REVIEW: "off",
+    ALLOWED_GITHUB_IDS: "everyone",
     PACKAGE_LOOKUP: "on",
     GITHUB_APP_ID: "12345",
     DAILY_REVIEW_LIMIT: "200",
@@ -333,7 +334,7 @@ test("an encrypted token cannot be altered or opened with another key", async ()
 // --- invite-only ----------------------------------------------------------------------
 
 test("while invite-only, an account not on the list gets no session at all", async () => {
-  env.ALLOWED_GITHUB_USERS = "someone-else";
+  env.ALLOWED_GITHUB_IDS = "999";
   const start = await call("/auth/login");
   const stateCookie = start.headers.get("set-cookie")!.split(";")[0]!;
   const state = new URL(start.headers.get("location")!).searchParams.get("state")!;
@@ -344,11 +345,31 @@ test("while invite-only, an account not on the list gets no session at all", asy
 });
 
 test("taking someone off the invite list ends their access immediately", async () => {
-  env.ALLOWED_GITHUB_USERS = "Ada";
+  env.ALLOWED_GITHUB_IDS = "5, 174497899";
   const cookie = await signIn();
-  assert.equal((await call("/api/repos", {}, cookie)).status, 200, "the list is not case-sensitive");
-  env.ALLOWED_GITHUB_USERS = "someone-else";
+  assert.equal((await call("/api/repos", {}, cookie)).status, 200);
+  env.ALLOWED_GITHUB_IDS = "999";
   assert.equal((await call("/api/repos", {}, cookie)).status, 401);
+  assert.equal(await env.DB.prepare("SELECT count(*) AS n FROM sessions").first<{ n: number }>().then((r) => r?.n), 0, "their session and stored token are gone");
+});
+
+test("the invite list goes by account number, and a lost setting lets nobody in", () => {
+  assert.equal(allowed({ ALLOWED_GITHUB_IDS: "174497899" }, 174497899), true);
+  assert.equal(allowed({ ALLOWED_GITHUB_IDS: "174497899" }, 5), false);
+  assert.equal(allowed({ ALLOWED_GITHUB_IDS: "everyone" }, 5), true);
+  // Missing, empty, or a name where a number belongs: closed, not open.
+  assert.equal(allowed({}, 5), false, "missing");
+  for (const setting of ["", " , ", "ada", "everyone, 5x", "*"]) {
+    assert.equal(allowed({ ALLOWED_GITHUB_IDS: setting }, 5), false, setting);
+  }
+  assert.equal(allowed({ ALLOWED_GITHUB_IDS: "5,everyone" }, 7), false, "\"everyone\" only on its own");
+  assert.equal(allowed({ ALLOWED_GITHUB_IDS: "NaN" }, Number.NaN), false);
+});
+
+test("a signed-in request larger than a link or a switch is refused", async () => {
+  const cookie = await signIn();
+  const big = await post("/api/notice", { version: "x".repeat(20_000) }, cookie);
+  assert.equal(big.status, 413);
 });
 
 // --- the off switches ----------------------------------------------------------------

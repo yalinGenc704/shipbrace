@@ -35,18 +35,35 @@ export interface CheckOutput {
 }
 
 const LEVEL = { high: "failure", medium: "warning", low: "notice" } as const;
+/** The grade as shown, from a fixed list: never the review's own text. */
+const GRADE_WORD: Record<string, string> = { high: "HIGH RISK", medium: "MEDIUM RISK", low: "LOW RISK" };
 
 /**
  * Review text quotes the reviewed repository (file paths, page addresses),
- * which anyone who can push there controls. In the markdown summary it must
- * not open links or images or end a code span early.
+ * which anyone who can push there controls, and comes from the container
+ * that read it. In the markdown summary it must not open links or images,
+ * carry HTML, or end a code span early.
+ *
+ * - A run of backticks becomes one: GitHub pairs runs of equal length, so
+ *   three in a row would otherwise open a span this function never sees.
+ * - Outside code spans, markup characters are escaped, and a bare web
+ *   address is broken (`https\://`, `www\.`) so GitHub does not turn it
+ *   into a link on its own.
  */
 const inline = (text: string): string =>
-  text
+  String(text)
     .replace(/[\r\n]+/g, " ")
+    .replace(/`+/g, "`")
     // Only outside code spans: inside one, a backslash would show literally.
     .split(/(`[^`]*`)/)
-    .map((part, i) => (i % 2 === 1 ? part : part.replace(/([\\[\]!<>])/g, "\\$1")))
+    .map((part, i) =>
+      i % 2 === 1
+        ? part
+        : part
+          .replace(/([\\[\]!<>`@#|*_~])/g, "\\$1")
+          .replace(/:\/\//g, "\\://")
+          .replace(/\bwww\./gi, "www\\."),
+    )
     .join("");
 const codeSpan = (text: string): string => `\`${text.replace(/[\r\n]+/g, " ").replace(/`/g, "'")}\``;
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -102,17 +119,17 @@ export function checkOutput(review: ReviewResult, skipped?: { overLimit: number;
     const order = { high: 0, medium: 1, low: 2 } as const;
     const risks = module.items.flatMap((item) => item.risks).sort((x, y) => order[x.grade] - order[y.grade]);
     if (risks.length === 0) continue;
-    lines.push(`### ${module.owasp} · ${module.title}`, "");
+    lines.push(`### ${inline(module.owasp)} · ${inline(module.title)}`, "");
     for (const risk of risks) {
       // The sentence names the page; the file and line are added here, since a
       // check has no "show me the code" view.
-      const where = risk.location ? ` (${codeSpan(risk.location.path)} line ${risk.location.line})` : "";
+      const where = risk.location ? ` (${codeSpan(risk.location.path)} line ${Number(risk.location.line) || 0})` : "";
       lines.push(
-        `**${risk.grade.toUpperCase()} RISK.** ${inline(risk.what)}${where}`,
+        `**${GRADE_WORD[risk.grade] ?? "RISK"}.** ${inline(risk.what)}${where}`,
         "",
-        `*Why this matters:* ${risk.impact}`,
+        `*Why this matters:* ${inline(risk.impact)}`,
         "",
-        `*What to do:* ${risk.fix}`,
+        `*What to do:* ${inline(risk.fix)}`,
         "",
         ...(risk.fixDetail ? [`*Exact fix (paste into your AI assistant):* ${inline(risk.fixDetail)}`, ""] : []),
       );
@@ -129,7 +146,7 @@ export function checkOutput(review: ReviewResult, skipped?: { overLimit: number;
   lines.push(
     "---",
     "This review reports what it was able to check. It is not a guarantee that the application is secure.",
-    ...notices.map((n) => `\n${n}`),
+    ...notices.map((n) => `\n${inline(n)}`),
   );
 
   const annotations: Annotation[] = [];

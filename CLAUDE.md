@@ -104,7 +104,7 @@ everywhere:
 # PostgreSQL 18 (Homebrew, not started at login). Databases: shipbrace, shipbrace_test.
 LC_ALL=en_US.UTF-8 /opt/homebrew/opt/postgresql@18/bin/pg_ctl -D /opt/homebrew/var/postgresql@18 -l /opt/homebrew/var/log/postgresql@18.log start
 
-# all tests (expect 415 pass). Without TEST_DATABASE_URL the 6 database tests
+# all tests (expect 419 pass). Without TEST_DATABASE_URL the 6 database tests
 # are skipped and say so; it must name a database ending in _test (it is wiped).
 # CI (.github/workflows/ci.yml) runs typecheck, lint, tests and build on every push.
 TEST_DATABASE_URL=postgres:///shipbrace_test npm test
@@ -676,6 +676,18 @@ the server with the AI step, start it with an extra `--env-file` that sets
   shows "N of 50 reviews used this month". The Docker fallback has no AI
   allowlist: keep `AI_REVIEW` off there. A subscription and free trial are
   planned later.
+- **Audit fixes (2026-11-11, after the audit of 2026-11-10).** The invite
+  list is `ALLOWED_GITHUB_IDS`: GitHub account numbers, or the single word
+  `everyone`; missing or empty lets nobody in (it used to list names, and
+  empty meant everyone). Signed-in requests are limited to 16 KB, counted
+  as they arrive. Every sentence in the GitHub check's summary passes
+  through `inline()`, which now also collapses runs of backticks and
+  breaks bare web addresses so GitHub does not link them. Someone taken
+  off the invite list has their session and stored token deleted at their
+  next request. The AI suggestion call has a 5-minute limit and one
+  retry, like the cleaner call's 2 minutes. wrangler 4.160.0 and seroval
+  1.8.1 (a dashboard dependency of the router): `npm audit` reports no
+  known flaws.
 - **Dashboard: pick or paste, push switch, clearing history (2026-10-21, user
   decisions).** A new user with no repositories sees one step, "Choose
   repositories on GitHub" (the App's install page); afterwards "Your
@@ -796,10 +808,10 @@ Read this first in a new session, then CLAUDE.local.md ("Waiting on Murat")
 for the private items. Do not start any of these unasked: summarise them,
 recommend one, and wait for Murat's choice.
 
-**State:** everything is pushed and deployed (2026-11-11): last deployed
-commit `891d6d0`, live version `bba4b863`, all six live checks passed. That
-deploy brought live the AI cleaner step (`6801381`) and the smaller checker
-improvements (`891d6d0`). 415 tests.
+**State:** last deployed commit `891d6d0` (live version `bba4b863`,
+2026-11-11: the AI cleaner step and the smaller checker improvements).
+Committed after that and **not yet pushed or deployed**: the audit fixes
+(see "Audit fixes" in Current state). 419 tests.
 
 1. **The AI cleaner step: live since 2026-11-11, not yet seen running**
    (Murat's decisions, 2026-11-10: Haiku 5.5 for his reviews only, neutral
@@ -890,7 +902,7 @@ App permission).
 1. **Legal:** a privacy policy built from docs/legal/third-party-services.md
    section 5, reviewed by a lawyer; the AI provider's data processing
    agreement; a trademark check on "ShipBrace".
-2. **Opening up:** make the GitHub App public, widen `ALLOWED_GITHUB_USERS`,
+2. **Opening up:** make the GitHub App public, widen `ALLOWED_GITHUB_IDS`,
    raise `DAILY_REVIEW_LIMIT` (wrangler.jsonc), and decide who may use the AI
    step (`AI_ALLOWED_GITHUB_IDS`; the only part with a per-review cost) --
    later through a subscription and free trial.

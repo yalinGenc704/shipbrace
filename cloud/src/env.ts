@@ -19,8 +19,11 @@ export interface Env {
   AI_CLEANER_CHECK?: "on" | "off";
   PACKAGE_LOOKUP: "on" | "off";
   GITHUB_APP_ID: string;
-  /** Who may sign in while ShipBrace is invite-only; empty = everyone. */
-  ALLOWED_GITHUB_USERS?: string;
+  /**
+   * Who may sign in: GitHub account numbers, comma-separated, or the word
+   * `everyone`. Missing or empty means nobody.
+   */
+  ALLOWED_GITHUB_IDS?: string;
   /** Most reviews started in any 24 hours, across everyone: a safety cap. */
   DAILY_REVIEW_LIMIT: string;
   /** Most reviews started per calendar month by one GitHub account (installation). */
