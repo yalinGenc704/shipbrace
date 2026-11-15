@@ -1000,6 +1000,8 @@ const OTHER_PASS_LIBRARY = /jwt|jws|jwe|jose|paseto|jsonwebtoken/i;
  * known check with a limit means the answer is no; that errs to the old risk.
  */
 const PASS_CHECK = /verify|decode|decrypt/i;
+/** Code around a name that leaves it the same thing: brackets, `as`, `!`, `satisfies`, `<T>`. */
+const WRAPPER = /^(?:ParenthesizedExpression|TSAsExpression|TSNonNullExpression|TSSatisfiesExpression|TSInstantiationExpression|ChainExpression)$/;
 /** Code in any language a server or page could check passes in. */
 const CODE_FILE = /\.(?:[cm]?[jt]sx?|vue|svelte|astro|py|go|rb|php|java|kt|kts|cs|rs|ex|exs|scala|swift|dart|lua|clj|erl|hs)$/i;
 
@@ -1031,6 +1033,16 @@ function passLibraryNames(program: Node): { joseVerify: Set<string>; jwtModule: 
     else if (JSONWEBTOKEN.test(module) && imported === "verify") names.jwtVerify.add(local);
   };
   walk(program, (node) => {
+    // Handing a pass library on (`export { jwtVerify } from "jose"`,
+    // `export * from "jose"`): the file that uses it imports it from here, as
+    // if it were the app's own code, so its checks could not be judged.
+    if ((node.type === "ExportNamedDeclaration" || node.type === "ExportAllDeclaration") && node.exportKind !== "type") {
+      const module = String((node.source as Node | undefined)?.value ?? "");
+      const specifiers = (node.specifiers ?? []) as Node[];
+      const onlyTypes = specifiers.length > 0 && specifiers.every((sp) => sp.exportKind === "type");
+      if (OTHER_PASS_LIBRARY.test(module) && !onlyTypes) names.other = true;
+      return;
+    }
     if (node.type === "ImportDeclaration") {
       const module = String((node.source as Node | undefined)?.value ?? "");
       if (node.importKind === "type" || !OTHER_PASS_LIBRARY.test(module)) return;
@@ -1047,7 +1059,8 @@ function passLibraryNames(program: Node): { joseVerify: Set<string>; jwtModule: 
       const target = (node.type === "ImportExpression" ? node.source : ((node.arguments ?? []) as Node[])[0]) as Node | undefined;
       const module = isStringLiteral(target) ? target.value : "";
       if (!OTHER_PASS_LIBRARY.test(module)) return;
-      if (!JOSE.test(module) && !JSONWEBTOKEN.test(module)) names.other = true;
+      // Another library, or a known one loaded with `import()`, whose names are not followed.
+      if ((!JOSE.test(module) && !JSONWEBTOKEN.test(module)) || node.type === "ImportExpression") names.other = true;
     }
     if (node.type === "VariableDeclarator") {
       const init = node.init as Node | undefined;
@@ -1116,9 +1129,48 @@ function ageLimitedOnEveryCheck(snapshot: RepoSnapshot, files: SourceFile[]): { 
     const names = passLibraryNames(parsed.program);
     if (names.other) return { answer: "no" };
     let failed = false;
-    walk(parsed.program, (node) => {
-      if (failed || node.type !== "CallExpression") return;
-      const callee = node.callee as Node | undefined;
+    walk(parsed.program, (node, parents) => {
+      if (failed) return;
+      /**
+       * A library check used as a value rather than called (`const v =
+       * jwtVerify`, `run(jwt.verify)`, `export { jwtVerify }`): wherever it
+       * is called under its new name, the limit cannot be checked here.
+       */
+      // Brackets, `as`, `!` and `satisfies` around a name change nothing about what it is.
+      let at = 0;
+      while (parents[at] && WRAPPER.test(parents[at]!.type)) at++;
+      const parent = parents[at];
+      const wrapped = at === 0 ? node : parents[at - 1];
+      const calledHere = parent?.type === "CallExpression" && parent.callee === wrapped;
+      const ident = node.type === "Identifier" ? String(node.name) : "";
+      const libraryCheck =
+        names.joseVerify.has(ident) || names.jwtVerify.has(ident) ||
+        (node.type === "MemberExpression" && !node.computed && names.jwtModule.has(dottedName(node.object) ?? "") &&
+          PASS_CHECK.test(dottedName(node.property) ?? ""));
+      // The import that binds the name, and a type read from it, are not uses of it.
+      const binding = parent !== undefined && /^Import(?:Default|Namespace)?Specifier$|^TSTypeQuery$|^TSQualifiedName$/.test(parent.type);
+      // `const { verify } = require("jsonwebtoken")`: both the key and the name it binds.
+      const requireBinding = parent?.type === "Property" && parents[at + 1]?.type === "ObjectPattern";
+      if (libraryCheck && !calledHere && !binding && !requireBinding) {
+        failed = true;
+        return;
+      }
+      /**
+       * The jsonwebtoken module itself may only be used to call its members
+       * by name (`jwt.verify(...)`, `jwt.sign(...)`): handed on, taken apart
+       * (`const { verify: c } = jwt`) or read by a computed key, its check
+       * can be called under any name.
+       */
+      if (names.jwtModule.has(ident) && !binding && !requireBinding && !(parent?.type === "VariableDeclarator" && parent.id === wrapped)) {
+        const member = parent?.type === "MemberExpression" && parent.object === wrapped && !parent.computed;
+        if (!member) {
+          failed = true;
+          return;
+        }
+      }
+      if (node.type !== "CallExpression") return;
+      let callee = node.callee as Node | undefined;
+      while (callee && WRAPPER.test(callee.type)) callee = callee.expression as Node | undefined;
       const name = dottedName(callee) ?? "";
       const object = callee?.type === "MemberExpression" ? (dottedName(callee.object) ?? undefined) : undefined;
       const property = callee?.type === "MemberExpression" && !callee.computed ? dottedName(callee.property) : undefined;

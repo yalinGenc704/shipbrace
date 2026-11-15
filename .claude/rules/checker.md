@@ -194,9 +194,14 @@ benchmark scores stay in CLAUDE.md.
   the call must be bound to its real import (aliases and `require` too),
   the limit written plainly in the call (text, a positive number), no
   spread in the options; any other call named like verify/decode/decrypt
-  in a file using a pass library, or any other pass library, keeps the
-  risk. The app's own wrapper functions are judged by their bodies. A code
-  file in any language that could not be read, or a repository past the
+  in a file using a pass library, any other pass library, a file that
+  re-exports one, jose loaded with `import()`, a library check used as a
+  value (`const v = jwtVerify`, `run(jwt.verify)`), and the jsonwebtoken
+  module handed on or taken apart (`const { verify: c } = jwt`) keep the
+  risk; brackets, `as` and `!` around a call change nothing. Not looked
+  at: files that never name a pass library (a check reached through
+  another package). The app's own wrapper functions are judged by their
+  bodies. A code file in any language that could not be read, or a repository past the
   limit, hands the item back. keystonejs/keystone's JWT example (a
   one-hour `maxTokenAge`): risk -> handed back, because one Astro page in
   the repository is unread. Practice apps unchanged.

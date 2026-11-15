@@ -549,6 +549,17 @@ test("passes refused past a set age wherever they are checked do expire", () => 
     "export const get = async (jwt) => { const result = await verifyJwt(jwt); return result }",
   );
   assert.equal(status(keystoneShape), "pass");
+  // Ordinary ways of writing a limited call still count, and types read from the library are not uses.
+  for (const code of [
+    'export const r = async (t) => await jwtVerify(t, key, { maxTokenAge: "1h" });',
+    '(jwtVerify)(t, key, { maxTokenAge: "1h" });',
+    'type Check = typeof jwtVerify;\njwtVerify(t, key, { maxTokenAge: "1h" });',
+  ]) {
+    assert.equal(status(at("server/tokens.ts", jose, sign, code)), "pass", code);
+  }
+  assert.equal(status(at("server/tokens.ts", jwtSign, 'jwt?.verify(t, key, { maxAge: "1h" });')), "pass");
+  assert.equal(status(at("server/tokens.ts", jwtSign, 'jwt.verify!(t, key, { maxAge: "1h" });')), "pass");
+  assert.equal(status(at("server/tokens.ts", jose, sign, joseCheck), at("server/types.ts", 'export type { JWTPayload } from "jose";', 'export { type JWTHeaderParameters } from "jose";')), "pass");
   // Decoding an address is not opening a pass, and a type is not a library in use.
   assert.equal(status(keystoneShape, at("session.ts", "import type { DefaultJWT } from 'next-auth/jwt'", "const back = decodeURIComponent(q);")), "pass");
   assert.equal(status(keystoneShape, at("session.ts", "import { getToken } from 'next-auth/jwt'", "const t = await getToken({ req });")), "risks");
@@ -570,6 +581,23 @@ test("passes refused past a set age wherever they are checked do expire", () => 
     ["the app's wrapper with no limit inside", [at("server/tokens.ts", jose, sign, "async function verifyJwt(t) { return jwtVerify(t, key); }", "verifyJwt(x);")]],
     ["jwt from another library", [at("server/tokens.ts", jose, sign, joseCheck), at("server/other.ts", 'import * as jwt from "hono/jwt";', 'jwt.verify(t, key, { maxAge: "15m" });')]],
     ["another library's verify beside a limited jose check", [at("server/tokens.ts", jose, sign, joseCheck), at("server/mw.ts", 'import { verify } from "hono/jwt";', "verify(t, secret);")]],
+    // A library check handed on through the app's own file, used there without a limit.
+    ["a re-export of jose's check", [at("server/tokens.ts", jose, sign, joseCheck), at("server/lib.ts", 'export { jwtVerify } from "jose";'), at("server/b.ts", 'import { jwtVerify } from "./lib";', "export const quick = (t) => jwtVerify(t, key);")]],
+    ["a re-export under another name", [at("server/tokens.ts", jose, sign, joseCheck), at("server/lib.ts", 'export { jwtVerify as check } from "jose";'), at("server/b.ts", 'import { check } from "./lib";', "export const quick = (t) => check(t, key);")]],
+    ["a whole-library re-export", [at("server/tokens.ts", jose, sign, joseCheck), at("server/lib.ts", 'export * from "jose";'), at("server/b.ts", 'import { jwtVerify } from "./lib";', "jwtVerify(t, key);")]],
+    // The library check stored or passed under another name.
+    ["jose's check stored under another name", [at("server/tokens.ts", jose, sign, joseCheck, "const v = jwtVerify;", "v(t, key);")]],
+    ["jsonwebtoken's check passed along", [at("server/tokens.ts", jwtSign, 'jwt.verify(t, key, { maxAge: "15m" });', "run(jwt.verify);")]],
+    ["jose's check put in an object", [at("server/tokens.ts", jose, sign, joseCheck, "export const lib = { jwtVerify };")]],
+    // The jsonwebtoken module itself handed on, taken apart, or read by a computed key.
+    ["jsonwebtoken taken apart", [at("server/tokens.ts", jwtSign, 'jwt.verify(t, key, { maxAge: "15m" });', "const { verify: chk } = jwt;", "chk(t, key);")]],
+    ["jsonwebtoken under a second name", [at("server/tokens.ts", jwtSign, 'jwt.verify(t, key, { maxAge: "15m" });', "const j = jwt;", "const v = j.verify;", "v(t, key);")]],
+    ["jsonwebtoken passed along", [at("server/tokens.ts", jwtSign, 'jwt.verify(t, key, { maxAge: "15m" });', "other(jwt);")]],
+    ["jsonwebtoken exported", [at("server/tokens.ts", jwtSign, 'jwt.verify(t, key, { maxAge: "15m" });', "export default jwt;")]],
+    ["a computed key", [at("server/tokens.ts", jwtSign, 'jwt.verify(t, key, { maxAge: "15m" });', 'jwt["verify"](t, key);')]],
+    // A known library loaded with import(), whose names are not followed.
+    ["jose loaded with import()", [at("server/tokens.ts", jose, sign, joseCheck, 'const { jwtVerify: c } = await import("jose");', "c(t, key);")]],
+    ["a whole-library re-export under a name", [at("server/tokens.ts", jose, sign, joseCheck), at("server/lib.ts", 'export * as j from "jose";')]],
     ["a decode that checks nothing", [at("server/tokens.ts", jose, sign, joseCheck, 'import { decodeJwt } from "jose";', "decodeJwt(t);")]],
   ] as const) {
     assert.equal(status(...files), "risks", why);
