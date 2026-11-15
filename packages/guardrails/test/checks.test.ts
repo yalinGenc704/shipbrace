@@ -235,6 +235,100 @@ test("version ranges are flagged and exact pins pass", () => {
   assert.equal(statusOf([exact], "components/pinned"), "pass");
 });
 
+const LOCK: File = { path: "pnpm-lock.yaml", content: "lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      hono:\n        version: 4.13.5\n" };
+const looseAt = (path: string): File => ({
+  path,
+  content: JSON.stringify({ dependencies: { hono: "^4.13.5" } }),
+});
+
+test("version ranges recorded in a lockfile are not a risk", () => {
+  // The lockfile in the same folder records what is installed.
+  assert.equal(statusOf([looseAt("package.json"), LOCK], "components/pinned"), "pass");
+
+  // A workspace: the lockfile at its top covers package lists below it.
+  const workspace: File = { path: "pnpm-workspace.yaml", content: "packages:\n  - 'examples/**'\n" };
+  assert.equal(
+    statusOf([looseAt("package.json"), looseAt("examples/blog/package.json"), workspace, LOCK], "components/pinned"),
+    "pass",
+  );
+  const npmWorkspace: File = {
+    path: "package.json",
+    content: JSON.stringify({ workspaces: ["apps/*"], devDependencies: { tsx: "^4.0.0" } }),
+  };
+  const npmLock: File = { path: "package-lock.json", content: JSON.stringify({ lockfileVersion: 3, packages: { "node_modules/hono": { version: "4.13.5" }, "node_modules/tsx": { version: "4.0.0" } } }) };
+  assert.equal(statusOf([npmWorkspace, looseAt("apps/web/package.json"), npmLock], "components/pinned"), "pass");
+});
+
+test("a lockfile does not cover a project that installs on its own", () => {
+  // No workspace: the sub-folder project has no record of its versions.
+  const result = outcomes([looseAt("package.json"), looseAt("tools/package.json"), LOCK]).get("components/pinned");
+  assert.equal(result?.status, "risks");
+  assert.equal(result?.status === "risks" && result.risks.length, 1);
+  assert.match(result?.status === "risks" ? result.risks[0]!.what : "", /tools\/package\.json/);
+
+  // A lockfile in a neighbouring folder covers nothing here.
+  assert.equal(statusOf([looseAt("api/package.json"), { ...LOCK, path: "web/pnpm-lock.yaml" }], "components/pinned"), "risks");
+
+  // A folder whose name starts like the lockfile's folder is a different folder.
+  assert.equal(statusOf([looseAt("web/package.json"), { ...LOCK, path: "web2/pnpm-lock.yaml" }], "components/pinned"), "risks");
+
+  // A workspace covers only the folders it lists.
+  const npmWorkspace: File = { path: "package.json", content: JSON.stringify({ workspaces: ["apps/*"] }) };
+  const npmLock: File = { path: "package-lock.json", content: JSON.stringify({ packages: { "node_modules/hono": {} } }) };
+  assert.equal(statusOf([npmWorkspace, looseAt("tools/package.json"), npmLock], "components/pinned"), "risks");
+  const pnpmWorkspace: File = { path: "pnpm-workspace.yaml", content: "packages:\n  - 'packages/*'\n  - '!packages/private'\n" };
+  assert.equal(statusOf([pnpmWorkspace, looseAt("examples/x/package.json"), LOCK], "components/pinned"), "risks");
+  assert.equal(statusOf([pnpmWorkspace, looseAt("packages/private/package.json"), LOCK], "components/pinned"), "risks");
+  assert.equal(statusOf([pnpmWorkspace, looseAt("packages/core/package.json"), LOCK], "components/pinned"), "pass");
+  // `*` is one folder; `**` any number.
+  assert.equal(statusOf([pnpmWorkspace, looseAt("packages/core/sub/package.json"), LOCK], "components/pinned"), "risks");
+  const deep: File = { path: "pnpm-workspace.yaml", content: "packages:\n  - examples/**\n" };
+  assert.equal(statusOf([deep, looseAt("examples/a/b/package.json"), LOCK], "components/pinned"), "pass");
+
+  // The nearest lockfile decides: a sub-project's own lockfile, not the workspace's.
+  assert.equal(statusOf([deep, looseAt("examples/a/package.json"), { ...LOCK, path: "examples/a/yarn.lock", content: "hono@^4.13.5:\n  version \"4.13.5\"\n" }, { ...LOCK, content: "" }], "components/pinned"), "pass");
+});
+
+test("a lockfile that cannot vouch for the packages hands the item back", () => {
+  const item = "components/pinned";
+  // Empty, or silent about the package (a stub or a stale lockfile).
+  assert.equal(statusOf([looseAt("package.json"), { ...LOCK, content: "" }], item), "not-applicable");
+  assert.equal(statusOf([looseAt("package.json"), { ...LOCK, content: "lockfileVersion: '9.0'\n" }], item), "not-applicable");
+  // A lockfile that lists only packages whose names contain this one.
+  const neighbours = JSON.stringify({ packages: { "node_modules/hono-router": {}, "node_modules/@hono/node-server": {}, "node_modules/@other/hono": {} } });
+  assert.equal(statusOf([looseAt("package.json"), { path: "package-lock.json", content: neighbours }], item), "not-applicable");
+  // Each lockfile's way of naming a package counts.
+  for (const content of ['"node_modules/hono": {', "hono@^4.13.5:\n", '"hono@^4.13.5":\n', "  /hono@4.13.5:\n", "      hono:\n", '"hono": ["hono@4.13.5"'])
+    assert.equal(statusOf([looseAt("package.json"), { path: "yarn.lock", content }], item), "pass", content);
+  // A workspace whose list of folders cannot be read.
+  const unreadable: File = { path: "pnpm-workspace.yaml", content: "catalog:\n  react: ^19\n" };
+  assert.equal(statusOf([unreadable, looseAt("apps/web/package.json"), LOCK], item), "not-applicable");
+  // A lockfile in a sub-folder that could not be read.
+  const snapshot = snapshotFromFiles([looseAt("app/package.json")], undefined, { unread: ["app/yarn.lock"] });
+  assert.equal(runProjectChecks(snapshot, buildInventory(snapshot)).get(item)?.status, "not-applicable");
+  // `latest` is a range too, and is covered the same way.
+  const latest: File = { path: "package.json", content: JSON.stringify({ dependencies: { hono: "latest" } }) };
+  assert.equal(statusOf([latest, LOCK], item), "pass");
+  assert.equal(statusOf([latest], item), "risks");
+});
+
+test("many package lists without a lockfile are one card, not one each", () => {
+  const files = ["package.json", "a/package.json", "b/package.json"].map(looseAt);
+  const result = outcomes(files).get("components/pinned");
+  assert.equal(result?.status, "risks");
+  assert.equal(result?.status === "risks" && result.risks.length, 1);
+  assert.equal(
+    result?.status === "risks" ? result.risks[0]!.what : "",
+    "3 packages are allowed to update to newer versions on their own (hono, hono, hono; in 3 package lists), and no lockfile (a record of the exact versions installed) is saved with them.",
+  );
+});
+
+test("a lockfile that could not be read hands the item back", () => {
+  const snapshot = snapshotFromFiles([looseAt("package.json")], undefined, { unread: ["bun.lockb"] });
+  const result = runProjectChecks(snapshot, buildInventory(snapshot)).get("components/pinned");
+  assert.equal(result?.status, "not-applicable");
+});
+
 test("a missing lockfile is flagged only when there is a manifest", () => {
   const manifest: File = { path: "package.json", content: "{}" };
   assert.equal(statusOf([manifest], "integrity/lockfile"), "risks");
@@ -425,7 +519,101 @@ test("tokens without an expiry are flagged", () => {
   assert.equal(statusOf([SERVER], "auth/session-expiry"), "not-applicable");
 });
 
-// --- A09 --------------------------------------------------------------------
+test("passes refused past a set age wherever they are checked do expire", () => {
+  const item = "auth/session-expiry";
+  const jose = 'import { SignJWT, jwtVerify } from "jose";';
+  const sign = 'export const sign = (id) => new SignJWT({ sub: id }).setProtectedHeader({ alg: "HS256" }).setIssuedAt().sign(key);';
+  const at = (path: string, ...lines: string[]): File => ({ path, content: lines.join("\n") });
+  const status = (...files: File[]) => statusOf(files, item);
+
+  // jose: the limit written where the pass is checked, in the same file or another.
+  const joseCheck = 'export const read = (t) => jwtVerify(t, key, { algorithms: ["HS256"], maxTokenAge: "1h" });';
+  assert.equal(status(at("server/tokens.ts", jose, sign, joseCheck)), "pass");
+  assert.equal(status(at("server/sign.ts", jose, sign), at("server/check.ts", 'import { jwtVerify as check } from "jose/jwt/verify";', 'export const read = (t) => check(t, key, { maxTokenAge: 3600 });')), "pass");
+
+  // jsonwebtoken: `maxAge` in its verify call, however the module is named.
+  const jwtSign = 'import jwt from "jsonwebtoken";\nexport const sign = (id) => jwt.sign({ sub: id }, key);';
+  assert.equal(status(at("server/tokens.ts", jwtSign, 'export const read = (t) => jwt.verify(t, key, { maxAge: "15m" });')), "pass");
+  assert.equal(status(at("server/tokens.ts", 'import { sign, verify as check } from "jsonwebtoken";', "const t = sign({ sub: id }, key);", 'check(t, key, { maxAge: "15m" });')), "pass");
+  assert.equal(status(at("server/tokens.js", 'const { sign, verify } = require("jsonwebtoken");', "const t = sign({ sub: id }, key);", 'verify(t, key, { maxAge: "15m" });')), "pass");
+
+  // The app's own wrapper around the check: its body is what is judged.
+  const keystoneShape = at(
+    "examples/custom-session-jwt/keystone.ts",
+    "import { SignJWT } from 'jose/jwt/sign'",
+    "import { jwtVerify } from 'jose/jwt/verify'",
+    "async function jwtSign(claims) { return new SignJWT(claims).setProtectedHeader({ alg: 'HS256' }).setIssuedAt().sign(secret) }",
+    "async function verifyJwt(token) {",
+    "  try { const { payload } = await jwtVerify(token, secret, { algorithms: ['HS256'], maxTokenAge: '1h' }); return payload } catch { return null }",
+    "}",
+    "export const get = async (jwt) => { const result = await verifyJwt(jwt); return result }",
+  );
+  assert.equal(status(keystoneShape), "pass");
+  // Ordinary ways of writing a limited call still count, and types read from the library are not uses.
+  for (const code of [
+    'export const r = async (t) => await jwtVerify(t, key, { maxTokenAge: "1h" });',
+    '(jwtVerify)(t, key, { maxTokenAge: "1h" });',
+    'type Check = typeof jwtVerify;\njwtVerify(t, key, { maxTokenAge: "1h" });',
+  ]) {
+    assert.equal(status(at("server/tokens.ts", jose, sign, code)), "pass", code);
+  }
+  assert.equal(status(at("server/tokens.ts", jwtSign, 'jwt?.verify(t, key, { maxAge: "1h" });')), "pass");
+  assert.equal(status(at("server/tokens.ts", jwtSign, 'jwt.verify!(t, key, { maxAge: "1h" });')), "pass");
+  assert.equal(status(at("server/tokens.ts", jose, sign, joseCheck), at("server/types.ts", 'export type { JWTPayload } from "jose";', 'export { type JWTHeaderParameters } from "jose";')), "pass");
+  // Decoding an address is not opening a pass, and a type is not a library in use.
+  assert.equal(status(keystoneShape, at("session.ts", "import type { DefaultJWT } from 'next-auth/jwt'", "const back = decodeURIComponent(q);")), "pass");
+  assert.equal(status(keystoneShape, at("session.ts", "import { getToken } from 'next-auth/jwt'", "const t = await getToken({ req });")), "risks");
+
+  // Still the risk it always was:
+  for (const [why, files] of [
+    ["one check without the limit", [at("server/tokens.ts", jose, sign, joseCheck, "export const quick = (t) => jwtVerify(t, key);")]],
+    ["no check at all", [at("server/tokens.ts", jose, sign)]],
+    ["a limit of nothing", [at("server/tokens.ts", jose, sign, "jwtVerify(t, key, { maxTokenAge: undefined });")]],
+    ["a limit of zero", [at("server/tokens.ts", jose, sign, "jwtVerify(t, key, { maxTokenAge: 0 });")]],
+    ["a limit read at run time", [at("server/tokens.ts", jose, sign, "jwtVerify(t, key, { maxTokenAge: process.env.AGE });")]],
+    ["a limit in a name", [at("server/tokens.ts", jose, sign, "const maxTokenAge = age;", "jwtVerify(t, key, { maxTokenAge });")]],
+    ["options held elsewhere", [at("server/tokens.ts", jose, sign, "jwtVerify(t, key, options);")]],
+    ["a cookie's maxAge", [at("server/tokens.ts", jwtSign, 'res.cookie("session", t, { maxAge: 900000 });')]],
+    ["a cookie's maxAge beside an unlimited check", [at("server/tokens.ts", jwtSign, 'res.cookie("s", t, { maxAge: 900000 });', "jwt.verify(t, key);")]],
+    ["only in a comment", [at("server/tokens.ts", jose, sign, '// jwtVerify(t, key, { maxTokenAge: "1h" })')]],
+    ["a home-made wrapper named like jose's", [at("server/tokens.ts", 'import { SignJWT } from "jose";', sign, "const jwtVerify = (t, k, o) => decodeOnly(t);", 'jwtVerify(t, key, { maxTokenAge: "1h" });')]],
+    ["a look-alike bound next to the real import", [at("server/tokens.ts", jose, sign, "function jwtVerify(t, k, o) { return decodeOnly(t); }", 'jwtVerify(t, key, { maxTokenAge: "1h" });')]],
+    ["the app's wrapper with no limit inside", [at("server/tokens.ts", jose, sign, "async function verifyJwt(t) { return jwtVerify(t, key); }", "verifyJwt(x);")]],
+    ["jwt from another library", [at("server/tokens.ts", jose, sign, joseCheck), at("server/other.ts", 'import * as jwt from "hono/jwt";', 'jwt.verify(t, key, { maxAge: "15m" });')]],
+    ["another library's verify beside a limited jose check", [at("server/tokens.ts", jose, sign, joseCheck), at("server/mw.ts", 'import { verify } from "hono/jwt";', "verify(t, secret);")]],
+    // A library check handed on through the app's own file, used there without a limit.
+    ["a re-export of jose's check", [at("server/tokens.ts", jose, sign, joseCheck), at("server/lib.ts", 'export { jwtVerify } from "jose";'), at("server/b.ts", 'import { jwtVerify } from "./lib";', "export const quick = (t) => jwtVerify(t, key);")]],
+    ["a re-export under another name", [at("server/tokens.ts", jose, sign, joseCheck), at("server/lib.ts", 'export { jwtVerify as check } from "jose";'), at("server/b.ts", 'import { check } from "./lib";', "export const quick = (t) => check(t, key);")]],
+    ["a whole-library re-export", [at("server/tokens.ts", jose, sign, joseCheck), at("server/lib.ts", 'export * from "jose";'), at("server/b.ts", 'import { jwtVerify } from "./lib";', "jwtVerify(t, key);")]],
+    // The library check stored or passed under another name.
+    ["jose's check stored under another name", [at("server/tokens.ts", jose, sign, joseCheck, "const v = jwtVerify;", "v(t, key);")]],
+    ["jsonwebtoken's check passed along", [at("server/tokens.ts", jwtSign, 'jwt.verify(t, key, { maxAge: "15m" });', "run(jwt.verify);")]],
+    ["jose's check put in an object", [at("server/tokens.ts", jose, sign, joseCheck, "export const lib = { jwtVerify };")]],
+    // The jsonwebtoken module itself handed on, taken apart, or read by a computed key.
+    ["jsonwebtoken taken apart", [at("server/tokens.ts", jwtSign, 'jwt.verify(t, key, { maxAge: "15m" });', "const { verify: chk } = jwt;", "chk(t, key);")]],
+    ["jsonwebtoken under a second name", [at("server/tokens.ts", jwtSign, 'jwt.verify(t, key, { maxAge: "15m" });', "const j = jwt;", "const v = j.verify;", "v(t, key);")]],
+    ["jsonwebtoken passed along", [at("server/tokens.ts", jwtSign, 'jwt.verify(t, key, { maxAge: "15m" });', "other(jwt);")]],
+    ["jsonwebtoken exported", [at("server/tokens.ts", jwtSign, 'jwt.verify(t, key, { maxAge: "15m" });', "export default jwt;")]],
+    ["a computed key", [at("server/tokens.ts", jwtSign, 'jwt.verify(t, key, { maxAge: "15m" });', 'jwt["verify"](t, key);')]],
+    // A known library loaded with import(), whose names are not followed.
+    ["jose loaded with import()", [at("server/tokens.ts", jose, sign, joseCheck, 'const { jwtVerify: c } = await import("jose");', "c(t, key);")]],
+    ["a whole-library re-export under a name", [at("server/tokens.ts", jose, sign, joseCheck), at("server/lib.ts", 'export * as j from "jose";')]],
+    ["a decode that checks nothing", [at("server/tokens.ts", jose, sign, joseCheck, 'import { decodeJwt } from "jose";', "decodeJwt(t);")]],
+  ] as const) {
+    assert.equal(status(...files), "risks", why);
+  }
+
+  assert.equal(status(at("server/tokens.ts", jose, sign, 'jwtVerify(t, key, { maxTokenAge: "1h", ...overrides });')), "risks");
+
+  // A code file that could not be read might check passes without a limit,
+  // in any language, and so might files past the review's limit.
+  for (const sight of [{ unread: ["api/auth.py"] }, { incomplete: true }]) {
+    const seen = snapshotFromFiles([at("server/tokens.ts", jose, sign, joseCheck)], undefined, sight);
+    assert.equal(runProjectChecks(seen, buildInventory(seen)).get(item)?.status, "not-applicable", JSON.stringify(sight));
+  }
+  const snapshot = snapshotFromFiles([at("server/tokens.ts", jose, sign, joseCheck)], undefined, { unread: ["src/pages/login.vue"] });
+  assert.equal(runProjectChecks(snapshot, buildInventory(snapshot)).get(item)?.status, "not-applicable");
+});
 
 test("logging a secret is a high risk; logging anything else is not", () => {
   const leaks: File = {

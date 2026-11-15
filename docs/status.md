@@ -4,16 +4,16 @@ Moved from CLAUDE.md "Roadmap -> Next steps" on 2026-11-12. Read at the
 start of a session; update it in the same change as the work it
 describes.
 
-**State:** last deployed commit `80452ce` (2026-11-15: the dashboard says
-why a review stopped instead of waiting), live version `47728c6e`, all six
-live checks passed, confirmed by Murat on a 5,000-file fork. Migration 0009
-(`review_problems`) is applied. Before that, `b12fc6e` / `bb2c10ac` the same
-day (a review refuses with a plain message when GitHub's hourly allowance
-is short) and `a1f55d7` / `c90066d1` on 2026-11-14 (hono 4.13.16). Since
-2026-11-14 `master` takes changes only through a pull request whose "test"
-check passed (GitHub ruleset "Protect master", no bypass); deploy from
-`master` after merging. A database restore was practised on a throwaway
-copy on 2026-11-15: every table matched. 452 tests.
+**State:** last deployed commit `49c3b04` (2026-11-15: the nightly
+refused-attempts alert is also emailed), live version `889dfd2d`. Before
+it the same day: `062d229` / `24b26b6a` (someone else's review answers like
+a missing one), `80452ce` / `47728c6e` (the dashboard says why a review
+stopped; migration 0009 applied) and `b12fc6e` / `bb2c10ac` (a review
+refuses with a plain message when GitHub's hourly allowance is short).
+Since 2026-11-14 `master` takes changes only through a pull request whose
+"test" check passed (GitHub ruleset "Protect master", no bypass); deploy
+from `master` after merging. A database restore was practised on a
+throwaway copy on 2026-11-15: every table matched. 460 tests.
 
 1. **The AI cleaner step: live since 2026-11-11, not yet seen running**
    (Murat's decisions, 2026-11-10: Haiku 5.5 for his reviews only, neutral
@@ -50,7 +50,18 @@ copy on 2026-11-15: every table matched. 452 tests.
    - a `.claude/claude-security-guidance.md` note telling the
      security-guidance plugin that `packages/guardrails/bench/` and test
      samples are deliberately vulnerable.
-3. **Opening up** (needs Murat's product decisions): see CLAUDE.md, "Before anyone
+3. **Keystone false alarms: built 2026-11-15, on branch
+   `checker/keystone-false-alarms`, not merged or deployed.** A live review
+   of keystonejs/keystone gave 56 "need fixing": 44 false alarms, 8 true
+   in sample code, 4 real. Four checker fixes (version ranges a lockfile
+   records; an age limit where passes are checked; every-website CORS
+   inside a choice; passport's sign-in start), each in
+   `.claude/rules/checker.md`. Rules alone on keystone: 56 -> 12 need
+   fixing, 9 -> 11 need checking. Benchmark and DVNA unchanged; NodeGoat's
+   version item now passes (it saves a lockfile); Juice Shop's two version
+   cards are one. Set aside: grouping identical findings and labelling
+   sample folders (Murat's decision).
+4. **Opening up** (needs Murat's product decisions): see CLAUDE.md, "Before anyone
    else uses it".
 
 Done: review history (2026-10-09), the sealed reviewer (2026-10-09), hosting

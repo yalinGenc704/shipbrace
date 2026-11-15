@@ -755,6 +755,73 @@ function doorFor(doors: Door[], node: Node): Door | undefined {
   return innermost;
 }
 
+/**
+ * The names this file binds to passport itself: its default or whole-module
+ * import (`import passport from "passport"`, `require("passport")`), and an
+ * instance made from its `Passport` class (`const p = new Passport()`). Each
+ * must be bound exactly once in the file and never written.
+ */
+function passportNames(parsed: ParsedFile): Set<string> {
+  const names = new Set<string>();
+  const classes = new Set<string>();
+  const once = (name: string) => {
+    const b = bindingsOf(parsed.program, name);
+    return b.declared === 1 && b.written === 0;
+  };
+  const isPassport = (node: Node | undefined) => isStringLiteral(node) && node.value === "passport";
+  walk(parsed.program, (node) => {
+    if (node.type === "ImportDeclaration" && isPassport(node.source as Node) && node.importKind !== "type") {
+      for (const specifier of (node.specifiers ?? []) as Node[]) {
+        const local = String((specifier.local as Node | undefined)?.name ?? "");
+        if (specifier.type === "ImportDefaultSpecifier" || specifier.type === "ImportNamespaceSpecifier") names.add(local);
+        if (specifier.type === "ImportSpecifier" && (specifier.imported as Node | undefined)?.name === "Passport" && specifier.importKind !== "type") classes.add(local);
+      }
+    }
+    if (node.type === "VariableDeclarator" && (node.id as Node | undefined)?.type === "Identifier") {
+      const init = node.init as Node | undefined;
+      const required = init?.type === "CallExpression" && dottedName(init.callee) === "require" && isPassport(((init.arguments ?? []) as Node[])[0]);
+      if (required) names.add(String((node.id as Node).name));
+    }
+  });
+  // Instances, once the class names are known.
+  walk(parsed.program, (node) => {
+    if (node.type !== "VariableDeclarator" || (node.id as Node | undefined)?.type !== "Identifier") return;
+    const init = node.init as Node | undefined;
+    const made = init?.type === "NewExpression" ? dottedName(init.callee) : undefined;
+    if (made && (classes.has(made) || [...names].some((n) => made === `${n}.Passport`))) names.add(String((node.id as Node).name));
+  });
+  for (const name of names) if (!once(name)) names.delete(name);
+  for (const name of classes) if (!once(name)) for (const n of names) names.delete(n);
+  return names;
+}
+
+/**
+ * When a route's handler is a name bound once, never written, to
+ * passport's `authenticate(...)`, that call (`instance.authenticate`): the
+ * route starts or completes signing in. Written directly in the route, the
+ * call is already read as a sign-in check by its name.
+ */
+function passportAuthenticateAs(parsed: ParsedFile, handler: Node): string | undefined {
+  if (handler.type !== "Identifier") return undefined;
+  const name = String(handler.name ?? "");
+  const bound = bindingsOf(parsed.program, name);
+  if (bound.declared !== 1 || bound.written !== 0) return undefined;
+  const passport = passportNames(parsed);
+  if (passport.size === 0) return undefined;
+  let found: string | undefined;
+  walk(parsed.program, (node) => {
+    if (node.type !== "VariableDeclarator" || (node.id as Node | undefined)?.type !== "Identifier" || (node.id as Node).name !== name) return;
+    const init = node.init as Node | undefined;
+    const callee = init?.type === "CallExpression" ? (init.callee as Node | undefined) : undefined;
+    if (callee?.type !== "MemberExpression" || callee.computed) return;
+    const object = callee.object as Node | undefined;
+    if (object?.type === "Identifier" && passport.has(String(object.name)) && dottedName(callee.property) === "authenticate") {
+      found = `${String(object.name)}.authenticate`;
+    }
+  });
+  return found;
+}
+
 function findDoors(parsed: ParsedFile): Door[] {
   const registered: Array<{ prefix: string; names: string[] }> = [];
   const routes: Array<{ method: string; path: string; node: Node; handler: Node; middleware: Node[] }> = [];
@@ -825,6 +892,10 @@ function findDoors(parsed: ParsedFile): Door[] {
 
     const inline = signInCheckedFirst(handler);
     if (inline) guards.add(inline);
+    // `router.get("/auth/github", start)` where `start = passport.authenticate(...)`:
+    // the page that starts signing in, so it cannot require being signed in.
+    const signInStart = middleware.length === 0 ? passportAuthenticateAs(parsed, handler) : undefined;
+    if (signInStart) guards.add(signInStart);
 
     const named = handler.type === "Identifier" || handler.type === "MemberExpression"
       ? dottedName(handler)?.split(".").pop()

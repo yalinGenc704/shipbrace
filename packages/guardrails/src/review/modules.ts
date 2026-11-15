@@ -501,10 +501,10 @@ const MODULES: ModuleShape[] = [
       },
       {
         id: "components/pinned",
-        covers: "every package in package.json is set to one exact version",
+        covers: "every package in package.json is set to one exact version, or recorded exactly in a lockfile saved with your code",
         title: "Your app always installs the exact package versions you tested",
         question:
-          "Confirm each package is set to one exact version rather than \"this version or newer\", so the code you tested is the code that goes live.",
+          "Confirm each package is set to one exact version, or that a lockfile saved with your code records it, so the code you tested is the code that goes live.",
         detector: "manifest:exact-versions",
       },
       {
@@ -666,7 +666,7 @@ const MODULES: ModuleShape[] = [
       },
       {
         id: "auth/session-expiry",
-        covers: "sign-in passes are given an expiry time",
+        covers: "sign-in passes are given an expiry time, or refused past a set age wherever they are checked",
         title: "Sign-ins expire, and signing out really signs you out",
         question:
           "Confirm a sign-in does not last forever, and that signing out really ends it on your site rather than only in the browser.",
@@ -986,6 +986,7 @@ const ITEM_FOR_RULE: Record<string, string> = {
   "ai/prompt-to-action": "injection/ai-instructions",
   "design/unbounded-list": "design/unbounded-lists",
   "auth/permissive-cors": "config/cors",
+  "auth/permissive-cors-option": "config/cors",
   "auth/token-in-localstorage": "auth/session-storage",
   "auth/cookie-readable-by-scripts": "auth/session-storage",
 };
@@ -1018,6 +1019,7 @@ const UNPROVEN_RULES = new Set([
   "integrity/unsafe-decoding",
   "ai/prompt-to-action",
   "design/unbounded-list",
+  "auth/permissive-cors-option",
 ]);
 
 function unprovenFromFinding(finding: Finding): Unproven {

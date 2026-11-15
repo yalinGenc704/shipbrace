@@ -64,6 +64,43 @@ test("middleware on a prefix guards routes beneath it, and nothing else", () => 
   assert.deepEqual(i.doors.find((d) => d.path === "/api/public/stats")?.guards, []);
 });
 
+test("a route whose handler is passport's authenticate starts signing in", () => {
+  const guardsOf = (...lines: string[]) => inv("server/auth.ts", lines).doors.map((d) => [d.path, d.guards]);
+  // A Passport instance, as keystone's passport example does.
+  assert.deepEqual(
+    guardsOf(
+      'import { Passport } from "passport";',
+      "const instance = new Passport();",
+      'const start = instance.authenticate("github", { session: false });',
+      'router.get("/auth/github", start);',
+    ),
+    [["/auth/github", ["instance.authenticate"]]],
+  );
+  // The default import, and require.
+  assert.deepEqual(
+    guardsOf('import passport from "passport";', 'const go = passport.authenticate("google");', 'app.get("/go", go);'),
+    [["/go", ["passport.authenticate"]]],
+  );
+  assert.deepEqual(
+    guardsOf('const passport = require("passport");', 'const go = passport.authenticate("google");', 'app.get("/go", go);'),
+    [["/go", ["passport.authenticate"]]],
+  );
+
+  // Still open: any other handler, a name bound twice or rewritten, an
+  // `authenticate` that is not passport's, or no passport in the file.
+  for (const lines of [
+    ['import passport from "passport";', "const go = (req, res) => res.json(secrets);", 'app.get("/go", go);'],
+    ['import passport from "passport";', 'let go = passport.authenticate("google");', "go = (req, res) => res.json(secrets);", 'app.get("/go", go);'],
+    ['import passport from "passport";', 'const go = passport.authenticate("google");', "function f(go) {}", 'app.get("/go", go);'],
+    ['import passport from "passport";', 'const go = auth.authenticate("google");', 'app.get("/go", go);'],
+    ['import passport from "./passport";', 'const go = passport.authenticate("google");', 'app.get("/go", go);'],
+    ['import type passport from "passport";', 'const go = passport.authenticate("google");', 'app.get("/go", go);'],
+    ['import { Passport } from "passport";', "const instance = new Passport();", "const instance2 = instance;", 'const go = instance2.authenticate("x");', 'app.get("/go", go);'],
+  ]) {
+    assert.deepEqual(guardsOf(...lines), [["/go", []]], lines.join(" "));
+  }
+});
+
 test("rate limiting is not mistaken for an access-control guard", () => {
   const i = inv("server/src/a.ts", [
     'app.use("/api/*", rateLimiter({ limit: 10 }));',

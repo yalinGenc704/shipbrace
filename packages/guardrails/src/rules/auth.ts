@@ -1,5 +1,5 @@
 import type { Finding, Rule, SourceFile } from "../types.ts";
-import { codeOnlyLines, dottedName, isStringLiteral, parseFile, walk, type Node } from "../analysis/ast.ts";
+import { codeOnlyLines, dottedName, isStringLiteral, locationOf, parseFile, textOf, walk, type Node } from "../analysis/ast.ts";
 import { isSource, isTestPath, locate, scanLines, type LineHit } from "../util.ts";
 
 /**
@@ -29,8 +29,11 @@ const permissiveCors: Rule = {
 
   check(file) {
     const re = /origin\s*:\s*(['"`]\*['"`]|true)|Access-Control-Allow-Origin['"`]?\s*[,:]\s*['"`]\*/;
+    const choices = corsChoiceLines(file);
 
-    return codeHits(file, re).map((hit): Finding => ({
+    // One setting per line is told apart; a line holding two is kept as a risk.
+    const single = (hit: LineHit) => (hit.text.match(new RegExp(re.source, "g")) ?? []).length === 1;
+    return codeHits(file, re).map((hit): Finding => choices.has(hit.line) && single(hit) ? corsChoice(file, hit) : ({
       ruleId: permissiveCors.id,
       category: "auth",
       severity: "high",
@@ -51,6 +54,82 @@ const permissiveCors: Rule = {
     }));
   },
 };
+
+/**
+ * Lines where an "every website" setting is one side of a choice (`a ? {
+ * origin: true } : b`): a library or framework translating a setting its
+ * user picks, whose default may be off. Which side runs is not in this code,
+ * so it is worth a look rather than a proven risk. Written straight into
+ * `cors(...)` or a single object, it stays a risk.
+ */
+function corsChoiceLines(file: SourceFile): Set<number> {
+  const lines = new Set<number>();
+  const parsed = parseFile(file);
+  if (!parsed) return lines;
+  walk(parsed.program, (node, parents) => {
+    if (node.type !== "Property" || dottedName(node.key) !== "origin") return;
+    const value = node.value as Node | undefined;
+    const [object, choice] = parents;
+    if (!allowsAll(value) || object?.type !== "ObjectExpression" || choice?.type !== "ConditionalExpression") return;
+    const other = choice.consequent === object ? choice.alternate : choice.alternate === object ? choice.consequent : undefined;
+    // Handed straight to cors(), nothing and a setting with no origin are its default: every website.
+    const intoCors = parents[2]?.type === "CallExpression" && /cors/i.test(dottedName(parents[2].callee) ?? "");
+    if (!other || permissiveChoice(other as Node, intoCors)) return;
+    // A choice made on which environment this is (live, development, test) is
+    // no doubt about the live site: one side of it is the live site.
+    if (/prod|dev|test|local|stag|NODE_ENV|environment/i.test(textOf(parsed, choice.test as Node))) return;
+    lines.add(locationOf(parsed, node).line);
+  });
+  return lines;
+}
+
+const allowsAll = (value: Node | undefined): boolean =>
+  (value?.type === "Literal" && value.value === true) || (isStringLiteral(value) && value.value === "*");
+
+/**
+ * Whether a branch also lets every website in: an object allowing all,
+ * `true`, `"*"`, or nothing at all (`undefined`), which is the cors
+ * package's own default of every website; handed straight to `cors()`,
+ * `null` and a setting with no origin are that default too. Nested choices
+ * count when any of their branches does.
+ */
+function permissiveChoice(branch: Node, intoCors: boolean): boolean {
+  if (allowsAll(branch)) return true;
+  if (branch.type === "Identifier" && branch.name === "undefined") return true;
+  if (branch.type === "UnaryExpression" && branch.operator === "void") return true;
+  if (intoCors && branch.type === "Literal" && branch.value === null) return true;
+  if (branch.type === "ConditionalExpression") {
+    return permissiveChoice(branch.consequent as Node, intoCors) || permissiveChoice(branch.alternate as Node, intoCors);
+  }
+  if (branch.type === "ObjectExpression") {
+    const properties = (branch.properties ?? []) as Node[];
+    const origin = properties.find((p) => p.type === "Property" && dottedName(p.key) === "origin");
+    if (origin) return allowsAll(origin.value as Node);
+    // No origin of its own: the cors default when handed to it, or unknown with a spread.
+    return intoCors || properties.some((p) => p.type === "SpreadElement");
+  }
+  return false;
+}
+
+const corsChoice = (file: SourceFile, hit: LineHit): Finding => ({
+  ruleId: "auth/permissive-cors-option",
+  category: "auth",
+  severity: "medium",
+  confidence: "possible",
+  title: "One setting lets any website send requests on a signed-in visitor's behalf",
+  why:
+    "The code chooses between settings, and one choice accepts requests from every website. " +
+    "Whether your live site uses it depends on how the app is set up.",
+  location: locate(file, hit),
+  fix: {
+    kind: "manual",
+    description: "Confirm your live site uses the choice that allows only your own website addresses.",
+    detail:
+      "Check which branch of this conditional CORS setting runs in production; if it is the `origin: true` / `*` one, " +
+      "configure an explicit list of your frontend's origins instead.",
+  },
+  learnMore: "/explain/cors",
+});
 
 /**
  * Tokens in localStorage are readable by any script on the page, so a single XSS

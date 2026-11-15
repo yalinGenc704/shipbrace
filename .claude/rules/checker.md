@@ -170,6 +170,60 @@ benchmark scores stay in CLAUDE.md.
   `latest`; ShipBrace's own manifests are pinned. The dashboard has "Download as
   Excel" (lazy-loaded, cells made plain text). Newer versions than the spec
   (TypeScript 7, Vite 8 stable, Bun 1.4) were approved by the user.
+- **Version ranges and lockfiles (2026-11-15, `components/pinned`,
+  `lockfileFor`).** A range (`^1.2.3`, `latest`) is not a risk when a
+  lockfile records it: the lockfile in the package list's own folder, or
+  one in a folder above whose workspace (`pnpm-workspace.yaml` `packages:`,
+  or `workspaces` in its package.json) lists that folder (`*` one folder,
+  `**` any depth, `!` excludes). The nearest lockfile decides, and it must
+  name each package whole (`namesPackage`: `react-dom` does not record
+  `react`). Lockfiles that are unread, binary, empty or silent about a
+  package, and workspace lists that cannot be read, hand the item back.
+  Package lists with no lockfile are one card for the project, not one
+  each. Found on keystonejs/keystone (pnpm workspace, 87 package lists):
+  41 cards, all false alarms, now a pass. Practice apps: NodeGoat (has
+  package-lock.json) now passes; Juice Shop's two cards are one; DVNA
+  unchanged. Not changed: `integrity/lockfile` still passes on any
+  lockfile anywhere, even one that covers no package list.
+- **An age limit where passes are checked counts as expiry (2026-11-15,
+  `auth/session-expiry`, `ageLimitedOnEveryCheck`).** When the signer sets
+  no expiry, the item still passes if every pass check in the project
+  refuses old passes: jose `jwtVerify(t, key, { maxTokenAge })` or
+  jsonwebtoken `verify(t, secret, { maxAge })` (both refuse a pass with no
+  time of issue when the limit is set; checked in their source). Strict:
+  the call must be bound to its real import (aliases and `require` too),
+  the limit written plainly in the call (text, a positive number), no
+  spread in the options; any other call named like verify/decode/decrypt
+  in a file using a pass library, any other pass library, a file that
+  re-exports one, jose loaded with `import()`, a library check used as a
+  value (`const v = jwtVerify`, `run(jwt.verify)`), and the jsonwebtoken
+  module handed on or taken apart (`const { verify: c } = jwt`) keep the
+  risk; brackets, `as` and `!` around a call change nothing. Not looked
+  at: files that never name a pass library (a check reached through
+  another package). The app's own wrapper functions are judged by their
+  bodies. A code file in any language that could not be read, or a repository past the
+  limit, hands the item back. keystonejs/keystone's JWT example (a
+  one-hour `maxTokenAge`): risk -> handed back, because one Astro page in
+  the repository is unread. Practice apps unchanged.
+- **Every-website CORS inside a choice is a lead (2026-11-15,
+  `auth/permissive-cors-option`, in `UNPROVEN_RULES`).** `origin: true` or
+  `"*"` whose object is directly one side of `a ? {...} : b` is "worth a
+  look", not a risk: a framework translating its user's setting, as
+  keystone's `packages/core/src/schema.ts` does. Stays a risk when the
+  other side also lets every site in (`true`, `"*"`, `undefined` = the
+  cors default, a nested choice with such a side; handed straight to
+  `cors()`, also `null` or a setting with no origin), when the condition
+  names an environment (production, development, test, `NODE_ENV`...),
+  when two settings share a line, and when written straight into
+  `cors(...)` or a const. Held in a variable, `null` on the other side is
+  not counted as every site (in config code it usually means no CORS).
+- **Passport's sign-in start is not an open page (2026-11-15,
+  `passportAuthenticateAs`).** A route whose only handler is a name bound
+  once, never written, to passport's `authenticate(...)` (its default or
+  whole import, `require("passport")`, or `new Passport()`) counts as
+  guarded, as a direct `passport.authenticate(...)` handler already did by
+  its name. keystone's `/auth/github` is no longer reported; practice apps
+  unchanged.
 - **Admin pages and password hashes** (project checks): a route with
   `admin` in its address needs a role-ish guard or an `if` testing the role
   (showing the role in a page does not count); a route that loads user

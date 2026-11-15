@@ -1,4 +1,4 @@
-import { codeOnly, codeOnlyLines, dottedName, locationOf, parseFile, walk, withoutComments, type Node } from "../analysis/ast.ts";
+import { codeOnly, codeOnlyLines, dottedName, isStringLiteral, locationOf, parseFile, walk, withoutComments, type Node } from "../analysis/ast.ts";
 import type { Inventory } from "../analysis/inventory.ts";
 import { modelFields } from "../analysis/schemas.ts";
 import { COMPOSE, dependencyNames, fileChecks, outOfSight } from "./project-files.ts";
@@ -517,6 +517,105 @@ const errorDetail: ProjectCheck = {
 
 // --- A03: versions must be pinned --------------------------------------------
 
+const LOCKFILE_NAME = /^(?:bun\.lockb?|package-lock\.json|pnpm-lock\.yaml|yarn\.lock)$/;
+
+const folderOf = (path: string): string => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "");
+
+/**
+ * Whether a workspace pattern (`packages/*`, `examples/**`, `tests2/`) names
+ * a folder: `*` stands for part of one folder name, `**` for any number of
+ * folders, matched one folder at a time.
+ */
+function workspaceMatches(glob: string, folder: string): boolean {
+  const pattern = glob.replace(/^\.\//, "").replace(/\/+$/, "").split("/");
+  const parts = folder === "" ? [] : folder.split("/");
+  const one = (p: string, name: string) =>
+    new RegExp(`^${p.split("*").map((s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join("[^/]*")}$`).test(name);
+  const match = (g: number, f: number): boolean => {
+    if (g === pattern.length) return f === parts.length;
+    if (pattern[g] === "**") return match(g + 1, f) || (f < parts.length && match(g, f + 1));
+    return f < parts.length && one(pattern[g]!, parts[f]!) && match(g + 1, f + 1);
+  };
+  return match(0, 0);
+}
+
+/** The folders a workspace lists, or `undefined` when they cannot be read. */
+function workspaceGlobs(snapshot: RepoSnapshot, prefix: string): string[] | undefined {
+  const yaml = snapshot.files.find((f) => f.path === `${prefix}pnpm-workspace.yaml`);
+  if (yaml) {
+    const globs: string[] = [];
+    let inPackages = false;
+    for (const line of yaml.content.split("\n")) {
+      if (/^\S/.test(line)) inPackages = /^packages\s*:\s*$/.test(line.trim());
+      else if (inPackages) {
+        const item = /^\s+-\s*["']?([^"'#]+?)["']?\s*(?:#.*)?$/.exec(line);
+        if (item) globs.push(item[1]!);
+      }
+    }
+    return globs.length > 0 ? globs : undefined;
+  }
+  const declared = snapshot.manifests.get(`${prefix}package.json`)?.workspaces;
+  const list = Array.isArray(declared) ? declared : (declared as { packages?: unknown } | undefined)?.packages;
+  return Array.isArray(list) && list.every((g) => typeof g === "string") && list.length > 0 ? (list as string[]) : undefined;
+}
+
+/**
+ * The lockfile that records the exact versions a package list installs:
+ * "read" when it does, "unread" when it exists but cannot be confirmed (not
+ * read, binary, empty, not listing the packages, or a workspace whose list
+ * of folders cannot be read), `undefined` when none covers the package list.
+ *
+ * A lockfile covers the package list in its own folder, and one below it only
+ * when its folder declares a workspace (`pnpm-workspace.yaml`, or
+ * `workspaces` in its package.json) whose folder patterns match that package
+ * list's folder: anything else installs on its own, and the lockfile above
+ * does not speak for it. The nearest lockfile decides.
+ */
+function lockfileFor(snapshot: RepoSnapshot, manifestPath: string, packages: string[]): "read" | "unread" | undefined {
+  const read = new Set(snapshot.files.map((f) => f.path));
+  const unread = new Set(snapshot.unread ?? []);
+  const own = folderOf(manifestPath);
+
+  for (let folder: string | undefined = own; folder !== undefined; folder = folder === "" ? undefined : folderOf(folder)) {
+    const prefix = folder === "" ? "" : `${folder}/`;
+    const inFolder = (p: string) => p.startsWith(prefix) && !p.slice(prefix.length).includes("/") && LOCKFILE_NAME.test(p.slice(prefix.length));
+    const lock = [...read].find(inFolder) ?? [...unread].find(inFolder);
+    if (!lock) continue;
+
+    if (folder !== own) {
+      const declared = read.has(`${prefix}pnpm-workspace.yaml`) || unread.has(`${prefix}pnpm-workspace.yaml`) ||
+        snapshot.manifests.get(`${prefix}package.json`)?.workspaces !== undefined;
+      if (!declared) return undefined;
+      const globs = workspaceGlobs(snapshot, prefix);
+      if (!globs) return "unread";
+      const relative = own.slice(prefix.length);
+      const matches = (g: string) => workspaceMatches(g, relative);
+      const included = globs.some((g) => !g.startsWith("!") && matches(g)) && !globs.some((g) => g.startsWith("!") && matches(g.slice(1)));
+      if (!included) return undefined;
+    }
+
+    // A lockfile that is empty, unreadable or silent about these packages
+    // records nothing that can be trusted for them.
+    const content = snapshot.files.find((f) => f.path === lock)?.content ?? "";
+    if (!read.has(lock) || content.trim() === "" || looksBinaryText(content)) return "unread";
+    return packages.every((name) => namesPackage(content, name)) ? "read" : "unread";
+  }
+  return undefined;
+}
+
+/**
+ * Whether a lockfile names this package itself, not one whose name contains
+ * it: `react` is not recorded by `react-dom`, nor `hono` by `@hono/node-server`
+ * or `@other/hono`. Lockfiles write a name after a quote, a slash or the
+ * start of a line, and before a quote, `@`, `:` or `/`.
+ */
+function namesPackage(lockfile: string, name: string): boolean {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?<![\\w@.-])(?<!@[\\w.-]+/)${escaped}(?![\\w.-])`).test(lockfile);
+}
+
+const looksBinaryText = (text: string): boolean => text.slice(0, 8192).includes("\u0000");
+
 const pinnedVersions: ProjectCheck = {
   id: "manifest:exact-versions",
   itemId: "components/pinned",
@@ -526,9 +625,12 @@ const pinnedVersions: ProjectCheck = {
       return { status: "not-applicable", reason: "No package list (package.json) was found, so this could not be checked.", absent: true };
     }
 
-    const risks: Risk[] = [];
     // Packages that are part of this same project, linked rather than downloaded.
     const local = new Set([...snapshot.manifests.values()].map((m) => m.name).filter(Boolean));
+    /** Package lists with ranges and no lockfile recording what they install. */
+    const unrecorded: Array<{ path: string; loose: string[] }> = [];
+    /** Package lists whose lockfile exists but could not be read. */
+    const unreadLock: string[] = [];
 
     for (const [path, manifest] of snapshot.manifests) {
       /**
@@ -550,19 +652,47 @@ const pinnedVersions: ProjectCheck = {
 
       if (loose.length === 0) continue;
 
-      risks.push(
-        risk(
-          "check/unpinned-dependencies",
-          "low",
-          `${loose.length} package${loose.length === 1 ? " is" : "s are"} allowed to update to newer versions on their own (${loose.slice(0, 3).map((d) => d.replace(/@[^@]*$/, "")).join(", ")}${loose.length > 3 ? ", …" : ""}).`,
-          "Two installs of the same code can then pull different versions of somebody else's code. The version you tested and the version your visitors get are no longer guaranteed to match.",
-          "Set each package to one exact version, and update packages on purpose when you choose to.",
-          { path, line: 1 },
-          `In ${path}, replace each version range with the exact installed version (remove the leading ^ or ~; replace "latest" or "*"): ${loose.slice(0, 8).join(", ")}${loose.length > 8 ? ", …" : ""}.`,
-        ),
-      );
+      /**
+       * A range is only a risk when nothing records the exact versions it
+       * installs. A lockfile does: installs follow it, so two installs of the
+       * same code get the same versions. Published libraries rely on this,
+       * since ranges are the right thing for them to ship.
+       */
+      const lock = lockfileFor(snapshot, path, loose.map((d) => d.replace(/@[^@]*$/, "")));
+      if (lock === "read") continue;
+      if (lock === "unread") unreadLock.push(path);
+      else unrecorded.push({ path, loose });
     }
-    return risks.length > 0 ? { status: "risks", risks } : { status: "pass" };
+
+    if (unrecorded.length > 0) {
+      // One card for the project, not one per package list: a monorepo with
+      // forty package lists has one problem, a missing record of versions.
+      const first = unrecorded[0]!;
+      const count = unrecorded.reduce((n, u) => n + u.loose.length, 0);
+      const names = unrecorded.flatMap((u) => u.loose).map((d) => d.replace(/@[^@]*$/, ""));
+      const lists = unrecorded.length === 1 ? first.path : `${unrecorded.length} package lists`;
+      return {
+        status: "risks",
+        risks: [
+          risk(
+            "check/unpinned-dependencies",
+            "low",
+            `${count} package${count === 1 ? " is" : "s are"} allowed to update to newer versions on their own (${names.slice(0, 3).join(", ")}${names.length > 3 ? ", …" : ""}; in ${lists}), and no lockfile (a record of the exact versions installed) is saved with ${unrecorded.length === 1 ? "it" : "them"}.`,
+            "Two installs of the same code can then pull different versions of somebody else's code. The version you tested and the version your visitors get are no longer guaranteed to match.",
+            "Save a lockfile with your code, or set each package to one exact version and update packages on purpose when you choose to.",
+            { path: first.path, line: 1 },
+            `Commit the lockfile your package manager writes (package-lock.json, pnpm-lock.yaml, yarn.lock or bun.lock) next to ${unrecorded.slice(0, 5).map((u) => u.path).join(", ")}${unrecorded.length > 5 ? ", …" : ""}, or replace each version range with the exact installed version: ${unrecorded.flatMap((u) => u.loose).slice(0, 8).join(", ")}${count > 8 ? ", …" : ""}.`,
+          ),
+        ],
+      };
+    }
+    if (unreadLock.length > 0) {
+      return {
+        status: "not-applicable",
+        reason: `Some packages are allowed to update on their own, and we couldn't confirm that a lockfile (a record of the exact versions installed) lists them, for example for ${unreadLock[0]}. Confirm the lockfile is saved with your code and up to date.`,
+      };
+    }
+    return { status: "pass" };
   },
 };
 
@@ -859,6 +989,225 @@ const passwordStorage: ProjectCheck = {
 
 // --- A07: sessions must expire -----------------------------------------------
 
+/** Libraries whose pass checks this file knows how to read for an age limit. */
+const JOSE = /^jose(?:\/|$)/;
+const JSONWEBTOKEN = /^jsonwebtoken$/;
+/** Any other library that reads sign-in passes: its checks cannot be judged here. */
+const OTHER_PASS_LIBRARY = /jwt|jws|jwe|jose|paseto|jsonwebtoken/i;
+/**
+ * A call that checks or opens a pass: `verify`, `jwtVerify`, `decodeJwt`,
+ * `jwtDecrypt`... In a file using a pass library, such a call that is not a
+ * known check with a limit means the answer is no; that errs to the old risk.
+ */
+const PASS_CHECK = /verify|decode|decrypt/i;
+/** Code around a name that leaves it the same thing: brackets, `as`, `!`, `satisfies`, `<T>`. */
+const WRAPPER = /^(?:ParenthesizedExpression|TSAsExpression|TSNonNullExpression|TSSatisfiesExpression|TSInstantiationExpression|ChainExpression)$/;
+/** Code in any language a server or page could check passes in. */
+const CODE_FILE = /\.(?:[cm]?[jt]sx?|vue|svelte|astro|py|go|rb|php|java|kt|kts|cs|rs|ex|exs|scala|swift|dart|lua|clj|erl|hs)$/i;
+
+/**
+ * Names this file binds to the two known libraries: `jwtVerify` from jose
+ * (under any local name), and from jsonwebtoken either the module itself
+ * (`import jwt from`, `import * as jwt`, `const jwt = require(...)`) or its
+ * `verify` (`import { verify as check }`, `const { verify } = require(...)`).
+ * `other` is true when the file uses some other pass library, or imports a
+ * known one in a shape not followed here.
+ */
+function passLibraryNames(program: Node): { joseVerify: Set<string>; jwtModule: Set<string>; jwtVerify: Set<string>; own: Set<string>; other: boolean } {
+  const names = { joseVerify: new Set<string>(), jwtModule: new Set<string>(), jwtVerify: new Set<string>(), own: new Set<string>(), other: false };
+  // The app's own functions (`async function verifyJwt`), whose code is read
+  // like the rest: the calls inside them are what is judged, not their names.
+  walk(program, (node) => {
+    if (node.type === "FunctionDeclaration") names.own.add(String((node.id as Node | undefined)?.name ?? ""));
+    const init = node.type === "VariableDeclarator" ? (node.init as Node | undefined) : undefined;
+    if (init && /^(?:ArrowFunctionExpression|FunctionExpression)$/.test(init.type) && (node.id as Node | undefined)?.type === "Identifier") {
+      names.own.add(String((node.id as Node).name));
+    }
+    if (node.type === "ImportDeclaration" && String((node.source as Node | undefined)?.value ?? "").startsWith(".")) {
+      for (const specifier of (node.specifiers ?? []) as Node[]) names.own.add(String((specifier.local as Node | undefined)?.name ?? ""));
+    }
+  });
+  const take = (module: string, imported: string | "*", local: string) => {
+    if (JOSE.test(module) && imported === "jwtVerify") names.joseVerify.add(local);
+    else if (JSONWEBTOKEN.test(module) && (imported === "*" || imported === "default")) names.jwtModule.add(local);
+    else if (JSONWEBTOKEN.test(module) && imported === "verify") names.jwtVerify.add(local);
+  };
+  walk(program, (node) => {
+    // Handing a pass library on (`export { jwtVerify } from "jose"`,
+    // `export * from "jose"`): the file that uses it imports it from here, as
+    // if it were the app's own code, so its checks could not be judged.
+    if ((node.type === "ExportNamedDeclaration" || node.type === "ExportAllDeclaration") && node.exportKind !== "type") {
+      const module = String((node.source as Node | undefined)?.value ?? "");
+      const specifiers = (node.specifiers ?? []) as Node[];
+      const onlyTypes = specifiers.length > 0 && specifiers.every((sp) => sp.exportKind === "type");
+      if (OTHER_PASS_LIBRARY.test(module) && !onlyTypes) names.other = true;
+      return;
+    }
+    if (node.type === "ImportDeclaration") {
+      const module = String((node.source as Node | undefined)?.value ?? "");
+      if (node.importKind === "type" || !OTHER_PASS_LIBRARY.test(module)) return;
+      if (!JOSE.test(module) && !JSONWEBTOKEN.test(module)) names.other = true;
+      for (const specifier of (node.specifiers ?? []) as Node[]) {
+        if (specifier.importKind === "type") continue;
+        const local = String((specifier.local as Node | undefined)?.name ?? "");
+        const imported = specifier.imported as Node | undefined;
+        take(module, specifier.type === "ImportSpecifier" ? String(imported?.name ?? imported?.value ?? "") : specifier.type === "ImportDefaultSpecifier" ? "default" : "*", local);
+      }
+      return;
+    }
+    if (node.type === "CallExpression" && dottedName(node.callee) === "require" || node.type === "ImportExpression") {
+      const target = (node.type === "ImportExpression" ? node.source : ((node.arguments ?? []) as Node[])[0]) as Node | undefined;
+      const module = isStringLiteral(target) ? target.value : "";
+      if (!OTHER_PASS_LIBRARY.test(module)) return;
+      // Another library, or a known one loaded with `import()`, whose names are not followed.
+      if ((!JOSE.test(module) && !JSONWEBTOKEN.test(module)) || node.type === "ImportExpression") names.other = true;
+    }
+    if (node.type === "VariableDeclarator") {
+      const init = node.init as Node | undefined;
+      if (init?.type !== "CallExpression" || dottedName(init.callee) !== "require") return;
+      const target = ((init.arguments ?? []) as Node[])[0];
+      const module = isStringLiteral(target) ? target.value : "";
+      if (!JSONWEBTOKEN.test(module) && !JOSE.test(module)) return;
+      const id = node.id as Node | undefined;
+      if (id?.type === "Identifier") take(module, JOSE.test(module) ? "jose" : "*", String(id.name));
+      else if (id?.type === "ObjectPattern") {
+        for (const p of (id.properties ?? []) as Node[]) {
+          const key = p.key as Node | undefined;
+          const value = p.value as Node | undefined;
+          if (p.type === "Property" && !p.computed && value?.type === "Identifier") take(module, String(key?.name ?? ""), String(value.name));
+          else names.other = true;
+        }
+      } else names.other = true;
+    }
+  });
+  // A library's name also bound by the app (a look-alike next to the import)
+  // is a guess either way.
+  for (const name of names.own) {
+    if (names.joseVerify.has(name) || names.jwtVerify.has(name) || names.jwtModule.has(name)) names.other = true;
+  }
+  return names;
+}
+
+/** A limit written plainly: a non-empty text, a positive number, or a template with no gaps. */
+function plainLimit(value: Node | undefined): boolean {
+  if (isStringLiteral(value)) return value.value.trim() !== "";
+  if (value?.type === "Literal" && typeof value.value === "number") return value.value > 0;
+  if (value?.type === "TemplateLiteral") {
+    const quasis = (value.quasis ?? []) as Node[];
+    return ((value.expressions ?? []) as Node[]).length === 0 && quasis.some((q) => String((q.value as { cooked?: string } | undefined)?.cooked ?? "").trim() !== "");
+  }
+  return false;
+}
+
+/**
+ * Whether every place the code checks a sign-in pass refuses one older than
+ * a set age, so passes end even though none carries an expiry of its own:
+ * jose's `jwtVerify(token, key, { maxTokenAge })` and jsonwebtoken's
+ * `verify(token, secret, { maxAge })`. Both libraries refuse a pass with no
+ * time of issue when the limit is set, so leaving it out does not dodge it.
+ *
+ * "all" only when at least one check exists, every call in the project that
+ * looks like checking or opening a pass (`verify`, `decode`, `decrypt`, in a
+ * file using a pass library) is one of those two, bound to its real import,
+ * with the limit written plainly in the call; and no file uses another pass
+ * library. "unseen" when that holds for the files read but a code file could
+ * not be read or parsed. Anything else is "no": the old answer stands.
+ */
+function ageLimitedOnEveryCheck(snapshot: RepoSnapshot, files: SourceFile[]): { answer: "all" | "no" } | { answer: "unseen"; example: string } {
+  let checks = 0;
+  let unseen = snapshot.incomplete
+    ? "files past the review's limit"
+    : (snapshot.unread ?? []).find((p) => CODE_FILE.test(p) && !isTestPath(p));
+  for (const file of files) {
+    const text = codeOnly(file);
+    if (!OTHER_PASS_LIBRARY.test(text)) continue;
+    const parsed = parseFile(file);
+    if (!parsed) {
+      unseen ??= file.path;
+      continue;
+    }
+    const names = passLibraryNames(parsed.program);
+    if (names.other) return { answer: "no" };
+    let failed = false;
+    walk(parsed.program, (node, parents) => {
+      if (failed) return;
+      /**
+       * A library check used as a value rather than called (`const v =
+       * jwtVerify`, `run(jwt.verify)`, `export { jwtVerify }`): wherever it
+       * is called under its new name, the limit cannot be checked here.
+       */
+      // Brackets, `as`, `!` and `satisfies` around a name change nothing about what it is.
+      let at = 0;
+      while (parents[at] && WRAPPER.test(parents[at]!.type)) at++;
+      const parent = parents[at];
+      const wrapped = at === 0 ? node : parents[at - 1];
+      const calledHere = parent?.type === "CallExpression" && parent.callee === wrapped;
+      const ident = node.type === "Identifier" ? String(node.name) : "";
+      const libraryCheck =
+        names.joseVerify.has(ident) || names.jwtVerify.has(ident) ||
+        (node.type === "MemberExpression" && !node.computed && names.jwtModule.has(dottedName(node.object) ?? "") &&
+          PASS_CHECK.test(dottedName(node.property) ?? ""));
+      // The import that binds the name, and a type read from it, are not uses of it.
+      const binding = parent !== undefined && /^Import(?:Default|Namespace)?Specifier$|^TSTypeQuery$|^TSQualifiedName$/.test(parent.type);
+      // `const { verify } = require("jsonwebtoken")`: both the key and the name it binds.
+      const requireBinding = parent?.type === "Property" && parents[at + 1]?.type === "ObjectPattern";
+      if (libraryCheck && !calledHere && !binding && !requireBinding) {
+        failed = true;
+        return;
+      }
+      /**
+       * The jsonwebtoken module itself may only be used to call its members
+       * by name (`jwt.verify(...)`, `jwt.sign(...)`): handed on, taken apart
+       * (`const { verify: c } = jwt`) or read by a computed key, its check
+       * can be called under any name.
+       */
+      if (names.jwtModule.has(ident) && !binding && !requireBinding && !(parent?.type === "VariableDeclarator" && parent.id === wrapped)) {
+        const member = parent?.type === "MemberExpression" && parent.object === wrapped && !parent.computed;
+        if (!member) {
+          failed = true;
+          return;
+        }
+      }
+      if (node.type !== "CallExpression") return;
+      let callee = node.callee as Node | undefined;
+      while (callee && WRAPPER.test(callee.type)) callee = callee.expression as Node | undefined;
+      const name = dottedName(callee) ?? "";
+      const object = callee?.type === "MemberExpression" ? (dottedName(callee.object) ?? undefined) : undefined;
+      const property = callee?.type === "MemberExpression" && !callee.computed ? dottedName(callee.property) : undefined;
+      // A known check under a name of the file's choosing (`jwtVerify as check`) counts too.
+      const known = callee?.type === "Identifier" && (names.joseVerify.has(name) || names.jwtVerify.has(name));
+      if (!known && !PASS_CHECK.test(name.split(".").pop() ?? "")) return;
+      // The app's own function, bound once and never a library's name: its
+      // body is walked like any other code.
+      if (!known && callee?.type === "Identifier" && names.own.has(name)) return;
+      // The browser's and Node's own address decoding reads no pass.
+      if (callee?.type === "Identifier" && /^decodeURI(?:Component)?$/.test(name)) return;
+      checks++;
+      const option =
+        callee?.type === "Identifier" && names.joseVerify.has(name) ? "maxTokenAge"
+        : callee?.type === "Identifier" && names.jwtVerify.has(name) ? "maxAge"
+        : object !== undefined && names.jwtModule.has(object) && property === "verify" ? "maxAge"
+        : undefined;
+      const limited = option !== undefined && ((node.arguments ?? []) as Node[]).slice(2, 3).some((argument) =>
+        argument.type === "ObjectExpression" &&
+        // A spread may carry its own value for the limit, including none.
+        !((argument.properties ?? []) as Node[]).some((p) => p.type === "SpreadElement") &&
+        ((argument.properties ?? []) as Node[]).some((p) =>
+          p.type === "Property" && !p.computed && !p.shorthand &&
+          ((p.key as Node | undefined)?.name ?? (p.key as Node | undefined)?.value) === option &&
+          plainLimit(p.value as Node | undefined)
+        )
+      );
+      if (!limited) failed = true;
+    });
+    if (failed) return { answer: "no" };
+  }
+  // Pass libraries used from files that are not code this check reads (an
+  // unread page) are covered by `unseen` above.
+  if (checks === 0) return { answer: "no" };
+  return unseen ? { answer: "unseen", example: unseen } : { answer: "all" };
+}
+
 const sessionExpiry: ProjectCheck = {
   id: "auth:tokens-expire",
   itemId: "auth/session-expiry",
@@ -890,6 +1239,14 @@ const sessionExpiry: ProjectCheck = {
     }
     const EXPIRES = /\b(setExpirationTime|expiresIn|exp\s*:)/;
     if (EXPIRES.test(codeOnly(signer))) return { status: "pass" };
+    const ageLimit = ageLimitedOnEveryCheck(snapshot, files);
+    if (ageLimit.answer === "all") return { status: "pass" };
+    if (ageLimit.answer === "unseen") {
+      return {
+        status: "not-applicable",
+        reason: `Sign-in passes are refused after a set age everywhere we could see them being checked, but some code files could not be read (for example ${ageLimit.example}). Confirm every place that checks a sign-in also limits its age.`,
+      };
+    }
     if (EXPIRES.test(signer.content)) {
       return {
         status: "not-applicable",
