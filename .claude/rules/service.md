@@ -162,6 +162,16 @@ built for going live".
   refusing over reading part of the repository. So a repository near 5,000
   readable files cannot be reviewed whole on the hourly allowance; reading
   many files per request (GraphQL) would fix that and is a separate item.
+- **Why a review stopped, on the dashboard (2026-11-15, Murat's choice).**
+  The dashboard waits for a saved report after a paste; a refused or failed
+  review saves none, so it used to spin for ever. Now `reviewPush` passes
+  the check's own fixed title and message to `recordProblem`
+  (`cloud/src/problems.ts`, table `review_problems`, migration 0009), and
+  `/api/repos` returns the last day's `problem` per repository to its
+  admins and to whoever started it. The dashboard stops and shows it; after
+  10 minutes with neither it says so and points to the check. Rows hold no
+  code or file names, are kept 7 days, and go with the history, the
+  person's reviews, the account and the installation.
 - **Audit fixes (2026-11-11, after the audit of 2026-11-10).** The invite
   list is `ALLOWED_GITHUB_IDS`: GitHub account numbers, or the single word
   `everyone`; missing or empty lets nobody in (it used to list names, and

@@ -405,6 +405,77 @@ test("with the hour spent before any notes, the result alone is posted, carrying
   assert.match(patches[0]!.body.output.summary, /\S/);
 });
 
+// --- the dashboard learns why a review stopped ---------------------------------------
+
+test("a refused review tells the dashboard why, in the check's own words", async () => {
+  const github = fakeGitHub(MANY, [], () => 40);
+  const problems: unknown[] = [];
+  const d = deps(github.fetchImpl, { recordProblem: async (p) => void problems.push(p) });
+  const body = push({ sender: { id: 77 } });
+  await handleWebhook(d, { signature: sign(body), event: "push" }, body);
+  await Promise.all(d.done);
+
+  const final = github.calls.filter((c) => c.method === "PATCH").at(-1)?.body;
+  assert.deepEqual(problems, [{
+    githubId: 4242, installationId: 7, ranBy: 77, commitSha: SHA,
+    title: final.output.title, message: final.output.summary,
+  }]);
+});
+
+test("a stopped review tells the dashboard too, and a failure to keep it never blocks the check", async () => {
+  const github = fakeGitHub({ "server/src/api.ts": VULNERABLE });
+  const d = deps(github.fetchImpl, {
+    review: () => Promise.reject(new ReviewStoppedError("time")),
+    recordProblem: () => Promise.reject(new Error("database down")),
+  });
+  const body = push();
+  await handleWebhook(d, { signature: sign(body), event: "push" }, body);
+  await Promise.all(d.done);
+
+  const final = github.calls.filter((c) => c.method === "PATCH").at(-1)?.body;
+  assert.equal(final.status, "completed");
+  assert.match(final.output.summary, /longer than its time limit/);
+});
+
+test("a finished review does not tell the dashboard of a problem", async () => {
+  const github = fakeGitHub({ "server/src/api.ts": VULNERABLE });
+  const problems: unknown[] = [];
+  const d = deps(github.fetchImpl, { recordProblem: async (p) => void problems.push(p) });
+  const body = push();
+  await handleWebhook(d, { signature: sign(body), event: "push" }, body);
+  await Promise.all(d.done);
+  assert.deepEqual(problems, []);
+});
+
+test("when no check can even be started, the dashboard still learns the review stopped", async () => {
+  const problems: Array<{ title: string }> = [];
+  const refusing = (async () => new Response("no", { status: 500 })) as unknown as typeof fetch;
+  const d = deps(refusing, { recordProblem: async (p) => void problems.push(p) });
+  const body = push();
+  await handleWebhook(d, { signature: sign(body), event: "push" }, body);
+  await Promise.all(d.done);
+  assert.equal(problems.length, 1);
+  assert.equal(problems[0]?.title, "The review could not be completed");
+});
+
+test("a review whose report was saved is not reported as stopped, even if the check then fails", async () => {
+  const github = fakeGitHub({ "server/src/api.ts": VULNERABLE });
+  const failingPatch = (async (url: string, init?: { method?: string }) =>
+    init?.method === "PATCH" && github.calls.filter((c) => c.method === "PATCH").length === 0
+      ? (github.calls.push({ method: "PATCH", path: "first" }), new Response("busy", { status: 502 }))
+      : github.fetchImpl(url, init as RequestInit)) as unknown as typeof fetch;
+  const problems: unknown[] = [];
+  const d = deps(failingPatch, {
+    history: { record: async () => ({ reviewId: "r".repeat(22), historyId: "h".repeat(22) }) },
+    publicUrl: "https://app.example",
+    recordProblem: async (p) => void problems.push(p),
+  });
+  const body = push();
+  await handleWebhook(d, { signature: sign(body), event: "push" }, body);
+  await Promise.all(d.done);
+  assert.deepEqual(problems, [], "the dashboard has the saved report");
+});
+
 // --- the mark when an AI softened a finding -----------------------------------------
 
 // Protective headers and a rate limit are in place, so the home-made cleaner

@@ -10,6 +10,7 @@ import type { Env } from "../src/env.ts";
 import { parseRepoLink } from "../src/github-user.ts";
 import { d1History } from "../src/history-d1.ts";
 import { fakeD1 } from "./fake-d1.ts";
+import { forgetOldProblems, recordProblem } from "../src/problems.ts";
 
 /**
  * Sign-in and paste-a-link, against a stand-in GitHub. Each test is one way
@@ -622,6 +623,88 @@ test("a repository's admins can clear its history; everyone can clear the review
   assert.equal(left?.n, 0);
   const actions = (await env.DB.prepare("SELECT action FROM audit_log WHERE action IN ('history-cleared', 'refused')").all<{ action: string }>()).results.map((r) => r.action);
   assert.deepEqual(actions, ["refused", "history-cleared", "history-cleared"]);
+});
+
+// --- why a review stopped without a report (the dashboard used to wait for ever) ------
+
+const stoppedBy = (ranBy: number | undefined, title = "Too many files to read right now") =>
+  recordProblem(env.DB, {
+    githubId: 101,
+    installationId: 7,
+    ...(ranBy === undefined ? {} : { ranBy }),
+    commitSha: "c".repeat(40),
+    title,
+    message: "Nothing in this commit was checked. Push again after 06:25 UTC.",
+  });
+
+type Listed = { repositories: Array<{ githubId: number; problem: { title: string; message: string; createdAt: string } | null }> };
+
+test("why a review stopped shows for whoever started it, and for the repository's admins", async () => {
+  await stoppedBy(99, "someone else's");
+  const cookie = await signIn();
+  let listed = (await (await call("/api/repos", {}, cookie)).json()) as Listed;
+  assert.equal(listed.repositories[0]?.problem, null, "a teammate does not see another's");
+
+  await stoppedBy(ME);
+  listed = (await (await call("/api/repos", {}, cookie)).json()) as Listed;
+  assert.equal(listed.repositories[0]?.problem?.title, "Too many files to read right now");
+  assert.match(listed.repositories[0]?.problem?.message ?? "", /Push again after/);
+
+  await stoppedBy(99, "someone else's, newer");
+  REPOS["ada/shop"]!.admin = true;
+  try {
+    listed = (await (await call("/api/repos", {}, cookie)).json()) as Listed;
+    assert.equal(listed.repositories[0]?.problem?.title, "someone else's, newer", "an admin sees the newest");
+  } finally {
+    REPOS["ada/shop"]!.admin = false;
+  }
+});
+
+test("why a review stopped is deleted with the history, the person's reviews, the repository, and after a week", async () => {
+  const count = async () => (await env.DB.prepare("SELECT count(*) AS n FROM review_problems").first<{ n: number }>())?.n;
+  const cookie = await signIn();
+
+  await stoppedBy(ME);
+  await stoppedBy(99);
+  await post("/api/history/clear-mine", {}, cookie);
+  assert.equal(await count(), 1, "hers went; the teammate's stays");
+
+  await stoppedBy(undefined);
+  REPOS["ada/shop"]!.admin = true;
+  try {
+    await post("/api/history/clear-mine", {}, cookie);
+  } finally {
+    REPOS["ada/shop"]!.admin = false;
+  }
+  assert.equal(await count(), 1, "as an admin, the unattributed one goes too, like the reports");
+
+  REPOS["ada/shop"]!.admin = true;
+  try {
+    await post("/api/repos/101/clear-history", {}, cookie);
+  } finally {
+    REPOS["ada/shop"]!.admin = false;
+  }
+  assert.equal(await count(), 0, "clearing the repository's history clears these too");
+
+  await stoppedBy(ME);
+  await forgetInstallation(env.DB, 7, [101]);
+  assert.equal(await count(), 0, "a repository removed from the App");
+  await stoppedBy(ME);
+  await forgetInstallation(env.DB, 7, "all");
+  assert.equal(await count(), 0, "the App uninstalled");
+
+  await stoppedBy(ME);
+  await env.DB.prepare("UPDATE review_problems SET created_at = '2000-01-01T00:00:00.000Z'").run();
+  await forgetOldProblems(env.DB).run();
+  assert.equal(await count(), 0, "older than a week");
+});
+
+test("an old reason is not shown: only the last day's", async () => {
+  await stoppedBy(ME);
+  await env.DB.prepare("UPDATE review_problems SET created_at = '2000-01-01T00:00:00.000Z'").run();
+  const cookie = await signIn();
+  const listed = (await (await call("/api/repos", {}, cookie)).json()) as Listed;
+  assert.equal(listed.repositories[0]?.problem, null);
 });
 
 test("someone who can edit an organisation's repository but not add it is told to ask its owners", async () => {

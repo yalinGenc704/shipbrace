@@ -22,6 +22,8 @@ export interface ConnectedRepo {
   installationId: number;
   historyId: string | null;
   latest: { id: string; createdAt: string; conclusion: "success" | "neutral" | "failure"; title: string } | null;
+  /** Why the latest review stopped without a report (in the last day), in ShipBrace's fixed words. */
+  problem?: { title: string; message: string; createdAt: string } | null;
 }
 
 export type PasteResult =

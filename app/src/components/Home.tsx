@@ -141,6 +141,8 @@ function Paste({ login }: { login: string }) {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<PasteResult | null>(null);
   const [waitingFor, setWaitingFor] = useState<{ githubId: number; since: number } | null>(null);
+  /** A queued review that ended without a report, or took too long to wait for. */
+  const [stopped, setStopped] = useState<{ title: string; message: string } | null>(null);
   const repos = useQuery({ queryKey: ["repos"], queryFn: loadRepos, refetchInterval: waitingFor ? 4_000 : false });
   const autoSubmitted = useRef(false);
 
@@ -152,9 +154,25 @@ function Paste({ login }: { login: string }) {
   useEffect(() => {
     if (!waitingFor) return;
     const repo = list.find((r) => r.githubId === waitingFor.githubId);
-    if (repo?.latest && Date.parse(repo.latest.createdAt) >= waitingFor.since - 5_000) {
+    // Times are the server's, compared with this browser's clock: allow a little drift.
+    const since = waitingFor.since - 5_000;
+    if (repo?.latest && Date.parse(repo.latest.createdAt) >= since) {
       setWaitingFor(null);
       void navigate({ to: "/reviews/$id", params: { id: repo.latest.id } });
+      return;
+    }
+    // Refused or failed: no report will come, so say why (the check says the same).
+    if (repo?.problem && Date.parse(repo.problem.createdAt) >= since) {
+      setWaitingFor(null);
+      setStopped({ title: repo.problem.title, message: repo.problem.message });
+      return;
+    }
+    if (Date.now() - waitingFor.since > WAIT_LIMIT_MS) {
+      setWaitingFor(null);
+      setStopped({
+        title: "This is taking longer than usual",
+        message: "The review may still finish; its result will also appear on the commit's check on GitHub. Reload this page later to see it here.",
+      });
     }
   }, [repos.data, waitingFor, navigate]);
 
@@ -164,6 +182,7 @@ function Paste({ login }: { login: string }) {
     if (!target.trim() || busy) return;
     setBusy(true);
     setResult(null);
+    setStopped(null);
     const outcome = await pasteLink(target);
     setBusy(false);
     setResult(outcome);
@@ -242,7 +261,7 @@ function Paste({ login }: { login: string }) {
           </button>
         </form>
       )}
-      <Outcome result={result} waiting={Boolean(waitingFor)} />
+      <Outcome result={result} waiting={Boolean(waitingFor)} stopped={stopped} />
 
       <Settings />
 
@@ -373,8 +392,21 @@ function ClearMine() {
   );
 }
 
-function Outcome({ result, waiting }: { result: PasteResult | null; waiting: boolean }) {
+/** How long the page waits for a queued review's report before saying so. */
+const WAIT_LIMIT_MS = 10 * 60_000;
+
+function Outcome({ result, waiting, stopped }: { result: PasteResult | null; waiting: boolean; stopped: { title: string; message: string } | null }) {
   if (!result) return null;
+  if (result.status === "queued" && stopped) {
+    return (
+      <div className="mt-3 rounded-xl bg-review-bg p-4 text-sm text-ink" role="status">
+        <p className="font-medium">
+          {result.repository.owner}/{result.repository.name}: {stopped.title}
+        </p>
+        <p className="mt-1 text-ink-soft">{stopped.message}</p>
+      </div>
+    );
+  }
   if (result.status === "queued") {
     return (
       <p className="mt-3 flex items-center gap-2 text-sm text-ink-soft">
@@ -423,7 +455,9 @@ function RepoRow({ repo }: { repo: ConnectedRepo }) {
         <span className="min-w-0 flex-1">
           <span className="block text-sm text-ink">{repo.owner}/{repo.name}</span>
           <span className="mt-0.5 block text-xs text-ink-soft">
-            {repo.latest ? `${repo.latest.title} · ${formatWhen(repo.latest.createdAt)}` : "Not reviewed yet"}
+            {repo.problem && (!repo.latest || Date.parse(repo.problem.createdAt) > Date.parse(repo.latest.createdAt))
+              ? `Last review stopped: ${repo.problem.title} · ${formatWhen(repo.problem.createdAt)}`
+              : repo.latest ? `${repo.latest.title} · ${formatWhen(repo.latest.createdAt)}` : "Not reviewed yet"}
           </span>
         </span>
         {repo.historyId && (
