@@ -46,6 +46,8 @@ export interface Env {
    * work without it.
    */
   RATE_COUNTER?: DurableObjectNamespace<RateCounter>;
+  /** Cloudflare's email service, for the nightly alert (alerts.ts). Optional: tests and local runs. */
+  EMAIL?: SendEmail;
 
   /** Secrets, set with `wrangler secret put`; never in the config file. */
   GITHUB_PRIVATE_KEY?: string;
@@ -55,4 +57,6 @@ export interface Env {
   GITHUB_CLIENT_SECRET?: string;
   /** 32 random bytes, base64: encrypts the GitHub tokens of signed-in people. */
   SESSION_KEY?: string;
+  /** Where the nightly alert goes: an address verified in Cloudflare. A secret, since the repository is public. */
+  ALERT_EMAIL?: string;
 }

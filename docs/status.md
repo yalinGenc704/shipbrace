@@ -13,7 +13,7 @@ is short) and `a1f55d7` / `c90066d1` on 2026-11-14 (hono 4.13.16). Since
 2026-11-14 `master` takes changes only through a pull request whose "test"
 check passed (GitHub ruleset "Protect master", no bypass); deploy from
 `master` after merging. A database restore was practised on a throwaway
-copy on 2026-11-15: every table matched. 448 tests.
+copy on 2026-11-15: every table matched. 452 tests.
 
 1. **The AI cleaner step: live since 2026-11-11, not yet seen running**
    (Murat's decisions, 2026-11-10: Haiku 5.5 for his reviews only, neutral

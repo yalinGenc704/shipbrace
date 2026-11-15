@@ -172,6 +172,14 @@ built for going live".
   10 minutes with neither it says so and points to the check. Rows hold no
   code or file names, are kept 7 days, and go with the history, the
   person's reviews, the account and the installation.
+- **The refused-attempts alert by email (2026-11-15, Murat's choice).** When
+  the nightly job writes `SHIPBRACE-ALERT` (5 or more refusals in a day),
+  `cloud/src/alerts.ts` also emails it through Cloudflare's own email
+  service (binding `EMAIL`, `send_email` in wrangler.jsonc, may send only
+  from alerts@shipbrace.com). Cloudflare delivers only to addresses
+  verified on the account; the address is the secret `ALERT_EMAIL` (the
+  repository is public). Needs Email Routing on shipbrace.com, which had
+  no mail records before. No binding or no address: the log line only.
 - **Audit fixes (2026-11-11, after the audit of 2026-11-10).** The invite
   list is `ALLOWED_GITHUB_IDS`: GitHub account numbers, or the single word
   `everyone`; missing or empty lets nobody in (it used to list names, and

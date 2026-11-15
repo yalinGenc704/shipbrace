@@ -2,6 +2,7 @@ import { handleWebhook, reviewPush, type PushJob, type ReviewDeps } from "@shipb
 import { Hono } from "hono";
 import { secureHeaders } from "hono/secure-headers";
 import { accountRoutes, forgetInstallation, installationIsSetUp, reviewsPushes } from "./accounts.ts";
+import { emailAlert } from "./alerts.ts";
 import { alertLine, forgetOldAudit, refusedLastDay } from "./audit.ts";
 import { forgetOldDeliveries, queueOnce } from "./deliveries.ts";
 import { forgetOldProblems, recordProblem } from "./problems.ts";
@@ -104,7 +105,17 @@ export default {
     // more attempts were refused in the last day than happens by accident.
     try {
       const line = alertLine(await refusedLastDay(env.DB));
-      if (line) console.error(line);
+      if (line) {
+        console.error(line);
+        // And by email to the owner; a failure here is logged, never in the way of the clean-up.
+        try {
+          if ((await emailAlert(env.EMAIL, env.ALERT_EMAIL, line)) === "not set up") {
+            console.error("alert not emailed: EMAIL or ALERT_EMAIL is not set");
+          }
+        } catch (error) {
+          console.error("could not email the alert:", error instanceof Error ? error.message : "");
+        }
+      }
     } catch (error) {
       console.error("could not count refused attempts:", error instanceof Error ? error.message : "");
     }
