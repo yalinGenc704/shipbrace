@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { AlertTriangle, ArrowLeft, CircleHelp, GitCommitHorizontal, ShieldCheck } from "lucide-react";
 import type { ReactNode } from "react";
-import { formatWhen, loadHistory, loadStoredReview, NoAccess, NotFound, type Conclusion } from "../lib/history.ts";
+import { formatWhen, loadHistory, loadStoredReview, NotFound, type Conclusion } from "../lib/history.ts";
 import { ReviewView } from "./ReviewPage.tsx";
 import { Loading } from "./ui.tsx";
 
@@ -16,17 +16,15 @@ export function StoredReviewPage({ id }: { id: string }) {
   const { data, isPending, error } = useQuery({
     queryKey: ["stored-review", id],
     queryFn: () => loadStoredReview(id),
-    retry: (count, e) => !(e instanceof NotFound) && !(e instanceof NoAccess) && count < 1,
+    retry: (count, e) => !(e instanceof NotFound) && count < 1,
   });
 
   if (isPending) return <Loading>Loading the review…</Loading>;
   if (error || !data) {
     return (
       <Problem>
-        {error instanceof NoAccess
-          ? "Only the person who started this review and the repository's admins can open it. If that is you, check that you signed in with the right GitHub account."
-          : error instanceof NotFound
-          ? "There is no review at this address. Check that the link was copied in full."
+        {error instanceof NotFound
+          ? "There is no review here that you can open. Check that the link was copied in full and that you signed in with the right GitHub account: only the person who started a review and the repository's admins can open it."
           : "The review could not be loaded. Do not treat this as a pass."}
       </Problem>
     );
@@ -70,17 +68,15 @@ export function HistoryPage({ id }: { id: string }) {
   const { data, isPending, error } = useQuery({
     queryKey: ["history", id],
     queryFn: () => loadHistory(id),
-    retry: (count, e) => !(e instanceof NotFound) && !(e instanceof NoAccess) && count < 1,
+    retry: (count, e) => !(e instanceof NotFound) && count < 1,
   });
 
   if (isPending) return <Loading>Loading the review history…</Loading>;
   if (error || !data) {
     return (
       <Problem>
-        {error instanceof NoAccess
-          ? "This history belongs to a repository your GitHub account can't see. Ask its owner for access on GitHub."
-          : error instanceof NotFound
-          ? "There is no review history at this address. Check that the link was copied in full."
+        {error instanceof NotFound
+          ? "There is no review history here that you can open. Check that the link was copied in full and that you signed in with a GitHub account that can see the repository."
           : "The review history could not be loaded."}
       </Problem>
     );

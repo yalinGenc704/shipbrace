@@ -84,7 +84,10 @@ async function accessTo(session: Session, githubId: number): Promise<{ read: boo
   const key = `${session.idHash}:${githubId}`;
   const cached = accessCache.get(key);
   if (cached && cached.until > Date.now()) return cached;
-  const access = await repoAccessById(session.token, githubId);
+  // GitHub not answering is "no access" (refused, not an error that only a
+  // real id could cause), and is not remembered, so the next try asks again.
+  const access = await repoAccessById(session.token, githubId).catch(() => undefined);
+  if (access === undefined) return { read: false, admin: false };
   const answer = { read: Boolean(access?.read), admin: Boolean(access?.admin) };
   if (accessCache.size > 5_000) accessCache.clear();
   accessCache.set(key, { ...answer, until: Date.now() + 5 * 60_000 });
@@ -99,7 +102,10 @@ async function accessTo(session: Session, githubId: number): Promise<{ read: boo
 const mayOpen = (session: Session, access: { read: boolean; admin: boolean }, ranBy: number | null) =>
   access.read && (access.admin || ranBy === session.githubId);
 
-const NOT_YOURS = "Only the person who started this review and the repository's admins can open it.";
+// A review or history someone may not open answers exactly like one that does
+// not exist, so a stranger holding a link cannot tell which it is.
+const NO_REVIEW = "No review you can open at this address. Only the person who started a review and the repository's admins can open it.";
+const NO_HISTORY = "No review history you can open at this address. Only people with access to the repository on GitHub can open it.";
 
 /** The per-minute limits: requests per signed-in person, and sign-in attempts or pasted links. */
 export const PER_MINUTE = { api: 60, attempts: 10 } as const;
@@ -625,9 +631,9 @@ export function accountRoutes() {
     const row = await c.env.DB.prepare("SELECT p.github_id, r.ran_by FROM reviews r JOIN repositories p ON p.id = r.repository_id WHERE r.id = ?")
       .bind(c.req.param("id"))
       .first<{ github_id: number; ran_by: number | null }>();
-    if (!row) return c.json({ error: "No review at this address." }, 404);
+    if (!row) return c.json({ error: NO_REVIEW }, 404);
     const session = c.get("session");
-    if (!mayOpen(session, await accessTo(session, row.github_id), row.ran_by)) return c.json({ error: NOT_YOURS }, 403);
+    if (!mayOpen(session, await accessTo(session, row.github_id), row.ran_by)) return c.json({ error: NO_REVIEW }, 404);
     return c.json(await d1History(c.env.DB).review(c.req.param("id")));
   });
 
@@ -636,10 +642,10 @@ export function accountRoutes() {
     const row = await c.env.DB.prepare("SELECT github_id FROM repositories WHERE history_id = ?")
       .bind(c.req.param("id"))
       .first<{ github_id: number }>();
-    if (!row) return c.json({ error: "No review history at this address." }, 404);
+    if (!row) return c.json({ error: NO_HISTORY }, 404);
     const session = c.get("session");
     const access = await accessTo(session, row.github_id);
-    if (!access.read) return c.json({ error: "You don't have access to this repository on GitHub." }, 403);
+    if (!access.read) return c.json({ error: NO_HISTORY }, 404);
     return c.json(await d1History(c.env.DB).repository(c.req.param("id"), access.admin ? undefined : session.githubId));
   });
 

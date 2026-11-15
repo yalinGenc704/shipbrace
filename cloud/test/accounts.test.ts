@@ -253,7 +253,8 @@ test("a kept review opens only for someone GitHub lets see the repository", asyn
   REPOS["ada/shop"]!.pull = false;
   REPOS["ada/shop"]!.push = false;
   const other = await signIn();
-  assert.equal((await call(`/api/reviews/${mine.reviewId}`, {}, other)).status, 403, "removed from the repository, removed from its reviews");
+  assert.equal((await call(`/api/reviews/${mine.reviewId}`, {}, other)).status, 404, "removed from the repository, removed from its reviews");
+  assert.equal((await call(`/api/history/${mine.historyId}`, {}, other)).status, 404, "and from its history");
   REPOS["ada/shop"]!.pull = true;
   REPOS["ada/shop"]!.push = true;
 });
@@ -262,17 +263,58 @@ test("being able to read a public repository is not enough to open its reports",
   const theirs = await keep(201, "stranger/bank", 99);
   const cookie = await signIn();
   const opened = await call(`/api/reviews/${theirs.reviewId}`, {}, cookie);
-  assert.equal(opened.status, 403);
-  assert.match(((await opened.json()) as { error: string }).error, /started this review/);
+  assert.equal(opened.status, 404);
+  assert.match(((await opened.json()) as { error: string }).error, /started a review/);
   const history = (await (await call(`/api/history/${theirs.historyId}`, {}, cookie)).json()) as { reviews: unknown[] };
   assert.deepEqual(history.reviews, [], "the history lists none of someone else's reviews");
+});
+
+test("someone else's review and a review that does not exist answer exactly alike", async () => {
+  const theirs = await keep(201, "stranger/bank", 99);
+  const cookie = await signIn();
+  const real = await call(`/api/reviews/${theirs.reviewId}`, {}, cookie);
+  const made_up = await call(`/api/reviews/${"x".repeat(theirs.reviewId.length)}`, {}, cookie);
+  assert.equal(real.status, made_up.status);
+  assert.deepEqual(await real.json(), await made_up.json());
+
+  // A history opens (listing only one's own reviews) for anyone who can read
+  // the repository on GitHub; for anyone else it answers like a made-up one.
+  // (A new sign-in: what GitHub says about access is remembered per session for five minutes.)
+  REPOS["stranger/bank"]!.pull = false;
+  try {
+    const fresh = await signIn();
+    const realHistory = await call(`/api/history/${theirs.historyId}`, {}, fresh);
+    const madeUpHistory = await call(`/api/history/${"y".repeat(theirs.historyId.length)}`, {}, fresh);
+    assert.equal(realHistory.status, 404);
+    assert.equal(realHistory.status, madeUpHistory.status);
+    assert.deepEqual(await realHistory.json(), await madeUpHistory.json());
+  } finally {
+    REPOS["stranger/bank"]!.pull = true;
+  }
+});
+
+test("when GitHub does not answer, a real review is refused like a missing one, not with an error", async () => {
+  const theirs = await keep(201, "stranger/bank", 99);
+  const cookie = await signIn();
+  const working = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if (url.includes("/repositories/")) throw new TypeError("network down");
+    return working(input, init);
+  }) as typeof fetch;
+  try {
+    const opened = await call(`/api/reviews/${theirs.reviewId}`, {}, cookie);
+    assert.equal(opened.status, 404);
+  } finally {
+    globalThis.fetch = working;
+  }
 });
 
 test("a teammate who is not an admin opens only the reviews they started", async () => {
   const theirs = await keep(101, "ada/shop", 99);
   const mine = await keep(101, "ada/shop", ME);
   const cookie = await signIn();
-  assert.equal((await call(`/api/reviews/${theirs.reviewId}`, {}, cookie)).status, 403);
+  assert.equal((await call(`/api/reviews/${theirs.reviewId}`, {}, cookie)).status, 404);
   assert.equal((await call(`/api/reviews/${mine.reviewId}`, {}, cookie)).status, 200);
   const history = (await (await call(`/api/history/${mine.historyId}`, {}, cookie)).json()) as { reviews: Array<{ id: string }> };
   assert.deepEqual(history.reviews.map((r) => r.id), [mine.reviewId]);

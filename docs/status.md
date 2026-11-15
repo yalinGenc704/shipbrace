@@ -4,17 +4,16 @@ Moved from CLAUDE.md "Roadmap -> Next steps" on 2026-11-12. Read at the
 start of a session; update it in the same change as the work it
 describes.
 
-**State:** last deployed commit `b12fc6e` (2026-11-15: a review refuses
-with a plain message when GitHub's hourly allowance is short), live version
-`bb2c10ac`, all six live checks passed, re-tested on a 5,000-file fork.
-Before that, `a1f55d7` / `c90066d1` on 2026-11-14 (hono 4.13.16; `npm
-audit` clean). Since 2026-11-14 `master` takes changes only through a pull
-request whose "test" check passed (GitHub ruleset "Protect master", no
-bypass); deploy from `master` after merging. Migration 0008 is applied;
-0009 (`review_problems`) comes with the dashboard fix and must be applied
-before its deploy. Murat signed in after the 2026-11-11 deploy with the
-invite list by account number (audit log, 2026-11-12), and accepted the
-new notices. 446 tests.
+**State:** last deployed commit `80452ce` (2026-11-15: the dashboard says
+why a review stopped instead of waiting), live version `47728c6e`, all six
+live checks passed, confirmed by Murat on a 5,000-file fork. Migration 0009
+(`review_problems`) is applied. Before that, `b12fc6e` / `bb2c10ac` the same
+day (a review refuses with a plain message when GitHub's hourly allowance
+is short) and `a1f55d7` / `c90066d1` on 2026-11-14 (hono 4.13.16). Since
+2026-11-14 `master` takes changes only through a pull request whose "test"
+check passed (GitHub ruleset "Protect master", no bypass); deploy from
+`master` after merging. A database restore was practised on a throwaway
+copy on 2026-11-15: every table matched. 448 tests.
 
 1. **The AI cleaner step: live since 2026-11-11, not yet seen running**
    (Murat's decisions, 2026-11-10: Haiku 5.5 for his reviews only, neutral

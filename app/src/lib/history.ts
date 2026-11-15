@@ -35,7 +35,6 @@ interface RepositoryHistory {
 /** "Not found" is its own answer: the page words it differently from an outage. */
 export class NotFound extends Error {}
 /** Signed in, but GitHub does not let this person see the repository. */
-export class NoAccess extends Error {}
 
 async function get<T>(path: string): Promise<T> {
   const response = await fetch(path);
@@ -44,8 +43,8 @@ async function get<T>(path: string): Promise<T> {
     window.location.href = `/auth/login?return=${encodeURIComponent(window.location.pathname)}`;
     return new Promise<T>(() => {});
   }
-  if (response.status === 403) throw new NoAccess();
-  if (response.status === 404) throw new NotFound();
+  // The server answers a review someone may not open exactly like a missing one.
+  if (response.status === 403 || response.status === 404) throw new NotFound();
   if (!response.ok) throw new Error(`The server answered ${response.status}.`);
   return (await response.json()) as T;
 }
