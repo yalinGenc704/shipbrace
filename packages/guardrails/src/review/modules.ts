@@ -501,10 +501,10 @@ const MODULES: ModuleShape[] = [
       },
       {
         id: "components/pinned",
-        covers: "every package in package.json is set to one exact version",
+        covers: "every package in package.json is set to one exact version, or recorded exactly in a lockfile saved with your code",
         title: "Your app always installs the exact package versions you tested",
         question:
-          "Confirm each package is set to one exact version rather than \"this version or newer\", so the code you tested is the code that goes live.",
+          "Confirm each package is set to one exact version, or that a lockfile saved with your code records it, so the code you tested is the code that goes live.",
         detector: "manifest:exact-versions",
       },
       {

@@ -517,6 +517,105 @@ const errorDetail: ProjectCheck = {
 
 // --- A03: versions must be pinned --------------------------------------------
 
+const LOCKFILE_NAME = /^(?:bun\.lockb?|package-lock\.json|pnpm-lock\.yaml|yarn\.lock)$/;
+
+const folderOf = (path: string): string => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "");
+
+/**
+ * Whether a workspace pattern (`packages/*`, `examples/**`, `tests2/`) names
+ * a folder: `*` stands for part of one folder name, `**` for any number of
+ * folders, matched one folder at a time.
+ */
+function workspaceMatches(glob: string, folder: string): boolean {
+  const pattern = glob.replace(/^\.\//, "").replace(/\/+$/, "").split("/");
+  const parts = folder === "" ? [] : folder.split("/");
+  const one = (p: string, name: string) =>
+    new RegExp(`^${p.split("*").map((s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join("[^/]*")}$`).test(name);
+  const match = (g: number, f: number): boolean => {
+    if (g === pattern.length) return f === parts.length;
+    if (pattern[g] === "**") return match(g + 1, f) || (f < parts.length && match(g, f + 1));
+    return f < parts.length && one(pattern[g]!, parts[f]!) && match(g + 1, f + 1);
+  };
+  return match(0, 0);
+}
+
+/** The folders a workspace lists, or `undefined` when they cannot be read. */
+function workspaceGlobs(snapshot: RepoSnapshot, prefix: string): string[] | undefined {
+  const yaml = snapshot.files.find((f) => f.path === `${prefix}pnpm-workspace.yaml`);
+  if (yaml) {
+    const globs: string[] = [];
+    let inPackages = false;
+    for (const line of yaml.content.split("\n")) {
+      if (/^\S/.test(line)) inPackages = /^packages\s*:\s*$/.test(line.trim());
+      else if (inPackages) {
+        const item = /^\s+-\s*["']?([^"'#]+?)["']?\s*(?:#.*)?$/.exec(line);
+        if (item) globs.push(item[1]!);
+      }
+    }
+    return globs.length > 0 ? globs : undefined;
+  }
+  const declared = snapshot.manifests.get(`${prefix}package.json`)?.workspaces;
+  const list = Array.isArray(declared) ? declared : (declared as { packages?: unknown } | undefined)?.packages;
+  return Array.isArray(list) && list.every((g) => typeof g === "string") && list.length > 0 ? (list as string[]) : undefined;
+}
+
+/**
+ * The lockfile that records the exact versions a package list installs:
+ * "read" when it does, "unread" when it exists but cannot be confirmed (not
+ * read, binary, empty, not listing the packages, or a workspace whose list
+ * of folders cannot be read), `undefined` when none covers the package list.
+ *
+ * A lockfile covers the package list in its own folder, and one below it only
+ * when its folder declares a workspace (`pnpm-workspace.yaml`, or
+ * `workspaces` in its package.json) whose folder patterns match that package
+ * list's folder: anything else installs on its own, and the lockfile above
+ * does not speak for it. The nearest lockfile decides.
+ */
+function lockfileFor(snapshot: RepoSnapshot, manifestPath: string, packages: string[]): "read" | "unread" | undefined {
+  const read = new Set(snapshot.files.map((f) => f.path));
+  const unread = new Set(snapshot.unread ?? []);
+  const own = folderOf(manifestPath);
+
+  for (let folder: string | undefined = own; folder !== undefined; folder = folder === "" ? undefined : folderOf(folder)) {
+    const prefix = folder === "" ? "" : `${folder}/`;
+    const inFolder = (p: string) => p.startsWith(prefix) && !p.slice(prefix.length).includes("/") && LOCKFILE_NAME.test(p.slice(prefix.length));
+    const lock = [...read].find(inFolder) ?? [...unread].find(inFolder);
+    if (!lock) continue;
+
+    if (folder !== own) {
+      const declared = read.has(`${prefix}pnpm-workspace.yaml`) || unread.has(`${prefix}pnpm-workspace.yaml`) ||
+        snapshot.manifests.get(`${prefix}package.json`)?.workspaces !== undefined;
+      if (!declared) return undefined;
+      const globs = workspaceGlobs(snapshot, prefix);
+      if (!globs) return "unread";
+      const relative = own.slice(prefix.length);
+      const matches = (g: string) => workspaceMatches(g, relative);
+      const included = globs.some((g) => !g.startsWith("!") && matches(g)) && !globs.some((g) => g.startsWith("!") && matches(g.slice(1)));
+      if (!included) return undefined;
+    }
+
+    // A lockfile that is empty, unreadable or silent about these packages
+    // records nothing that can be trusted for them.
+    const content = snapshot.files.find((f) => f.path === lock)?.content ?? "";
+    if (!read.has(lock) || content.trim() === "" || looksBinaryText(content)) return "unread";
+    return packages.every((name) => namesPackage(content, name)) ? "read" : "unread";
+  }
+  return undefined;
+}
+
+/**
+ * Whether a lockfile names this package itself, not one whose name contains
+ * it: `react` is not recorded by `react-dom`, nor `hono` by `@hono/node-server`
+ * or `@other/hono`. Lockfiles write a name after a quote, a slash or the
+ * start of a line, and before a quote, `@`, `:` or `/`.
+ */
+function namesPackage(lockfile: string, name: string): boolean {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?<![\\w@.-])(?<!@[\\w.-]+/)${escaped}(?![\\w.-])`).test(lockfile);
+}
+
+const looksBinaryText = (text: string): boolean => text.slice(0, 8192).includes("\u0000");
+
 const pinnedVersions: ProjectCheck = {
   id: "manifest:exact-versions",
   itemId: "components/pinned",
@@ -526,9 +625,12 @@ const pinnedVersions: ProjectCheck = {
       return { status: "not-applicable", reason: "No package list (package.json) was found, so this could not be checked.", absent: true };
     }
 
-    const risks: Risk[] = [];
     // Packages that are part of this same project, linked rather than downloaded.
     const local = new Set([...snapshot.manifests.values()].map((m) => m.name).filter(Boolean));
+    /** Package lists with ranges and no lockfile recording what they install. */
+    const unrecorded: Array<{ path: string; loose: string[] }> = [];
+    /** Package lists whose lockfile exists but could not be read. */
+    const unreadLock: string[] = [];
 
     for (const [path, manifest] of snapshot.manifests) {
       /**
@@ -550,19 +652,47 @@ const pinnedVersions: ProjectCheck = {
 
       if (loose.length === 0) continue;
 
-      risks.push(
-        risk(
-          "check/unpinned-dependencies",
-          "low",
-          `${loose.length} package${loose.length === 1 ? " is" : "s are"} allowed to update to newer versions on their own (${loose.slice(0, 3).map((d) => d.replace(/@[^@]*$/, "")).join(", ")}${loose.length > 3 ? ", …" : ""}).`,
-          "Two installs of the same code can then pull different versions of somebody else's code. The version you tested and the version your visitors get are no longer guaranteed to match.",
-          "Set each package to one exact version, and update packages on purpose when you choose to.",
-          { path, line: 1 },
-          `In ${path}, replace each version range with the exact installed version (remove the leading ^ or ~; replace "latest" or "*"): ${loose.slice(0, 8).join(", ")}${loose.length > 8 ? ", …" : ""}.`,
-        ),
-      );
+      /**
+       * A range is only a risk when nothing records the exact versions it
+       * installs. A lockfile does: installs follow it, so two installs of the
+       * same code get the same versions. Published libraries rely on this,
+       * since ranges are the right thing for them to ship.
+       */
+      const lock = lockfileFor(snapshot, path, loose.map((d) => d.replace(/@[^@]*$/, "")));
+      if (lock === "read") continue;
+      if (lock === "unread") unreadLock.push(path);
+      else unrecorded.push({ path, loose });
     }
-    return risks.length > 0 ? { status: "risks", risks } : { status: "pass" };
+
+    if (unrecorded.length > 0) {
+      // One card for the project, not one per package list: a monorepo with
+      // forty package lists has one problem, a missing record of versions.
+      const first = unrecorded[0]!;
+      const count = unrecorded.reduce((n, u) => n + u.loose.length, 0);
+      const names = unrecorded.flatMap((u) => u.loose).map((d) => d.replace(/@[^@]*$/, ""));
+      const lists = unrecorded.length === 1 ? first.path : `${unrecorded.length} package lists`;
+      return {
+        status: "risks",
+        risks: [
+          risk(
+            "check/unpinned-dependencies",
+            "low",
+            `${count} package${count === 1 ? " is" : "s are"} allowed to update to newer versions on their own (${names.slice(0, 3).join(", ")}${names.length > 3 ? ", …" : ""}; in ${lists}), and no lockfile (a record of the exact versions installed) is saved with ${unrecorded.length === 1 ? "it" : "them"}.`,
+            "Two installs of the same code can then pull different versions of somebody else's code. The version you tested and the version your visitors get are no longer guaranteed to match.",
+            "Save a lockfile with your code, or set each package to one exact version and update packages on purpose when you choose to.",
+            { path: first.path, line: 1 },
+            `Commit the lockfile your package manager writes (package-lock.json, pnpm-lock.yaml, yarn.lock or bun.lock) next to ${unrecorded.slice(0, 5).map((u) => u.path).join(", ")}${unrecorded.length > 5 ? ", …" : ""}, or replace each version range with the exact installed version: ${unrecorded.flatMap((u) => u.loose).slice(0, 8).join(", ")}${count > 8 ? ", …" : ""}.`,
+          ),
+        ],
+      };
+    }
+    if (unreadLock.length > 0) {
+      return {
+        status: "not-applicable",
+        reason: `Some packages are allowed to update on their own, and we couldn't confirm that a lockfile (a record of the exact versions installed) lists them, for example for ${unreadLock[0]}. Confirm the lockfile is saved with your code and up to date.`,
+      };
+    }
+    return { status: "pass" };
   },
 };
 

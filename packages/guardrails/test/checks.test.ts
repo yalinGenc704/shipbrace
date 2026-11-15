@@ -235,6 +235,100 @@ test("version ranges are flagged and exact pins pass", () => {
   assert.equal(statusOf([exact], "components/pinned"), "pass");
 });
 
+const LOCK: File = { path: "pnpm-lock.yaml", content: "lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      hono:\n        version: 4.13.5\n" };
+const looseAt = (path: string): File => ({
+  path,
+  content: JSON.stringify({ dependencies: { hono: "^4.13.5" } }),
+});
+
+test("version ranges recorded in a lockfile are not a risk", () => {
+  // The lockfile in the same folder records what is installed.
+  assert.equal(statusOf([looseAt("package.json"), LOCK], "components/pinned"), "pass");
+
+  // A workspace: the lockfile at its top covers package lists below it.
+  const workspace: File = { path: "pnpm-workspace.yaml", content: "packages:\n  - 'examples/**'\n" };
+  assert.equal(
+    statusOf([looseAt("package.json"), looseAt("examples/blog/package.json"), workspace, LOCK], "components/pinned"),
+    "pass",
+  );
+  const npmWorkspace: File = {
+    path: "package.json",
+    content: JSON.stringify({ workspaces: ["apps/*"], devDependencies: { tsx: "^4.0.0" } }),
+  };
+  const npmLock: File = { path: "package-lock.json", content: JSON.stringify({ lockfileVersion: 3, packages: { "node_modules/hono": { version: "4.13.5" }, "node_modules/tsx": { version: "4.0.0" } } }) };
+  assert.equal(statusOf([npmWorkspace, looseAt("apps/web/package.json"), npmLock], "components/pinned"), "pass");
+});
+
+test("a lockfile does not cover a project that installs on its own", () => {
+  // No workspace: the sub-folder project has no record of its versions.
+  const result = outcomes([looseAt("package.json"), looseAt("tools/package.json"), LOCK]).get("components/pinned");
+  assert.equal(result?.status, "risks");
+  assert.equal(result?.status === "risks" && result.risks.length, 1);
+  assert.match(result?.status === "risks" ? result.risks[0]!.what : "", /tools\/package\.json/);
+
+  // A lockfile in a neighbouring folder covers nothing here.
+  assert.equal(statusOf([looseAt("api/package.json"), { ...LOCK, path: "web/pnpm-lock.yaml" }], "components/pinned"), "risks");
+
+  // A folder whose name starts like the lockfile's folder is a different folder.
+  assert.equal(statusOf([looseAt("web/package.json"), { ...LOCK, path: "web2/pnpm-lock.yaml" }], "components/pinned"), "risks");
+
+  // A workspace covers only the folders it lists.
+  const npmWorkspace: File = { path: "package.json", content: JSON.stringify({ workspaces: ["apps/*"] }) };
+  const npmLock: File = { path: "package-lock.json", content: JSON.stringify({ packages: { "node_modules/hono": {} } }) };
+  assert.equal(statusOf([npmWorkspace, looseAt("tools/package.json"), npmLock], "components/pinned"), "risks");
+  const pnpmWorkspace: File = { path: "pnpm-workspace.yaml", content: "packages:\n  - 'packages/*'\n  - '!packages/private'\n" };
+  assert.equal(statusOf([pnpmWorkspace, looseAt("examples/x/package.json"), LOCK], "components/pinned"), "risks");
+  assert.equal(statusOf([pnpmWorkspace, looseAt("packages/private/package.json"), LOCK], "components/pinned"), "risks");
+  assert.equal(statusOf([pnpmWorkspace, looseAt("packages/core/package.json"), LOCK], "components/pinned"), "pass");
+  // `*` is one folder; `**` any number.
+  assert.equal(statusOf([pnpmWorkspace, looseAt("packages/core/sub/package.json"), LOCK], "components/pinned"), "risks");
+  const deep: File = { path: "pnpm-workspace.yaml", content: "packages:\n  - examples/**\n" };
+  assert.equal(statusOf([deep, looseAt("examples/a/b/package.json"), LOCK], "components/pinned"), "pass");
+
+  // The nearest lockfile decides: a sub-project's own lockfile, not the workspace's.
+  assert.equal(statusOf([deep, looseAt("examples/a/package.json"), { ...LOCK, path: "examples/a/yarn.lock", content: "hono@^4.13.5:\n  version \"4.13.5\"\n" }, { ...LOCK, content: "" }], "components/pinned"), "pass");
+});
+
+test("a lockfile that cannot vouch for the packages hands the item back", () => {
+  const item = "components/pinned";
+  // Empty, or silent about the package (a stub or a stale lockfile).
+  assert.equal(statusOf([looseAt("package.json"), { ...LOCK, content: "" }], item), "not-applicable");
+  assert.equal(statusOf([looseAt("package.json"), { ...LOCK, content: "lockfileVersion: '9.0'\n" }], item), "not-applicable");
+  // A lockfile that lists only packages whose names contain this one.
+  const neighbours = JSON.stringify({ packages: { "node_modules/hono-router": {}, "node_modules/@hono/node-server": {}, "node_modules/@other/hono": {} } });
+  assert.equal(statusOf([looseAt("package.json"), { path: "package-lock.json", content: neighbours }], item), "not-applicable");
+  // Each lockfile's way of naming a package counts.
+  for (const content of ['"node_modules/hono": {', "hono@^4.13.5:\n", '"hono@^4.13.5":\n', "  /hono@4.13.5:\n", "      hono:\n", '"hono": ["hono@4.13.5"'])
+    assert.equal(statusOf([looseAt("package.json"), { path: "yarn.lock", content }], item), "pass", content);
+  // A workspace whose list of folders cannot be read.
+  const unreadable: File = { path: "pnpm-workspace.yaml", content: "catalog:\n  react: ^19\n" };
+  assert.equal(statusOf([unreadable, looseAt("apps/web/package.json"), LOCK], item), "not-applicable");
+  // A lockfile in a sub-folder that could not be read.
+  const snapshot = snapshotFromFiles([looseAt("app/package.json")], undefined, { unread: ["app/yarn.lock"] });
+  assert.equal(runProjectChecks(snapshot, buildInventory(snapshot)).get(item)?.status, "not-applicable");
+  // `latest` is a range too, and is covered the same way.
+  const latest: File = { path: "package.json", content: JSON.stringify({ dependencies: { hono: "latest" } }) };
+  assert.equal(statusOf([latest, LOCK], item), "pass");
+  assert.equal(statusOf([latest], item), "risks");
+});
+
+test("many package lists without a lockfile are one card, not one each", () => {
+  const files = ["package.json", "a/package.json", "b/package.json"].map(looseAt);
+  const result = outcomes(files).get("components/pinned");
+  assert.equal(result?.status, "risks");
+  assert.equal(result?.status === "risks" && result.risks.length, 1);
+  assert.equal(
+    result?.status === "risks" ? result.risks[0]!.what : "",
+    "3 packages are allowed to update to newer versions on their own (hono, hono, hono; in 3 package lists), and no lockfile (a record of the exact versions installed) is saved with them.",
+  );
+});
+
+test("a lockfile that could not be read hands the item back", () => {
+  const snapshot = snapshotFromFiles([looseAt("package.json")], undefined, { unread: ["bun.lockb"] });
+  const result = runProjectChecks(snapshot, buildInventory(snapshot)).get("components/pinned");
+  assert.equal(result?.status, "not-applicable");
+});
+
 test("a missing lockfile is flagged only when there is a manifest", () => {
   const manifest: File = { path: "package.json", content: "{}" };
   assert.equal(statusOf([manifest], "integrity/lockfile"), "risks");

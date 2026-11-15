@@ -170,6 +170,21 @@ benchmark scores stay in CLAUDE.md.
   `latest`; ShipBrace's own manifests are pinned. The dashboard has "Download as
   Excel" (lazy-loaded, cells made plain text). Newer versions than the spec
   (TypeScript 7, Vite 8 stable, Bun 1.4) were approved by the user.
+- **Version ranges and lockfiles (2026-11-15, `components/pinned`,
+  `lockfileFor`).** A range (`^1.2.3`, `latest`) is not a risk when a
+  lockfile records it: the lockfile in the package list's own folder, or
+  one in a folder above whose workspace (`pnpm-workspace.yaml` `packages:`,
+  or `workspaces` in its package.json) lists that folder (`*` one folder,
+  `**` any depth, `!` excludes). The nearest lockfile decides, and it must
+  name each package whole (`namesPackage`: `react-dom` does not record
+  `react`). Lockfiles that are unread, binary, empty or silent about a
+  package, and workspace lists that cannot be read, hand the item back.
+  Package lists with no lockfile are one card for the project, not one
+  each. Found on keystonejs/keystone (pnpm workspace, 87 package lists):
+  41 cards, all false alarms, now a pass. Practice apps: NodeGoat (has
+  package-lock.json) now passes; Juice Shop's two cards are one; DVNA
+  unchanged. Not changed: `integrity/lockfile` still passes on any
+  lockfile anywhere, even one that covers no package list.
 - **Admin pages and password hashes** (project checks): a route with
   `admin` in its address needs a role-ish guard or an `if` testing the role
   (showing the role in a page does not count); a route that loads user
