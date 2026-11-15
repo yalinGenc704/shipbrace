@@ -212,6 +212,13 @@ benchmark scores stay in CLAUDE.md.
   when two settings share a line, and when written straight into
   `cors(...)` or a const. Held in a variable, `null` on the other side is
   not counted as every site (in config code it usually means no CORS).
+- **Passport's sign-in start is not an open page (2026-11-15,
+  `passportAuthenticateAs`).** A route whose only handler is a name bound
+  once, never written, to passport's `authenticate(...)` (its default or
+  whole import, `require("passport")`, or `new Passport()`) counts as
+  guarded, as a direct `passport.authenticate(...)` handler already did by
+  its name. keystone's `/auth/github` is no longer reported; practice apps
+  unchanged.
 - **Admin pages and password hashes** (project checks): a route with
   `admin` in its address needs a role-ish guard or an `if` testing the role
   (showing the role in a page does not count); a route that loads user
