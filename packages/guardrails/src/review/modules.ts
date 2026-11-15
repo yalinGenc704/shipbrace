@@ -986,6 +986,7 @@ const ITEM_FOR_RULE: Record<string, string> = {
   "ai/prompt-to-action": "injection/ai-instructions",
   "design/unbounded-list": "design/unbounded-lists",
   "auth/permissive-cors": "config/cors",
+  "auth/permissive-cors-option": "config/cors",
   "auth/token-in-localstorage": "auth/session-storage",
   "auth/cookie-readable-by-scripts": "auth/session-storage",
 };
@@ -1018,6 +1019,7 @@ const UNPROVEN_RULES = new Set([
   "integrity/unsafe-decoding",
   "ai/prompt-to-action",
   "design/unbounded-list",
+  "auth/permissive-cors-option",
 ]);
 
 function unprovenFromFinding(finding: Finding): Unproven {

@@ -200,6 +200,18 @@ benchmark scores stay in CLAUDE.md.
   limit, hands the item back. keystonejs/keystone's JWT example (a
   one-hour `maxTokenAge`): risk -> handed back, because one Astro page in
   the repository is unread. Practice apps unchanged.
+- **Every-website CORS inside a choice is a lead (2026-11-15,
+  `auth/permissive-cors-option`, in `UNPROVEN_RULES`).** `origin: true` or
+  `"*"` whose object is directly one side of `a ? {...} : b` is "worth a
+  look", not a risk: a framework translating its user's setting, as
+  keystone's `packages/core/src/schema.ts` does. Stays a risk when the
+  other side also lets every site in (`true`, `"*"`, `undefined` = the
+  cors default, a nested choice with such a side; handed straight to
+  `cors()`, also `null` or a setting with no origin), when the condition
+  names an environment (production, development, test, `NODE_ENV`...),
+  when two settings share a line, and when written straight into
+  `cors(...)` or a const. Held in a variable, `null` on the other side is
+  not counted as every site (in config code it usually means no CORS).
 - **Admin pages and password hashes** (project checks): a route with
   `admin` in its address needs a role-ish guard or an `if` testing the role
   (showing the role in a page does not count); a route that loads user

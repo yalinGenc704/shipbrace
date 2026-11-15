@@ -97,6 +97,44 @@ test("a Supabase import in real code still makes it a Supabase app", () => {
 
 // --- Rules that read line by line -------------------------------------------------
 
+test("an every-website setting that is one side of a choice is worth a look, not a risk", async () => {
+  const cors = (code: string) => ruleIds("server/index.ts", code).filter((id) => id.startsWith("auth/permissive-cors"));
+  // A framework translating its user's setting: which side runs is not in the code.
+  const choice = "const options = config.cors === true ? { origin: true, credentials: true } : config.cors ?? null;";
+  assert.deepEqual(cors(choice), ["auth/permissive-cors-option"]);
+  assert.deepEqual(cors('const options = wide ? { origin: "*" } : { origin: allowed };'), ["auth/permissive-cors-option"]);
+  assert.deepEqual(cors("app.use(cors(open ? { origin: true } : { origin: allowed }));"), ["auth/permissive-cors-option"]);
+  // Written straight in, or held in one name, it is the risk it always was.
+  assert.deepEqual(cors("app.use(cors({ origin: true, credentials: true }));"), ["auth/permissive-cors"]);
+  assert.deepEqual(cors("const options = { origin: true, credentials: true };\napp.use(cors(options));"), ["auth/permissive-cors"]);
+  // Still a risk: both sides let every website in, nothing on the other side
+  // (the cors default), the choice is on the live site, or two settings share a line.
+  assert.deepEqual(cors('app.use(cors(ok ? { origin: "*" } : { origin: true, credentials: true }));'), ["auth/permissive-cors"]);
+  assert.deepEqual(cors("const o = on ? { origin: true } : undefined;"), ["auth/permissive-cors"]);
+  assert.deepEqual(cors("const o = a ? { origin: true } : b ? null : { origin: '*' };"), ["auth/permissive-cors"]);
+  assert.deepEqual(cors('const o = process.env.NODE_ENV === "production" ? { origin: true } : { origin: allowed };'), ["auth/permissive-cors"]);
+  assert.deepEqual(cors("const o = c ? { origin: true } : { origin: list }; app.use(cors({ origin: true }));"), ["auth/permissive-cors"]);
+  // Any environment choice, negated or not, and cors()'s own default on the other side.
+  for (const code of [
+    'const o = isDev ? { origin: "*" } : { origin: allowed };',
+    'const o = process.env.NODE_ENV !== "development" ? { origin: true } : { origin: allowed };',
+    "app.use(cors(on ? { origin: true } : null));",
+    "app.use(cors(on ? { origin: true } : { credentials: true }));",
+    "const o = on ? { origin: true } : { ...defaults };",
+  ]) {
+    assert.deepEqual(cors(code), ["auth/permissive-cors"], code);
+  }
+  // A choice nested deeper (an object inside the chosen object) is not the chosen setting itself.
+  assert.deepEqual(cors("const o = on ? { cors: { origin: true } } : {};"), ["auth/permissive-cors"]);
+
+  // In the report: a lead under the CORS item, never counted as a risk.
+  const review = await runSecurityReview(snapshotFromFiles([{ path: "server/index.ts", content: choice }]));
+  const item = review.modules.flatMap((m) => m.items).find((i) => i.id === "config/cors");
+  assert.equal(item?.risks.length, 0);
+  assert.equal(item?.unproven.length, 1);
+  assert.equal(item?.status, "needs-your-review");
+});
+
 test("advice that mentions origin: true is not a CORS setting; the setting itself is", () => {
   const advice = 'const detail = "Replace the CORS wildcard (`*` / `origin: true`) with a list of your sites.";';
   assert.deepEqual(ruleIds("src/rules.ts", advice).filter((id) => id === "auth/permissive-cors"), []);
