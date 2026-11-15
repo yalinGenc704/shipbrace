@@ -83,3 +83,16 @@ test("a known false alarm that is fixed comes off the list", async () => {
     }
   }
 });
+
+test("pages: an open page is never cleared, a protected page is never reported, and unclear ones go back", async () => {
+  // Setup item 10 (2026-11-15): steps before a page, read in order and across
+  // files. Graded apart from the operations, so their scores keep their meaning.
+  for (const mode of ["rules", "perfect"] as const) {
+    const { pages } = await grade(CASES, mode);
+    const wrong = pages.outcomes.filter((o) => o.got !== o.entry.expect).map((o) => `${o.caseId}:${o.entry.marker} expected ${o.entry.expect}, got ${o.got}`);
+    assert.deepEqual(wrong, [], `${mode}: pages graded wrongly`);
+    assert.deepEqual(pages.unexpected.map((u) => u.caseId), [], `${mode}: an unmarked page reported open`);
+    const count = (expect: string) => pages.outcomes.filter((o) => o.entry.expect === expect).length;
+    assert.ok(count("open") >= 12 && count("protected") >= 14 && count("unsure") >= 11, `${mode}: page cases went missing`);
+  }
+});

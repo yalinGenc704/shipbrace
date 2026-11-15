@@ -6,7 +6,7 @@ import { verifyClaim, verifyOwnership } from "../src/analysis/verify.ts";
 import type { Risk } from "../src/review/modules.ts";
 import { runSecurityReview, type ReviewOptions } from "../src/review/pipeline.ts";
 import { snapshotFromFiles } from "../src/snapshot.ts";
-import type { BenchCase, KeyEntry } from "./cases.ts";
+import type { BenchCase, KeyEntry, PageEntry } from "./cases.ts";
 
 /**
  * Grades the review against the answer key.
@@ -51,6 +51,13 @@ export interface Outcome {
   suggested?: boolean;
 }
 
+/** What the open-page check said about one marked page. */
+export interface PageOutcome {
+  caseId: string;
+  entry: PageEntry;
+  got: PageEntry["expect"];
+}
+
 export interface Unexpected {
   caseId: string;
   risk: Pick<Risk, "id" | "what">;
@@ -66,6 +73,12 @@ export interface Score {
   proposals: { made: number; confirmed: number };
   /** Cases where the model declined, with its stated reason. */
   refusals: Array<{ caseId: string; reason: string }>;
+  /**
+   * Pages graded by the open-page check (setup item 10), kept apart so the
+   * operation scores above mean what they always meant. `unexpected` counts
+   * open-page reports on unmarked routes in those cases.
+   */
+  pages: { total: number; right: number; outcomes: PageOutcome[]; unexpected: Unexpected[] };
 }
 
 /** Lines carrying each `// [X]` marker, so the key can name lines without numbers. */
@@ -81,7 +94,7 @@ function markerLines(benchCase: BenchCase): Map<string, { path: string; line: nu
       }
     });
   }
-  for (const entry of benchCase.key) {
+  for (const entry of [...benchCase.key, ...(benchCase.pages ?? [])]) {
     if (!found.has(entry.marker)) {
       throw new Error(`${benchCase.id}: key names [${entry.marker}] but no line carries it`);
     }
@@ -228,7 +241,35 @@ async function gradeCase(
     .filter((r) => !marked.some((where) => at(r, where)))
     .map((r) => ({ caseId: benchCase.id, risk: { id: r.id, what: r.what } }));
 
+  // Pages: reported open (a risk on the route's line), handed back (a
+  // "could not tell" lead naming the page), or left alone as protected.
+  const pageItem = review.modules.flatMap((m) => m.items).find((i) => i.id === "access-control/unguarded-routes");
+  const openRisks = pageItem?.risks ?? [];
+  const pageOutcomes: PageOutcome[] = (benchCase.pages ?? []).map((entry) => {
+    const where = lines.get(entry.marker)!;
+    const door = inventory.doors.find((d) => d.location.path === where.path && d.location.line === where.line);
+    // A marker on a line that is not a route would grade as "protected" for nothing.
+    if (!door) throw new Error(`${benchCase.id}: page [${entry.marker}] is not on a route the checker reads`);
+    const named = door ? `${door.method} ${door.path}` : "";
+    const got: PageEntry["expect"] = openRisks.some((r) => at(r, where))
+      ? "open"
+      : (pageItem?.unproven ?? []).some((l) => l.id.startsWith("access-control/sign-in-unclear") && (l.checkDetail ?? "").includes(named))
+        ? "unsure"
+        : "protected";
+    return { caseId: benchCase.id, entry, got };
+  });
+  const pageLines = (benchCase.pages ?? []).map((p) => lines.get(p.marker)!);
+  const pageUnexpected = benchCase.pages
+    ? openRisks.filter((r) => !pageLines.some((where) => at(r, where))).map((r) => ({ caseId: benchCase.id, risk: { id: r.id, what: r.what } }))
+    : [];
+
   return {
+    pages: {
+      total: pageOutcomes.length,
+      right: pageOutcomes.filter((o) => o.got === o.entry.expect).length,
+      outcomes: pageOutcomes,
+      unexpected: pageUnexpected,
+    },
     real: {
       total: outcomes.filter((o) => o.entry.real).length,
       found: outcomes.filter((o) => o.entry.real && o.reported).length,
@@ -262,6 +303,7 @@ export async function grade(
     unexpected: [],
     proposals: { made: 0, confirmed: 0 },
     refusals: [],
+    pages: { total: 0, right: 0, outcomes: [], unexpected: [] },
   };
 
   for (const benchCase of cases) {
@@ -279,6 +321,10 @@ export async function grade(
     score.proposals.made += result.proposals.made;
     score.proposals.confirmed += result.proposals.confirmed;
     score.refusals.push(...result.refusals);
+    score.pages.total += result.pages.total;
+    score.pages.right += result.pages.right;
+    score.pages.outcomes.push(...result.pages.outcomes);
+    score.pages.unexpected.push(...result.pages.unexpected);
   }
   return score;
 }
