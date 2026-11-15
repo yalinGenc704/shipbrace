@@ -135,14 +135,16 @@ node --experimental-strip-types --env-file=.env scripts/simulate.ts <folder>
 `GITHUB_PRIVATE_KEY_PATH`, `GITHUB_WEBHOOK_SECRET`), `DATABASE_URL`
 (`postgres:///shipbrace` here; no password over the local socket) and, while a
 tunnel is open, `PUBLIC_URL` (its address, for links in checks); the App's key file is
-`github-app.pem`. All are git-ignored and must stay that way: on a new machine
-they are recreated, never copied through chat or GitHub. Never print their
-values. `GITHUB_PRIVATE_KEY_PATH` must be absolute: the server resolves it from
+`github-app.pem`. All are git-ignored and must stay that way. Recreate them
+on a new machine instead of copying them through chat or GitHub, and don't
+print their values: the repository is public and session logs are kept.
+`GITHUB_PRIVATE_KEY_PATH` must be absolute: the server resolves it from
 wherever it starts, which is `server/` under `npm start --workspace`. Prepaid
 credits with auto-reload off, so it cannot overspend.
 
 The practice apps used for outside validation are not in this repository;
-re-clone them read-only (never install or run them) into `~/shipbrace-test-repos`:
+re-clone them read-only, without installing or running them (they are
+deliberately vulnerable apps), into `~/shipbrace-test-repos`:
 appsecco/dvna, OWASP/NodeGoat, juice-shop/juice-shop. To review one through
 the server with the AI step, start it with an extra `--env-file` that sets
 `REVIEW_ROOT` to that folder and `AI_REVIEW=on`.
@@ -265,21 +267,22 @@ What each hook, skill and sub-agent does, and the outside tools evaluated,
 are in `docs/claude-code-tools.md`. What always applies:
 
 - `protect-secrets.sh` blocks Read/Edit/Write of `.env`, `.env.*`,
-  `.dev.vars*` and `*.pem` (not `*.example`). Shell commands are not
-  covered by the secret hook; the rule "never print secret values" still
-  applies there.
+  `.dev.vars*` and `*.pem` (not `*.example`). On Murat's Mac, deny rules
+  and the sandbox in `~/.claude/settings.json` (outside the repository)
+  cover shell commands too, in every session there.
 - **Rule since 2026-10-21:** every change to ShipBrace's own service
   (`cloud/`, `server/`, `app/`, `deploy/`, `Dockerfile`) gets a
   `security-auditor` pass scoped to the changed files before it is
   committed, and a full audit runs before opening up to other users.
   Checker changes (`packages/guardrails`) get `conventions-reviewer`
   instead. In a session opened from the parent folder, project agents do not
-  load: give a general-purpose agent the agent file to follow.
+  load: give a general-purpose agent the agent file to follow, on the
+  model it names.
 
 **Outside tools** were evaluated on 2026-10-18; the verdicts and reasons
 are in `docs/claude-code-tools.md`. Two still apply: run Fallow only on
-demand as `npx fallow@3.34.1` and never use its auto-fix (it lists
-`Reviewer.claim`, which enforces "each outside step once", as unused); and
+demand as `npx fallow@3.34.1` and don't use its auto-fix: it lists
+`Reviewer.claim`, which enforces "each outside step once", as unused; and
 read any skill from outside the Anthropic Directory before installing it.
 
 ## Roadmap

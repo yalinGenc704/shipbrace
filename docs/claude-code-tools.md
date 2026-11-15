@@ -10,8 +10,10 @@ opened from the parent folder, outside tools) stay in CLAUDE.md.
   `protect-secrets.sh` blocks Read/Edit/Write of `.env`, `.env.*`,
   `.dev.vars*` and `*.pem` (not `*.example`); `lint-edited.sh` runs
   `oxlint --deny-warnings` on each edited `.ts/.tsx/.js/.mjs` file and hands
-  problems back. Shell commands are not covered by the secret hook; the rule
-  "never print secret values" still applies there.
+  problems back. Shell commands are not covered by the secret hook; on
+  Murat's Mac, deny rules and the sandbox in `~/.claude/settings.json`
+  (outside the repository) cover them, and CLAUDE.md's "don't print their
+  values" applies everywhere.
 - **Skill** `/ship` (`.claude/skills/ship/`): user-only. Checks a clean,
   pushed tree, runs typecheck, lint, tests and the benchmark, applies pending
   D1 migrations, deploys, then checks the live site (health, sign-in, CSP,
@@ -25,8 +27,9 @@ opened from the parent folder, outside tools) stay in CLAUDE.md.
   does. First run 2026-10-18.
 - **Sub-agent** `conventions-reviewer` (`.claude/agents/`, added 2026-10-20):
   checks a finished change against the load-bearing conventions in CLAUDE.md and
-  runs typecheck, lint, tests and the benchmark (never with `--model`). It
-  reads and runs checks only; use it before committing checker changes.
+  runs typecheck, lint, tests and the benchmark (without `--model`, which
+  spends credit). It reads and runs checks only; use it before committing
+  checker changes. It runs on Sonnet (`model: sonnet`, since 2026-11-14).
 - **Planned:** the Cloudflare Observability MCP server, when live debugging
   is needed.
 
