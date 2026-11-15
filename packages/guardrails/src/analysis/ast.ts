@@ -245,21 +245,28 @@ export function codeOnly(file: SourceFile): string {
         }
       }
     });
-    // Rebuilt piece by piece; offsets are UTF-16 units, as string indexes are.
-    ranges.sort((a, b) => a.start - b.start);
-    const pieces: string[] = [];
-    let at = 0;
-    for (const { start, end } of ranges) {
-      if (end <= at) continue;
-      const from = Math.max(start, at);
-      pieces.push(text.slice(at, from), text.slice(from, end).replace(/[^\r\n]/g, " "));
-      at = end;
-    }
-    pieces.push(text.slice(at));
-    text = pieces.join("");
+    text = blanked(text, ranges);
   }
   codeOnlyCache.set(file, text);
   return text;
+}
+
+/**
+ * The text with each range turned to spaces, line breaks kept, so offsets and
+ * line numbers still match the original. Ranges may overlap and come in any
+ * order. Rebuilt piece by piece; offsets are UTF-16 units, as string indexes are.
+ */
+function blanked(text: string, ranges: ReadonlyArray<{ start: number; end: number }>): string {
+  const pieces: string[] = [];
+  let at = 0;
+  for (const { start, end } of [...ranges].sort((a, b) => a.start - b.start)) {
+    if (end <= at) continue;
+    const from = Math.max(start, at);
+    pieces.push(text.slice(at, from), text.slice(from, end).replace(/[^\r\n]/g, " "));
+    at = end;
+  }
+  pieces.push(text.slice(at));
+  return pieces.join("");
 }
 
 const codeOnlyCache = new WeakMap<SourceFile, string>();
@@ -274,19 +281,7 @@ export function withoutComments(file: SourceFile): string {
   const cached = withoutCommentsCache.get(file);
   if (cached !== undefined) return cached;
   const parsed = parseFile(file);
-  let text = file.content;
-  if (parsed) {
-    const pieces: string[] = [];
-    let at = 0;
-    for (const { start, end } of [...parsed.comments].sort((a, b) => a.start - b.start)) {
-      if (end <= at) continue;
-      const from = Math.max(start, at);
-      pieces.push(text.slice(at, from), text.slice(from, end).replace(/[^\r\n]/g, " "));
-      at = end;
-    }
-    pieces.push(text.slice(at));
-    text = pieces.join("");
-  }
+  const text = parsed ? blanked(file.content, parsed.comments) : file.content;
   withoutCommentsCache.set(file, text);
   return text;
 }

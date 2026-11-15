@@ -1,6 +1,6 @@
 import type { RepoSnapshot } from "@shipbrace/guardrails";
 import { snapshotFromFiles } from "@shipbrace/guardrails/snapshot";
-import { DEFAULT_LIMITS, LOCKFILE, looksBinary, SKIP_DIR, wanted, type IngestLimits } from "../files.ts";
+import { DEFAULT_LIMITS, looksBinary, sizeCap, SKIP_DIR, wanted, type IngestLimits } from "../files.ts";
 import type { GitHubClient } from "./client.ts";
 
 /**
@@ -97,10 +97,7 @@ export async function fetchRepository(
       continue;
     }
     const size = entry.size ?? 0;
-    const cap = LOCKFILE.test(name)
-      ? Math.max(limits.maxFileBytes, limits.maxLockfileBytes ?? 0)
-      : limits.maxFileBytes;
-    if (size > cap) {
+    if (size > sizeCap(name, limits)) {
       skipped.tooLarge++;
       unread.push(entry.path);
       continue;

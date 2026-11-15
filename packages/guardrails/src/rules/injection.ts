@@ -1,7 +1,7 @@
 import { findSinksInFile } from "../analysis/inventory-ast.ts";
 import type { SinkKind } from "../analysis/inventory.ts";
 import type { Confidence, Finding, Rule, Severity } from "../types.ts";
-import { isSource, isTestPath } from "../util.ts";
+import { isAppSource } from "../util.ts";
 
 /**
  * Dangerous operations, found by parsing rather than by matching text.
@@ -107,7 +107,7 @@ const unsafeSinks: Rule = {
   id: "injection/unsafe-sink",
   category: "injection",
   severity: "critical",
-  appliesTo: (path) => isSource(path) && !isTestPath(path),
+  appliesTo: isAppSource,
 
   check(file) {
     const findings: Finding[] = [];

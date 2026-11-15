@@ -1,6 +1,6 @@
 import type { Finding, Rule, SourceFile } from "../types.ts";
 import { codeOnlyLines, dottedName, isStringLiteral, locationOf, parseFile, textOf, walk, type Node } from "../analysis/ast.ts";
-import { isSource, isTestPath, locate, scanLines, type LineHit } from "../util.ts";
+import { isAppSource, locate, scanLines, type LineHit } from "../util.ts";
 
 /**
  * Lines where `re` matches real code, not a comment or a sentence in quotes.
@@ -25,7 +25,7 @@ const permissiveCors: Rule = {
   id: "auth/permissive-cors",
   category: "auth",
   severity: "high",
-  appliesTo: (p) => isSource(p) && !isTestPath(p),
+  appliesTo: isAppSource,
 
   check(file) {
     const re = /origin\s*:\s*(['"`]\*['"`]|true)|Access-Control-Allow-Origin['"`]?\s*[,:]\s*['"`]\*/;
@@ -139,7 +139,7 @@ const tokenInLocalStorage: Rule = {
   id: "auth/token-in-localstorage",
   category: "auth",
   severity: "high",
-  appliesTo: (p) => isSource(p) && !isTestPath(p),
+  appliesTo: isAppSource,
 
   check(file) {
     const re = /localStorage\.setItem\(\s*['"`][^'"`]*(token|jwt|auth|session|refresh)[^'"`]*['"`]/i;
@@ -177,7 +177,7 @@ const loginCookieReadable: Rule = {
   id: "auth/cookie-readable-by-scripts",
   category: "auth",
   severity: "high",
-  appliesTo: (p) => isSource(p) && !isTestPath(p),
+  appliesTo: isAppSource,
 
   check(file) {
     if (!/cookie/i.test(file.content)) return [];
@@ -236,7 +236,7 @@ const weakJwtSecret: Rule = {
   id: "auth/default-jwt-secret",
   category: "auth",
   severity: "critical",
-  appliesTo: (p) => isSource(p) && !isTestPath(p),
+  appliesTo: isAppSource,
 
   check(file) {
     // JWT_SECRET read from env with a hardcoded `||` / `??` fallback.

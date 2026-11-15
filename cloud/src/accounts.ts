@@ -145,6 +145,23 @@ export function networkOf(address: string | undefined): string {
 const addressOf = (c: { req: { header: (name: string) => string | undefined } }) =>
   networkOf(c.req.header("cf-connecting-ip"));
 
+/**
+ * The repositories this person administers (GitHub ids, at most 90 from 10
+ * installations), and the piece of a query that limits it to reviews in
+ * them: one `?` per id, to be bound in order. With none it matches nothing.
+ */
+async function adminRepos(token: string): Promise<{ adminOf: number[]; inAdminRepos: string }> {
+  const installations = (await userInstallations(token)).slice(0, 10);
+  const adminOf = (await Promise.all(installations.map(({ id }) => installationRepos(token, id))))
+    .flat()
+    .filter((r) => r.admin)
+    .map((r) => r.githubId)
+    .slice(0, 90);
+  const inAdminRepos =
+    adminOf.length > 0 ? `repository_id IN (SELECT id FROM repositories WHERE github_id IN (${adminOf.map(() => "?").join(",")}))` : "0";
+  return { adminOf, inAdminRepos };
+}
+
 export function accountRoutes() {
   const app = new Hono<{ Bindings: Env; Variables: { session: Session } }>();
 
@@ -256,15 +273,9 @@ export function accountRoutes() {
       return c.json({ error: "GitHub did not answer, so nothing was deleted. Please try again in a moment." }, 502);
     }
 
-    const installations = (await userInstallations(session.token)).slice(0, 10);
-    const adminOf = (await Promise.all(installations.map(({ id }) => installationRepos(session.token, id))))
-      .flat()
-      .filter((r) => r.admin)
-      .map((r) => r.githubId)
-      .slice(0, 90);
-    const inAdminRepos = `repository_id IN (SELECT id FROM repositories WHERE github_id IN (${adminOf.map(() => "?").join(",")}))`;
+    const { adminOf, inAdminRepos } = await adminRepos(session.token);
     const [deleted] = await c.env.DB.batch([
-      c.env.DB.prepare(`DELETE FROM reviews WHERE ran_by = ? AND ${adminOf.length > 0 ? inAdminRepos : "0"}`).bind(session.githubId, ...adminOf),
+      c.env.DB.prepare(`DELETE FROM reviews WHERE ran_by = ? AND ${inAdminRepos}`).bind(session.githubId, ...adminOf),
       c.env.DB.prepare("UPDATE reviews SET ran_by = NULL WHERE ran_by = ?").bind(session.githubId),
       c.env.DB.prepare("UPDATE installations SET set_up_by = NULL WHERE set_up_by = ?").bind(session.githubId),
       c.env.DB.prepare("UPDATE repo_settings SET changed_by = NULL WHERE changed_by = ?").bind(session.githubId),
@@ -601,17 +612,11 @@ export function accountRoutes() {
    */
   app.post("/api/history/clear-mine", async (c) => {
     const session = c.get("session");
-    const installations = (await userInstallations(session.token)).slice(0, 10);
-    const adminOf = (await Promise.all(installations.map(({ id }) => installationRepos(session.token, id))))
-      .flat()
-      .filter((r) => r.admin)
-      .map((r) => r.githubId)
-      .slice(0, 90);
-    const inAdminRepos = `repository_id IN (SELECT id FROM repositories WHERE github_id IN (${adminOf.map(() => "?").join(",")}))`;
+    const { adminOf, inAdminRepos } = await adminRepos(session.token);
     const [deleted, hidden] = await c.env.DB.batch([
       // In their own repositories this includes reports kept before 2026-10-18,
       // when who started a review was not yet recorded: an admin owns those too.
-      c.env.DB.prepare(`DELETE FROM reviews WHERE (ran_by = ? OR ran_by IS NULL) AND ${adminOf.length > 0 ? inAdminRepos : "0"}`)
+      c.env.DB.prepare(`DELETE FROM reviews WHERE (ran_by = ? OR ran_by IS NULL) AND ${inAdminRepos}`)
         .bind(session.githubId, ...adminOf),
       c.env.DB.prepare("UPDATE reviews SET ran_by = NULL WHERE ran_by = ?").bind(session.githubId),
       // Why a review stopped, in fixed words: theirs, and in their own

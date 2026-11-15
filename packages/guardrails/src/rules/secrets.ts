@@ -1,5 +1,5 @@
 import type { Finding, Rule } from "../types.ts";
-import { isExampleEnv, isSource, isTestPath, locate, scanLines } from "../util.ts";
+import { isAppSource, isExampleEnv, isSource, isTestPath, locate, scanLines } from "../util.ts";
 
 /**
  * Provider-issued credentials have recognisable shapes. Matching the shape
@@ -186,7 +186,7 @@ const secretInClientBundle: Rule = {
   id: "secrets/client-exposed-env",
   category: "secrets",
   severity: "critical",
-  appliesTo: (p) => isSource(p) && !isTestPath(p),
+  appliesTo: isAppSource,
 
   check(file) {
     if (SERVER_SIDE.test(file.path) && !/^\s*["']use client["']/m.test(file.content)) return [];

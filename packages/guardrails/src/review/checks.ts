@@ -3,7 +3,7 @@ import type { Inventory } from "../analysis/inventory.ts";
 import { modelFields } from "../analysis/schemas.ts";
 import { COMPOSE, dependencyNames, fileChecks, outOfSight } from "./project-files.ts";
 import type { CodeLocation, RepoSnapshot, SourceFile } from "../types.ts";
-import { isSource, isTestPath, redact } from "../util.ts";
+import { isAppSource, isSource, isTestPath, redact } from "../util.ts";
 import { pageName, upperFirst, type Grade, type Risk } from "./modules.ts";
 
 /**
@@ -108,7 +108,7 @@ const hasAccounts = (snapshot: RepoSnapshot): boolean =>
   snapshot.files.some((f) => !isTestPath(f.path) && ACCOUNT_HINT.test(f.content));
 
 const sourceFiles = (snapshot: RepoSnapshot): SourceFile[] =>
-  snapshot.files.filter((f) => isSource(f.path) && !isTestPath(f.path));
+  snapshot.files.filter((f) => isAppSource(f.path));
 
 const fileNamed = (snapshot: RepoSnapshot, re: RegExp): SourceFile | undefined =>
   snapshot.files.find((f) => re.test(f.path));
@@ -825,10 +825,7 @@ const xmlLibraries: ProjectCheck = {
   itemId: "injection/xml-entities",
 
   run(snapshot) {
-    const others = [...snapshot.manifests.values()].flatMap((m) =>
-      Object.keys({ ...(m.dependencies as object | undefined), ...(m.devDependencies as object | undefined) })
-        .filter((name) => OTHER_XML.test(name))
-    );
+    const others = dependencyNames(snapshot).filter((name) => OTHER_XML.test(name));
     if (others.length === 0) return { status: "pass" };
     return {
       status: "not-applicable",
@@ -852,10 +849,7 @@ const aiLibraries: ProjectCheck = {
   itemId: "injection/ai-instructions",
 
   run(snapshot) {
-    const uses = [...snapshot.manifests.values()].some((m) =>
-      Object.keys({ ...(m.dependencies as object | undefined), ...(m.devDependencies as object | undefined) })
-        .some((name) => AI_LIBRARY.test(name))
-    );
+    const uses = dependencyNames(snapshot).some((name) => AI_LIBRARY.test(name));
     if (uses) return { status: "pass" };
     // An app can call an AI service directly over the web. Only when nothing
     // in the code names one is the item said not to apply.
@@ -863,10 +857,7 @@ const aiLibraries: ProjectCheck = {
     // claimed when none of them shows up anywhere.
     const AI_HINT = /openai|anthropic|claude|gemini|generativelanguage|mistral|groq|cohere|bedrock|ollama|replicate|huggingface|openrouter|together-ai|deepseek|langchain|llamaindex|ai-sdk|\bllm\b|chat\/completions|messages\.create|generateText|streamText/i;
     const mentionsAi =
-      [...snapshot.manifests.values()].some((m) =>
-        Object.keys({ ...(m.dependencies as object | undefined), ...(m.devDependencies as object | undefined) })
-          .some((name) => AI_HINT.test(name))
-      ) || anyMatch(sourceFiles(snapshot), AI_HINT);
+      dependencyNames(snapshot).some((name) => AI_HINT.test(name)) || anyMatch(sourceFiles(snapshot), AI_HINT);
     return mentionsAi
       ? {
         status: "not-applicable",

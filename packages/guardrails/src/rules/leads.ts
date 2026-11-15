@@ -1,6 +1,6 @@
 import { dottedName, identifiersIn, isStringLiteral, parseFile, walk, type Node } from "../analysis/ast.ts";
 import type { Finding, Rule, SourceFile } from "../types.ts";
-import { isSource, isTestPath } from "../util.ts";
+import { isAppSource } from "../util.ts";
 
 /**
  * Two "worth a look" rules. Both describe a shape in the code that is often a
@@ -61,7 +61,7 @@ const promptToAction: Rule = {
   id: "ai/prompt-to-action",
   category: "injection",
   severity: "high",
-  appliesTo: (p) => isSource(p) && !isTestPath(p),
+  appliesTo: isAppSource,
 
   check(file) {
     if (!/anthropic|openai|generateText|streamText|generateObject|gemini|genai|langchain|\.invoke\(|messages\.create/i.test(file.content)) return [];
@@ -143,7 +143,7 @@ const unboundedList: Rule = {
   id: "design/unbounded-list",
   category: "architecture",
   severity: "medium",
-  appliesTo: (p) => isSource(p) && !isTestPath(p),
+  appliesTo: isAppSource,
 
   check(file) {
     if (!/json|send/.test(file.content)) return [];

@@ -1,6 +1,6 @@
 import { redact } from "../util.ts";
 import type { CleanerJudge, CleanerQuestion, CleanerVerdict } from "./cleaners.ts";
-import { ProposerRefusedError } from "./proposer.ts";
+import { answerText, askForJson, type AnthropicLike } from "./proposer.ts";
 
 /**
  * The Claude-backed cleaner judge (2026-11-10; an optional step).
@@ -134,19 +134,8 @@ export interface ClaudeCleanerJudgeOptions {
   onUsage?: (usage: { input_tokens: number; output_tokens: number }) => void;
 }
 
-/** Minimal structural type for the Anthropic client, like the proposer's. */
-export interface AnthropicJudgeClient {
-  messages: {
-    stream(params: Record<string, unknown>): {
-      finalMessage(): Promise<{
-        stop_reason?: string | null;
-        stop_details?: { explanation?: string } | null;
-        content: Array<{ type: string; text?: string }>;
-        usage?: { input_tokens: number; output_tokens: number };
-      }>;
-    };
-  };
-}
+/** Minimal structural type for the Anthropic client: the proposer's. */
+export type AnthropicJudgeClient = AnthropicLike;
 
 export function createClaudeCleanerJudge(
   client: AnthropicJudgeClient,
@@ -168,29 +157,11 @@ export function createClaudeCleanerJudge(
       const asked = parseQuestions(Array.isArray(questions) ? questions.slice(0, maxQuestions) : questions);
       if (!asked) throw new Error("cleaner questions were not in the expected shape; nothing was sent");
 
-      const message = await client.messages.stream({
-        model,
-        max_tokens: 16000,
-        system: SYSTEM_PROMPT,
-        thinking: { type: "adaptive" },
-        output_config: {
-          effort,
-          format: { type: "json_schema", schema: VERDICT_SCHEMA },
-        },
-        messages: [{ role: "user", content: render(asked) }],
-      }).finalMessage();
+      const message = await askForJson(client, { model, effort, system: SYSTEM_PROMPT, schema: VERDICT_SCHEMA, content: render(asked) });
 
       if (message.usage) options.onUsage?.(message.usage);
-      // A decline is not "every cleaner works"; the caller keeps the rules' answer.
-      if (message.stop_reason === "refusal") {
-        throw new ProposerRefusedError(message.stop_details?.explanation ?? "refused");
-      }
-
-      const text = message.content
-        .filter((block): block is { type: "text"; text: string } => block.type === "text")
-        .map((block) => block.text)
-        .join("");
-      return parseVerdicts(text, new Set(asked.map((q) => q.id)));
+      // A decline throws here; the caller keeps the rules' answer.
+      return parseVerdicts(answerText(message), new Set(asked.map((q) => q.id)));
     },
   };
 }

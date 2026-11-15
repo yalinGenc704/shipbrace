@@ -76,7 +76,8 @@ interface Scope {
   assignments: Assignment[];
 }
 
-function positionOf(id: string): number {
+/** Where in its file an inventory entry sits: the offset its id ends with. */
+export function positionOf(id: string): number {
   const parsed = Number(id.split(":").pop());
   return Number.isFinite(parsed) ? parsed : 0;
 }

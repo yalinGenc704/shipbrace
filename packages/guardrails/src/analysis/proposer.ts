@@ -144,34 +144,51 @@ export function createClaudeProposer(
     name: `claude:${model}`,
 
     async propose(context) {
-      const stream = client.messages.stream({
+      const message = await askForJson(client, {
         model,
-        max_tokens: 16000,
+        effort,
         system: SYSTEM_PROMPT,
-        thinking: { type: "adaptive" },
-        output_config: {
-          effort,
-          format: { type: "json_schema", schema: PROPOSAL_SCHEMA },
-        },
-        messages: [{ role: "user", content: renderContext(context, maxProposals) }],
+        schema: PROPOSAL_SCHEMA,
+        content: renderContext(context, maxProposals),
       });
-
-      const message = await stream.finalMessage();
-
-      // A safety decline is not an analysis result. Returning [] would read as
-      // "no attacks found", which is the opposite of what happened.
-      if (message.stop_reason === "refusal") {
-        throw new ProposerRefusedError(message.stop_details?.explanation ?? "refused");
-      }
-
-      const text = message.content
-        .filter((block): block is { type: "text"; text: string } => block.type === "text")
-        .map((block) => block.text)
-        .join("");
-
-      return parseProposals(text);
+      return parseProposals(answerText(message));
     },
   };
+}
+
+type ModelMessage = Awaited<ReturnType<ReturnType<AnthropicLike["messages"]["stream"]>["finalMessage"]>>;
+
+/** One question to Claude, to be answered as JSON in the given shape. Shared by every step that asks a model. */
+export function askForJson(
+  client: AnthropicLike,
+  request: { model: string; effort: string; system: string; schema: object; content: string },
+): Promise<ModelMessage> {
+  return client.messages.stream({
+    model: request.model,
+    max_tokens: 16000,
+    system: request.system,
+    thinking: { type: "adaptive" },
+    output_config: {
+      effort: request.effort,
+      format: { type: "json_schema", schema: request.schema },
+    },
+    messages: [{ role: "user", content: request.content }],
+  }).finalMessage();
+}
+
+/**
+ * The text of the model's answer. A safety decline is not an answer: it
+ * throws, because an empty result would read as "nothing found" (or "every
+ * cleaner works"), which is the opposite of what happened.
+ */
+export function answerText(message: ModelMessage): string {
+  if (message.stop_reason === "refusal") {
+    throw new ProposerRefusedError(message.stop_details?.explanation ?? "refused");
+  }
+  return message.content
+    .filter((block): block is { type: "text"; text: string } => block.type === "text")
+    .map((block) => block.text)
+    .join("");
 }
 
 export class ProposerRefusedError extends Error {
@@ -245,6 +262,7 @@ export interface AnthropicLike {
         stop_reason?: string | null;
         stop_details?: { explanation?: string } | null;
         content: Array<{ type: string; text?: string }>;
+        usage?: { input_tokens: number; output_tokens: number };
       }>;
     };
   };

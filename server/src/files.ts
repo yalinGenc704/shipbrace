@@ -24,6 +24,10 @@ export const DEFAULT_LIMITS: IngestLimits = {
 
 export const LOCKFILE = /^(?:package-lock\.json|bun\.lock|pnpm-lock\.yaml|yarn\.lock)$/;
 
+/** The largest size at which a file with this name is still read: lockfiles get the higher cap. */
+export const sizeCap = (name: string, limits: IngestLimits): number =>
+  LOCKFILE.test(name) ? Math.max(limits.maxFileBytes, limits.maxLockfileBytes ?? 0) : limits.maxFileBytes;
+
 /** Directories never worth reading, and large enough to dominate a walk. */
 export const SKIP_DIR =
   /^(node_modules|\.git|dist|build|coverage|\.next|\.turbo|\.cache|vendor|__pycache__)$/;
