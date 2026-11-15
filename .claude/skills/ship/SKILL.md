@@ -14,9 +14,12 @@ never deploy past a failing check.
 
 ## 1. Before deploying
 
-1. `git status --short` must be empty, and the branch must not be behind
-   `origin/master`. Deploy only what is committed, so the live site always
-   matches a commit.
+1. Deploy only from `master`, after its pull request is merged. Since
+   2026-11-14 the ruleset "Protect master" (no bypass) takes changes only
+   through a pull request whose "test" check passed. So: `git switch master
+   && git pull --ff-only`, then `git status --short` must be empty and
+   `master` must equal `origin/master`. Deploy only what is committed and
+   merged, so the live site always matches a commit on GitHub.
 2. Run the same checks CI runs, and stop if any fails:
    - `npm run typecheck`
    - `npx oxlint .`
