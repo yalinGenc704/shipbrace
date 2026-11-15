@@ -1,5 +1,5 @@
 import type { CodeLocation } from "../types.ts";
-import { canFeed, checksFor } from "./oracle.ts";
+import { canFeed, checksFor, positionOf } from "./oracle.ts";
 import type {
   Door,
   FunctionDef,
@@ -93,11 +93,6 @@ function belongsTo(door: Door, entity: { id: string; doorId?: string }): boolean
   if (entity.doorId === door.id) return true;
   const at = door.handlerAt;
   return Boolean(at) && fileOf(entity.id) === at!.path && within(at!.range, positionOf(entity.id));
-}
-
-function positionOf(id: string): number {
-  const parsed = Number(id.split(":").pop());
-  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 const fileOf = (id: string): string => id.split(":")[0] ?? "";

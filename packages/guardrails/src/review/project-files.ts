@@ -1,5 +1,5 @@
 import { codeOnly, dottedName, parseFile, walk, type Node } from "../analysis/ast.ts";
-import { isSource, isTestPath } from "../util.ts";
+import { isAppSource, isSource, isTestPath } from "../util.ts";
 import type { RepoSnapshot } from "../types.ts";
 import type { ProjectCheck } from "./checks.ts";
 import type { Risk } from "./modules.ts";
@@ -68,12 +68,9 @@ export const supabaseRowRules: ProjectCheck = {
     // as text: a checker's own test that imports Supabase inside a string does
     // not make the checker a Supabase app.
     const usesSupabase = snapshot.files.some((f) => SUPABASE_PROJECT.test(f.path)) ||
-      [...snapshot.manifests.values()].some((m) =>
-        Object.keys({ ...(m.dependencies as object | undefined), ...(m.devDependencies as object | undefined) })
-          .some((name) => name.startsWith("@supabase/"))
-      ) ||
+      dependencyNames(snapshot).some((name) => name.startsWith("@supabase/")) ||
       snapshot.files.some((f) =>
-        isSource(f.path) && !isTestPath(f.path) && /from\s+["']@supabase\/|require\(\s*["']@supabase\//.test(codeOnly(f))
+        isAppSource(f.path) && /from\s+["']@supabase\/|require\(\s*["']@supabase\//.test(codeOnly(f))
       );
     if (!usesSupabase) {
       return { status: "not-applicable", reason: "This app doesn't use Supabase, the only database this item is about.", absent: true };
@@ -480,7 +477,7 @@ export const scriptIntegrity: ProjectCheck = {
 
   run(snapshot) {
     const pages = snapshot.files.filter((f) => PAGE_FILE.test(f.path) && !isTestPath(f.path) && !f.path.includes("node_modules/"));
-    const writesHtml = snapshot.files.some((f) => isSource(f.path) && !isTestPath(f.path) && /<(?:html|script|link)\b/i.test(f.content));
+    const writesHtml = snapshot.files.some((f) => isAppSource(f.path) && /<(?:html|script|link)\b/i.test(f.content));
     if (pages.length === 0 && !writesHtml) {
       const hidden = outOfSight(snapshot);
       return hidden
@@ -552,7 +549,7 @@ export const scriptIntegrity: ProjectCheck = {
     // which reads the same as sample pages kept as text. Either way it can't
     // be called locked, so it goes back to the user.
     const asText = snapshot.files.find((f) =>
-      isSource(f.path) && !isTestPath(f.path) && !PAGE_FILE.test(f.path) &&
+      isAppSource(f.path) && !PAGE_FILE.test(f.path) &&
       [...f.content.matchAll(TAG)].some((m) => {
         const address = ADDRESS.exec(m[0]);
         const value = address?.[1] ?? address?.[2] ?? address?.[5] ?? "";
@@ -566,7 +563,7 @@ export const scriptIntegrity: ProjectCheck = {
         ...(notice ? { notice } : {}),
       };
     }
-    const added = snapshot.files.find((f) => isSource(f.path) && !isTestPath(f.path) && !PAGE_FILE.test(f.path) && OUT_OF_TAGS.test(codeOnly(f)));
+    const added = snapshot.files.find((f) => isAppSource(f.path) && !PAGE_FILE.test(f.path) && OUT_OF_TAGS.test(codeOnly(f)));
     if (added) {
       return {
         status: "not-applicable",

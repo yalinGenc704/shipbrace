@@ -231,6 +231,10 @@ function quasiText(template: Node): string {
 const SQL_STATEMENT =
   /\b(?:SELECT\b[\s\S]*?\bFROM|INSERT\s+INTO\b[\s\S]*?\bVALUES|UPDATE\b[\s\S]*?\bSET|DELETE\s+FROM)\b/i;
 
+/** A function's parameter names, in order; "" for one that is not a plain name (a pattern, a default, a rest). */
+const paramNames = (fn: Node): string[] =>
+  ((fn.params ?? []) as Node[]).map((p) => (p.type === "Identifier" ? String(p.name) : ""));
+
 /**
  * `sql.begin(async (tx) => { await tx\`...${id}\` })`: postgres.js hands a
  * transaction a tag that parameterises exactly like `sql`. Recognised when the
@@ -242,7 +246,7 @@ function isTransactionTag(tag: string, parents: Node[]): boolean {
   for (let i = 0; i < parents.length; i++) {
     const fn = parents[i]!;
     if (!/^(?:ArrowFunctionExpression|FunctionExpression)$/.test(fn.type)) continue;
-    const params = ((fn.params ?? []) as Node[]).map((p) => (p.type === "Identifier" ? String(p.name) : ""));
+    const params = paramNames(fn);
     if (!params.includes(tag)) continue;
     const call = parents[i + 1];
     const callee = call?.type === "CallExpression" ? dottedName(call.callee) ?? "" : "";
@@ -1192,7 +1196,7 @@ const ANSWER = /^(?:json|text|html|body|notFound|status|send|sendStatus|end|type
  */
 function answersOnlyFixed(handler: Node): boolean {
   if (!/^(?:ArrowFunctionExpression|FunctionExpression)$/.test(handler.type)) return false;
-  const params = ((handler.params ?? []) as Node[]).map((p) => (p.type === "Identifier" ? String(p.name) : ""));
+  const params = paramNames(handler);
   if (params.some((p) => p === "")) return false;
   const body = handler.body as Node | undefined;
   if (!body) return false;
@@ -1243,7 +1247,7 @@ const PLAIN_NODE =
 function onlyRedirects(handler: Node): boolean {
   if (!/^(?:ArrowFunctionExpression|FunctionExpression|FunctionDeclaration)$/.test(handler.type)) return false;
   if (handler.async || handler.generator) return false;
-  const params = ((handler.params ?? []) as Node[]).map((p) => (p.type === "Identifier" ? String(p.name) : ""));
+  const params = paramNames(handler);
   if (params.length === 0 || params.length > 2 || params.some((p) => p === "")) return false;
   const body = handler.body as Node | undefined;
   if (!body) return false;

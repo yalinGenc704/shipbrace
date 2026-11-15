@@ -81,3 +81,6 @@ export const isExampleEnv = (p: string): boolean => EXAMPLE_ENV.test(p);
 
 const TS_JS = /\.[cm]?[jt]sx?$/;
 export const isSource = (p: string): boolean => TS_JS.test(p) && !p.includes("node_modules/");
+
+/** The app's own code: a source file that is not a test. What most rules read. */
+export const isAppSource = (p: string): boolean => isSource(p) && !isTestPath(p);

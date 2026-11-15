@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import { snapshotFromFiles, type RepoSnapshot } from "@shipbrace/guardrails";
-import { DEFAULT_LIMITS, LOCKFILE, looksBinary, SKIP_DIR, wanted, type IngestLimits } from "./files.ts";
+import { DEFAULT_LIMITS, LOCKFILE, looksBinary, sizeCap, SKIP_DIR, wanted, type IngestLimits } from "./files.ts";
 
 export { DEFAULT_LIMITS, LOCKFILE, looksBinary, SKIP_DIR, wanted, type IngestLimits };
 
@@ -87,8 +87,9 @@ const GIT_OVERRIDES = [
   "-c", "protocol.allow=never",
 ];
 
-function trackedFiles(directory: string): { tracked: Set<string>; project: Set<string>; isRepository: boolean } {
-  const result = spawnSync("git", [...GIT_OVERRIDES, "ls-files", "-z"], {
+/** `git ls-files -z` in a folder, with the overrides above and nothing taken from the user's own git settings. */
+const listFiles = (directory: string, ...more: string[]) =>
+  spawnSync("git", [...GIT_OVERRIDES, "ls-files", "-z", ...more], {
     cwd: directory,
     encoding: "utf8",
     timeout: 10_000,
@@ -97,19 +98,15 @@ function trackedFiles(directory: string): { tracked: Set<string>; project: Set<s
     env: { PATH: process.env.PATH ?? "/usr/bin:/bin", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0" },
   });
 
+function trackedFiles(directory: string): { tracked: Set<string>; project: Set<string>; isRepository: boolean } {
+  const result = listFiles(directory);
+
   if (result.status !== 0 || typeof result.stdout !== "string") {
     return { tracked: new Set(), project: new Set(), isRepository: false };
   }
   // Files not yet added to git but not ignored either are part of the
   // project too; only what git ignores is left out.
-  const untracked = spawnSync("git", [...GIT_OVERRIDES, "ls-files", "-z", "--others", "--exclude-standard"], {
-    cwd: directory,
-    encoding: "utf8",
-    timeout: 10_000,
-    maxBuffer: 16 * 1024 * 1024,
-    shell: false,
-    env: { PATH: process.env.PATH ?? "/usr/bin:/bin", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0" },
-  });
+  const untracked = listFiles(directory, "--others", "--exclude-standard");
   return {
     tracked: new Set(result.stdout.split("\0").filter(Boolean)),
     project: new Set([
@@ -164,10 +161,7 @@ export async function ingest(
       }
 
       const size = (await stat(absolute)).size;
-      const cap = LOCKFILE.test(entry.name)
-        ? Math.max(limits.maxFileBytes, limits.maxLockfileBytes ?? 0)
-        : limits.maxFileBytes;
-      if (size > cap) {
+      if (size > sizeCap(entry.name, limits)) {
         skipped.tooLarge++;
         unread.push(pathOf(absolute));
         continue;
