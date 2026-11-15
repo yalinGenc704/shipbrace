@@ -4,8 +4,10 @@ Moved from CLAUDE.md "Roadmap -> Next steps" on 2026-11-12. Read at the
 start of a session; update it in the same change as the work it
 describes.
 
-**State:** everything is pushed and deployed (2026-11-11): last deployed
-commit `97fbf54`, live version `40ddc80d`, all six live checks passed. The
+**State:** everything is pushed and deployed (2026-11-14): last deployed
+commit `a1f55d7` (hono 4.13.16, @hono/node-server 2.1.6; `npm audit`
+clean), live version `c90066d1`, all six live checks passed. Before that,
+`97fbf54` / `40ddc80d` on 2026-11-11. The
 audit fixes and the set-aside work are live, migration 0008 is applied, and
 the year-long asset caching is taken out again. Murat signed in after the
 deploy with the invite list by account number (audit log, 2026-11-12), and
