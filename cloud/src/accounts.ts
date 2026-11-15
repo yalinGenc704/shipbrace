@@ -263,6 +263,7 @@ export function accountRoutes() {
       c.env.DB.prepare("UPDATE installations SET set_up_by = NULL WHERE set_up_by = ?").bind(session.githubId),
       c.env.DB.prepare("UPDATE repo_settings SET changed_by = NULL WHERE changed_by = ?").bind(session.githubId),
       c.env.DB.prepare("DELETE FROM review_requests WHERE github_id = ?").bind(session.githubId),
+      c.env.DB.prepare("DELETE FROM review_problems WHERE ran_by = ?").bind(session.githubId),
       c.env.DB.prepare("DELETE FROM sessions WHERE github_id = ?").bind(session.githubId),
       c.env.DB.prepare("DELETE FROM users WHERE github_id = ?").bind(session.githubId),
     ]);
@@ -382,26 +383,44 @@ export function accountRoutes() {
     if (repos.length === 0) return c.json({ repositories: [], installUrl });
 
     // The latest review this person may open: any, where they are an admin;
-    // otherwise the latest they started. `?` lists are built from the count only.
-    const admin = repos.filter((r) => r.admin).map((r) => r.githubId);
+    // otherwise the latest they started. The id lists go in as one JSON value
+    // each: D1 takes at most 100 bound values per query, and 90 repositories
+    // plus 90 admin ones would pass it.
+    const admin = JSON.stringify(repos.filter((r) => r.admin).map((r) => r.githubId));
+    const all = JSON.stringify(repos.map((r) => r.githubId));
     const { results } = await c.env.DB.prepare(
       `SELECT p.github_id, p.history_id, r.id AS review_id, r.created_at, r.conclusion, r.title
        FROM repositories p
        LEFT JOIN reviews r ON r.id = (
          SELECT id FROM reviews
-         WHERE repository_id = p.id AND (p.github_id IN (${admin.map(() => "?").join(",")}) OR ran_by = ?)
+         WHERE repository_id = p.id AND (p.github_id IN (SELECT value FROM json_each(?)) OR ran_by = ?)
          ORDER BY created_at DESC LIMIT 1)
-       WHERE p.github_id IN (${repos.map(() => "?").join(",")})`,
+       WHERE p.github_id IN (SELECT value FROM json_each(?))`,
     )
-      .bind(...admin, session.githubId, ...repos.map((r) => r.githubId))
+      .bind(admin, session.githubId, all)
       .all<{ github_id: number; history_id: string; review_id: string | null; created_at: string | null; conclusion: string | null; title: string | null }>();
     const kept = new Map(results.map((row) => [row.github_id, row]));
     const { results: settings } = await c.env.DB.prepare(
-      `SELECT github_id FROM repo_settings WHERE review_pushes = 0 AND github_id IN (${repos.map(() => "?").join(",")})`,
+      "SELECT github_id FROM repo_settings WHERE review_pushes = 0 AND github_id IN (SELECT value FROM json_each(?))",
     )
-      .bind(...repos.map((r) => r.githubId))
+      .bind(all)
       .all<{ github_id: number }>();
     const pushesOff = new Set(settings.map((row) => row.github_id));
+    // Why the latest review stopped without a report, for the same people who
+    // may open its reports. Newest first, so the first per repository wins.
+    const { results: stopped } = await c.env.DB.prepare(
+      `SELECT github_id, title, message, created_at FROM review_problems
+       WHERE github_id IN (SELECT value FROM json_each(?))
+         AND (github_id IN (SELECT value FROM json_each(?)) OR ran_by = ?)
+         AND created_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 day')
+       ORDER BY created_at DESC LIMIT 200`,
+    )
+      .bind(all, admin, session.githubId)
+      .all<{ github_id: number; title: string; message: string; created_at: string }>();
+    const problems = new Map<number, { title: string; message: string; createdAt: string }>();
+    for (const row of stopped) {
+      if (!problems.has(row.github_id)) problems.set(row.github_id, { title: row.title, message: row.message, createdAt: row.created_at });
+    }
 
     return c.json({
       installUrl,
@@ -420,6 +439,7 @@ export function accountRoutes() {
           installationId: r.installationId,
           historyId: row?.history_id ?? null,
           latest: row?.review_id ? { id: row.review_id, createdAt: row.created_at, conclusion: row.conclusion, title: row.title } : null,
+          problem: problems.get(r.githubId) ?? null,
         };
       }),
     });
@@ -557,9 +577,11 @@ export function accountRoutes() {
       await record(c.env.DB, { actor: session.githubId, action: "refused", target: c.req.param("githubId"), detail: { attempt: "clear history" } });
       return c.json({ error: "Only the repository's admins can clear its history." }, 403);
     }
-    const result = await c.env.DB.prepare("DELETE FROM reviews WHERE repository_id IN (SELECT id FROM repositories WHERE github_id = ?)")
-      .bind(repo.githubId)
-      .run();
+    const [result] = await c.env.DB.batch([
+      c.env.DB.prepare("DELETE FROM reviews WHERE repository_id IN (SELECT id FROM repositories WHERE github_id = ?)").bind(repo.githubId),
+      c.env.DB.prepare("DELETE FROM review_problems WHERE github_id = ?").bind(repo.githubId),
+    ]);
+    if (!result) throw new Error("history was not cleared");
     await record(c.env.DB, { actor: session.githubId, action: "history-cleared", target: repo.githubId, detail: { reviews: result.meta.changes ?? 0 } });
     return c.json({ ok: true, deleted: result.meta.changes ?? 0 });
   });
@@ -586,6 +608,11 @@ export function accountRoutes() {
       c.env.DB.prepare(`DELETE FROM reviews WHERE (ran_by = ? OR ran_by IS NULL) AND ${adminOf.length > 0 ? inAdminRepos : "0"}`)
         .bind(session.githubId, ...adminOf),
       c.env.DB.prepare("UPDATE reviews SET ran_by = NULL WHERE ran_by = ?").bind(session.githubId),
+      // Why a review stopped, in fixed words: theirs, and in their own
+      // repositories the unattributed ones too, like the reports above.
+      c.env.DB.prepare(
+        "DELETE FROM review_problems WHERE ran_by = ? OR (ran_by IS NULL AND github_id IN (SELECT value FROM json_each(?)))",
+      ).bind(session.githubId, JSON.stringify(adminOf)),
     ]);
     const counts = { deleted: deleted?.meta.changes ?? 0, hidden: hidden?.meta.changes ?? 0 };
     await record(c.env.DB, { actor: session.githubId, action: "history-cleared", detail: { ...counts, scope: "own" } });
@@ -659,6 +686,7 @@ export async function forgetInstallation(db: D1Database, installationId: number,
   if (repositoryIds === "all") {
     await db.batch([
       db.prepare("DELETE FROM reviews WHERE repository_id IN (SELECT id FROM repositories WHERE installation_id = ?)").bind(installationId),
+      db.prepare("DELETE FROM review_problems WHERE installation_id = ?").bind(installationId),
       db.prepare("DELETE FROM repositories WHERE installation_id = ?").bind(installationId),
       db.prepare("DELETE FROM installations WHERE installation_id = ?").bind(installationId),
     ]);
@@ -667,6 +695,7 @@ export async function forgetInstallation(db: D1Database, installationId: number,
   for (const id of repositoryIds.slice(0, 500)) {
     await db.batch([
       db.prepare("DELETE FROM reviews WHERE repository_id IN (SELECT id FROM repositories WHERE github_id = ?)").bind(id),
+      db.prepare("DELETE FROM review_problems WHERE github_id = ?").bind(id),
       db.prepare("DELETE FROM repositories WHERE github_id = ?").bind(id),
     ]);
   }

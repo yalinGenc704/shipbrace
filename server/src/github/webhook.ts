@@ -64,6 +64,22 @@ export interface ReviewDeps {
   history?: Pick<ReviewHistory, "record">;
   /** The dashboard's public address, for links from the check. Needs `history`. */
   publicUrl?: string;
+  /**
+   * Told when a review stops without a report (refused or failed), with the
+   * same fixed words as the check, so the dashboard can say why instead of
+   * waiting. A failure here is logged and changes nothing else.
+   */
+  recordProblem?: (problem: ReviewProblem) => Promise<void>;
+}
+
+/** Why a review stopped, in the check's own fixed words. */
+export interface ReviewProblem {
+  githubId: number;
+  installationId: number;
+  ranBy?: number;
+  commitSha: string;
+  title: string;
+  message: string;
 }
 
 interface PushEvent {
@@ -162,6 +178,9 @@ export async function reviewPush(
   const where = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
 
   let client: GitHubClient;
+  // Once the report is saved, the dashboard has it: a later hitch with the
+  // check is not "stopped".
+  let saved = false;
   let checkId: number;
   try {
     client = await installationClient(deps.credentials, installationId, deps.fetchImpl, githubId);
@@ -171,8 +190,9 @@ export async function reviewPush(
       status: "in_progress",
     }));
   } catch (error) {
-    // Nothing can be reported to GitHub without these; the log is all there is.
+    // Nothing can be reported to GitHub without these: the log and the dashboard are all there is.
     log(`could not start a check for ${owner}/${repo}@${sha.slice(0, 7)}:`, error);
+    await problem(deps, log, { githubId, installationId, ranBy, commitSha: sha, ...stoppedText(error) });
     return;
   }
 
@@ -193,6 +213,7 @@ export async function reviewPush(
       result,
       skipped: fetched.skipped,
     });
+    saved = link !== null;
     const summary = link
       ? `**[Open the full report](${link.review})** · [All reviews of this repository](${link.history})\n\n${output.summary}`
       : output.summary;
@@ -226,27 +247,46 @@ export async function reviewPush(
     console.log(`posted ${output.conclusion} for ${owner}/${repo}@${sha.slice(0, 7)}: ${output.title}`);
   } catch (error) {
     log(`review failed for ${owner}/${repo}@${sha.slice(0, 7)}:`, error);
-    // Never left spinning, and never a pass: a failed review says so.
+    const { title, message } = stoppedText(error);
+    // Never left spinning, and never a pass: a failed review says so. The
+    // check first, so a slow database never holds it up.
     await client
       .patch(`${where}/check-runs/${checkId}`, {
         status: "completed",
         conclusion: "neutral",
-        output: {
-          title: error instanceof AllowanceShortError
-            ? tooLargeForAnHour(error) ? "Too many files to read" : "Too many files to read right now"
-            : "The review could not be completed",
-          // A stopped review says why in fixed words; anything else stays in the log.
-          summary: error instanceof AllowanceShortError
-            ? allowanceMessage(error)
-            : error instanceof ReviewStoppedError
-            ? error.reason === "limit" || error.reason === "monthly-limit" || error.reason === "account-daily-limit"
-              ? error.userMessage
-              : `${error.userMessage} Push again to retry; if it keeps happening, the server log has the details.`
-            : "Nothing was checked for this commit. Push again to retry; if it keeps happening, the server log has the details.",
-        },
+        output: { title, summary: message },
       })
       .catch((reportError: unknown) => log("could not report the failure:", reportError));
+    if (!saved) await problem(deps, log, { githubId, installationId, ranBy, commitSha: sha, title, message });
   }
+}
+
+/** The dashboard learns why, too. Never in the way of the check. */
+async function problem(
+  deps: ReviewDeps,
+  log: (message: string, error?: unknown) => void,
+  { ranBy, ...rest }: Omit<ReviewProblem, "ranBy"> & { ranBy: number | undefined },
+): Promise<void> {
+  await deps.recordProblem?.({ ...rest, ...(ranBy === undefined ? {} : { ranBy }) })
+    .catch((error: unknown) => log("could not keep why the review stopped:", error));
+}
+
+/** A stopped review says why in fixed words; anything else stays in the log. */
+function stoppedText(error: unknown): { title: string; message: string } {
+  if (error instanceof AllowanceShortError) {
+    return { title: tooLargeForAnHour(error) ? "Too many files to read" : "Too many files to read right now", message: allowanceMessage(error) };
+  }
+  if (error instanceof ReviewStoppedError) {
+    const limit = error.reason === "limit" || error.reason === "monthly-limit" || error.reason === "account-daily-limit";
+    return {
+      title: "The review could not be completed",
+      message: limit ? error.userMessage : `${error.userMessage} Push again to retry; if it keeps happening, the server log has the details.`,
+    };
+  }
+  return {
+    title: "The review could not be completed",
+    message: "Nothing was checked for this commit. Push again to retry; if it keeps happening, the server log has the details.",
+  };
 }
 
 /** More than a whole hour's allowance: pushing again later will not help. */

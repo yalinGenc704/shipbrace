@@ -4,6 +4,7 @@ import { secureHeaders } from "hono/secure-headers";
 import { accountRoutes, forgetInstallation, installationIsSetUp, reviewsPushes } from "./accounts.ts";
 import { alertLine, forgetOldAudit, refusedLastDay } from "./audit.ts";
 import { forgetOldDeliveries, queueOnce } from "./deliveries.ts";
+import { forgetOldProblems, recordProblem } from "./problems.ts";
 import type { Env } from "./env.ts";
 import { d1History } from "./history-d1.ts";
 import { forgetOldStarts } from "./limits.ts";
@@ -84,6 +85,7 @@ function reviewDeps(env: Env, job: PushJob): ReviewDeps {
     history: d1History(env.DB),
     publicUrl: env.PUBLIC_URL.replace(/\/+$/, ""),
     log: (message, error) => console.error(message, error instanceof Error ? error.message : ""),
+    recordProblem: (problem) => recordProblem(env.DB, problem),
   };
 }
 
@@ -113,6 +115,7 @@ export default {
       forgetOldStarts(env.DB),
       forgetOldAudit(env.DB),
       forgetOldDeliveries(env.DB),
+      forgetOldProblems(env.DB),
       // Repositories with no reviews left, and people with no session and no
       // installation to their name, once older than the reviews' own limit.
       env.DB.prepare(
