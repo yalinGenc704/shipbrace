@@ -3,7 +3,7 @@ import type { ReviewHistory } from "../history.ts";
 import { verifyWebhookSignature } from "./auth.ts";
 import { installationClient, type AppCredentials, type GitHubClient } from "./client.ts";
 import { checkOutput } from "./report.ts";
-import { fetchRepository } from "./repository.ts";
+import { AllowanceShortError, fetchRepository } from "./repository.ts";
 import { ReviewStoppedError } from "../sandbox/stopped.ts";
 
 /**
@@ -202,15 +202,26 @@ export async function reviewPush(
     for (let i = 0; i < output.annotations.length; i += ANNOTATIONS_PER_REQUEST) {
       batches.push(output.annotations.slice(i, i + ANNOTATIONS_PER_REQUEST));
     }
+    let posted = false;
     for (const batch of batches.length > 0 ? batches : [[]]) {
+      // Keep two requests for the result: with the hour nearly spent, the
+      // remaining notes are dropped (they are all in the kept report).
+      const allowance = client.allowance();
+      if (allowance && allowance.remaining <= 2) {
+        log(`notes cut short for ${owner}/${repo}@${sha.slice(0, 7)}: GitHub allowance nearly spent`, undefined);
+        break;
+      }
       await client.patch(`${where}/check-runs/${checkId}`, {
         ...(link ? { details_url: link.review } : {}),
         output: { title: output.title, summary, annotations: batch },
       });
+      posted = true;
     }
     await client.patch(`${where}/check-runs/${checkId}`, {
       status: "completed",
       conclusion: output.conclusion,
+      // No notes went out: the result carries the title and summary itself.
+      ...(posted ? {} : { ...(link ? { details_url: link.review } : {}), output: { title: output.title, summary } }),
     });
     console.log(`posted ${output.conclusion} for ${owner}/${repo}@${sha.slice(0, 7)}: ${output.title}`);
   } catch (error) {
@@ -221,9 +232,13 @@ export async function reviewPush(
         status: "completed",
         conclusion: "neutral",
         output: {
-          title: "The review could not be completed",
+          title: error instanceof AllowanceShortError
+            ? tooLargeForAnHour(error) ? "Too many files to read" : "Too many files to read right now"
+            : "The review could not be completed",
           // A stopped review says why in fixed words; anything else stays in the log.
-          summary: error instanceof ReviewStoppedError
+          summary: error instanceof AllowanceShortError
+            ? allowanceMessage(error)
+            : error instanceof ReviewStoppedError
             ? error.reason === "limit" || error.reason === "monthly-limit" || error.reason === "account-daily-limit"
               ? error.userMessage
               : `${error.userMessage} Push again to retry; if it keeps happening, the server log has the details.`
@@ -232,6 +247,18 @@ export async function reviewPush(
       })
       .catch((reportError: unknown) => log("could not report the failure:", reportError));
   }
+}
+
+/** More than a whole hour's allowance: pushing again later will not help. */
+const tooLargeForAnHour = (error: AllowanceShortError) => error.limit !== undefined && error.needed > error.limit;
+
+/** Fixed words plus numbers and a time: safe to show anyone. */
+export function allowanceMessage(error: AllowanceShortError): string {
+  if (tooLargeForAnHour(error)) {
+    return `Reading this repository needs about ${error.needed} requests to GitHub, more than the ${error.limit} GitHub allows ShipBrace in an hour. Nothing in this commit was checked. Repositories this large cannot be reviewed yet.`;
+  }
+  const at = error.resetAt.toISOString().slice(11, 16);
+  return `GitHub lets ShipBrace make a limited number of requests each hour, and reading this repository needs about ${error.needed}; ${error.remaining} are left right now. Nothing in this commit was checked. Push again after ${at} UTC.`;
 }
 
 /**

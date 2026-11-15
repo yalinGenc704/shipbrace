@@ -145,6 +145,23 @@ built for going live".
   shows "N of 50 reviews used this month". The Docker fallback has no AI
   allowlist: keep `AI_REVIEW` off there. A subscription and free trial are
   planned later.
+- **GitHub's hourly allowance (2026-11-14, Murat's decision).** A review
+  reads one file per GitHub request, up to 5,000 files (`server/src/files.ts`),
+  and an installation may make 5,000 requests an hour. Measured live: a
+  ~1,400-file repository (Keystone) took about a minute; a 5,000-file one
+  (Ghost) right after it got 403 halfway, the failure message got 403 too,
+  and the check spun for ever. Now the client keeps GitHub's
+  `x-ratelimit-remaining`; before reading (and before each batch of 8) the
+  review refuses unless the files plus `RESERVED_REQUESTS` (20) fit, posting
+  "Too many files to read right now" with the time to push again
+  (`server/src/github/repository.ts`, `allowanceMessage` in `webhook.ts`).
+  Needing more than the whole hour (`x-ratelimit-limit`) says "Too many
+  files to read" with no push-again time; a reset time over two hours away
+  is not believed. With two requests or fewer left, the check's notes stop
+  (the result then carries the title and summary itself) so it still posts. Murat kept the 5,000-file cap and chose
+  refusing over reading part of the repository. So a repository near 5,000
+  readable files cannot be reviewed whole on the hourly allowance; reading
+  many files per request (GraphQL) would fix that and is a separate item.
 - **Audit fixes (2026-11-11, after the audit of 2026-11-10).** The invite
   list is `ALLOWED_GITHUB_IDS`: GitHub account numbers, or the single word
   `everyone`; missing or empty lets nobody in (it used to list names, and

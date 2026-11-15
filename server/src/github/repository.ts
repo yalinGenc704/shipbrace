@@ -32,6 +32,43 @@ export interface FetchResult {
 
 const CONCURRENCY = 8;
 
+/**
+ * Requests kept back from GitHub's hourly allowance for after the files are
+ * read: the check's notes (50 per request) and its result. Without them a
+ * review that used up the hour could not even say it failed, and its check
+ * would spin for ever (seen on 2026-11-14 with a 5,000-file repository).
+ */
+export const RESERVED_REQUESTS = 20;
+
+/**
+ * Not enough of GitHub's hourly allowance is left to read this commit. Nothing
+ * was read; the check says when to push again.
+ */
+export class AllowanceShortError extends Error {
+  readonly needed: number;
+  readonly remaining: number;
+  readonly resetAt: Date;
+  /** The whole hour's allowance, when known: needing more than it means waiting will not help. */
+  readonly limit: number | undefined;
+
+  constructor(needed: number, remaining: number, resetAt: Date, limit?: number) {
+    super(`GitHub allowance too low: ${needed} requests needed, ${remaining} of ${limit ?? "?"} left until ${resetAt.toISOString()}`);
+    this.name = "AllowanceShortError";
+    this.needed = needed;
+    this.remaining = remaining;
+    this.resetAt = resetAt;
+    this.limit = limit;
+  }
+}
+
+/** Refuses when the next `requests` would eat into the reserve. Unknown allowance: carry on. */
+function ensureAllowance(client: GitHubClient, requests: number, total: number): void {
+  const allowance = client.allowance();
+  if (allowance && allowance.remaining - requests < RESERVED_REQUESTS) {
+    throw new AllowanceShortError(total + RESERVED_REQUESTS, allowance.remaining, allowance.resetAt, allowance.limit);
+  }
+}
+
 export async function fetchRepository(
   client: GitHubClient,
   owner: string,
@@ -77,8 +114,14 @@ export async function fetchRepository(
     plannedBytes += size;
   }
 
+  // One request per file: refuse before reading anything if the hour cannot
+  // cover them all, rather than stop halfway with nothing left to report.
+  ensureAllowance(client, chosen.length, chosen.length);
+
   const files: Array<{ path: string; content: string }> = [];
   for (let i = 0; i < chosen.length; i += CONCURRENCY) {
+    // Another review on the same installation may be spending the same hour.
+    if (i > 0) ensureAllowance(client, Math.min(CONCURRENCY, chosen.length - i), chosen.length);
     const batch = await Promise.all(
       chosen.slice(i, i + CONCURRENCY).map(async (entry) => {
         const blob = await client.get<{ content: string; encoding: string }>(

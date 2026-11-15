@@ -13,7 +13,7 @@ ruleset "Protect master", no bypass); deploy from `master` after merging. The
 audit fixes and the set-aside work are live, migration 0008 is applied, and
 the year-long asset caching is taken out again. Murat signed in after the
 deploy with the invite list by account number (audit log, 2026-11-12), and
-accepted the new notices. 431 tests.
+accepted the new notices. 438 tests.
 
 1. **The AI cleaner step: live since 2026-11-11, not yet seen running**
    (Murat's decisions, 2026-11-10: Haiku 5.5 for his reviews only, neutral

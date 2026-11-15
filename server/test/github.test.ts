@@ -23,11 +23,27 @@ const VULNERABLE = [
 ].join("\n");
 
 /** A stand-in for GitHub's API that records every call made to it. */
-function fakeGitHub(files: Record<string, string | Buffer>, extraTree: Array<{ path: string; size: number }> = []) {
+function fakeGitHub(
+  files: Record<string, string | Buffer>,
+  extraTree: Array<{ path: string; size: number }> = [],
+  /** GitHub's hourly allowance left after the nth call (1-based); omitted, no allowance headers are sent. */
+  remainingAfter?: (n: number) => number,
+  hour: { limit?: number; reset?: number } = {},
+) {
   const calls: Array<{ method: string; path: string; body?: any }> = [];
   const blobs = new Map(Object.entries(files).map(([path, content], i) => [`blob${i}`, { path, content }]));
 
-  const fetchImpl = (async (url: string, init?: { method?: string; body?: string }) => {
+  const answer = async (url: string, init?: { method?: string; body?: string }): Promise<Response> => {
+    const response = await route(url, init);
+    if (!remainingAfter) return response;
+    const headers = new Headers(response.headers);
+    headers.set("x-ratelimit-remaining", String(Math.max(0, remainingAfter(calls.length))));
+    headers.set("x-ratelimit-reset", String(hour.reset ?? RESET));
+    if (hour.limit !== undefined) headers.set("x-ratelimit-limit", String(hour.limit));
+    return new Response(response.body, { status: response.status, headers });
+  };
+
+  const route = (async (url: string, init?: { method?: string; body?: string }) => {
     const path = url.replace("https://api.github.com", "");
     const method = init?.method ?? "GET";
     calls.push({ method, path, ...(init?.body ? { body: JSON.parse(init.body) } : {}) });
@@ -47,9 +63,9 @@ function fakeGitHub(files: Record<string, string | Buffer>, extraTree: Array<{ p
     const blob = blobs.get(path.split("/").pop()!);
     if (blob) return Response.json({ encoding: "base64", content: Buffer.from(blob.content).toString("base64") });
     return new Response("not found", { status: 404 });
-  }) as typeof fetch;
+  });
 
-  return { fetchImpl, calls };
+  return { fetchImpl: answer as unknown as typeof fetch, calls };
 }
 
 function deps(
@@ -269,6 +285,124 @@ test("a review over the daily limit says so, without suggesting an immediate ret
   assert.match(final.output.summary, /daily review limit has been reached/);
   assert.match(final.output.summary, /Try again tomorrow\.$/);
   assert.doesNotMatch(final.output.summary, /Push again/);
+});
+
+// --- GitHub's hourly allowance (a 5,000-file review spun for ever on 2026-11-14) ------
+
+// Half an hour from now, on the minute, as GitHub sends it (seconds since 1970).
+const RESET = Math.floor(Date.now() / 60_000) * 60 + 1800;
+const RESET_HHMM = new Date(RESET * 1000).toISOString().slice(11, 16);
+
+const MANY = Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`src/file${i}.ts`, `export const n${i} = ${i};`]));
+
+test("too little of GitHub's hourly allowance: nothing is read, and the check says when to push again", async () => {
+  // 40 left after the file list: 30 files plus the 20 kept back do not fit.
+  const github = fakeGitHub(MANY, [], () => 40);
+  const d = deps(github.fetchImpl);
+  const body = push();
+  await handleWebhook(d, { signature: sign(body), event: "push" }, body);
+  await Promise.all(d.done);
+
+  assert.equal(github.calls.filter((c) => c.path.includes("/git/blobs/")).length, 0, "no file read");
+  const final = github.calls.filter((c) => c.method === "PATCH").at(-1)?.body;
+  assert.equal(final.status, "completed", "never left spinning");
+  assert.equal(final.conclusion, "neutral", "never a pass");
+  assert.equal(final.output.title, "Too many files to read right now");
+  assert.match(final.output.summary, /needs about 50; 40 are left right now/);
+  assert.match(final.output.summary, /Nothing in this commit was checked/);
+  assert.ok(final.output.summary.endsWith(`Push again after ${RESET_HHMM} UTC.`));
+});
+
+test("more files than a whole hour allows: the check says so, without a pointless push-again time", async () => {
+  const github = fakeGitHub(MANY, [], () => 40, { limit: 45 });
+  const d = deps(github.fetchImpl);
+  const body = push();
+  await handleWebhook(d, { signature: sign(body), event: "push" }, body);
+  await Promise.all(d.done);
+
+  const final = github.calls.filter((c) => c.method === "PATCH").at(-1)?.body;
+  assert.equal(final.status, "completed");
+  assert.equal(final.conclusion, "neutral");
+  assert.equal(final.output.title, "Too many files to read");
+  assert.match(final.output.summary, /more than the 45 GitHub allows ShipBrace in an hour/);
+  assert.match(final.output.summary, /cannot be reviewed yet\.$/);
+  assert.doesNotMatch(final.output.summary, /Push again/);
+});
+
+test("an implausible reset time from GitHub is not believed, and the review runs", async () => {
+  const github = fakeGitHub(MANY, [], () => 40, { reset: 99_999_999_999 });
+  const d = deps(github.fetchImpl);
+  const body = push();
+  await handleWebhook(d, { signature: sign(body), event: "push" }, body);
+  await Promise.all(d.done);
+
+  assert.equal(github.calls.filter((c) => c.path.includes("/git/blobs/")).length, 30);
+  const final = github.calls.filter((c) => c.method === "PATCH").at(-1)?.body;
+  assert.equal(final.status, "completed");
+  assert.notEqual(final.output?.title, "Too many files to read right now");
+});
+
+test("enough allowance: the review runs as before", async () => {
+  const github = fakeGitHub({ ...MANY, "server/src/api.ts": VULNERABLE }, [], () => 4_000);
+  const d = deps(github.fetchImpl);
+  const body = push();
+  await handleWebhook(d, { signature: sign(body), event: "push" }, body);
+  await Promise.all(d.done);
+
+  assert.equal(github.calls.filter((c) => c.path.includes("/git/blobs/")).length, 31);
+  const final = github.calls.filter((c) => c.method === "PATCH").at(-1)?.body;
+  assert.equal(final.conclusion, "failure", "the proven risk is reported");
+});
+
+test("an allowance spent by something else mid-read stops the reading and still reports", async () => {
+  // Plenty at first, then another review on the same installation takes the rest.
+  const github = fakeGitHub(MANY, [], (n) => (n < 6 ? 4_000 : 25));
+  const d = deps(github.fetchImpl);
+  const body = push();
+  await handleWebhook(d, { signature: sign(body), event: "push" }, body);
+  await Promise.all(d.done);
+
+  assert.ok(github.calls.filter((c) => c.path.includes("/git/blobs/")).length < 30, "stopped early");
+  const final = github.calls.filter((c) => c.method === "PATCH").at(-1)?.body;
+  assert.equal(final.status, "completed");
+  assert.equal(final.output.title, "Too many files to read right now");
+});
+
+test("with the hour nearly spent, the check's notes are cut short but its result is posted", async () => {
+  // Many proven risks, so many notes; one request left after the first batch.
+  const routes = Array.from({ length: 60 }, (_, i) => `app.get("/r${i}", async (c) => c.json(await db.query(\`SELECT * FROM t WHERE id = \${c.req.query("id")}\`)));`);
+  const app = ['import { Hono } from "hono";', "const app = new Hono();", ...routes].join("\n");
+  let firstPatch = 0;
+  const github = fakeGitHub({ "server/src/api.ts": app }, [], (n) => {
+    if (firstPatch === 0 && github.calls[n - 1]?.method === "PATCH") firstPatch = n;
+    return firstPatch > 0 ? 2 : 4_000;
+  });
+  const d = deps(github.fetchImpl);
+  const body = push();
+  await handleWebhook(d, { signature: sign(body), event: "push" }, body);
+  await Promise.all(d.done);
+
+  const patches = github.calls.filter((c) => c.method === "PATCH");
+  assert.equal(patches.length, 2, "one batch of notes, then the result");
+  assert.equal(patches[0]!.body.output.annotations.length, 50);
+  assert.equal(patches.at(-1)!.body.status, "completed");
+  assert.equal(patches.at(-1)!.body.conclusion, "failure");
+});
+
+test("with the hour spent before any notes, the result alone is posted, carrying the title and summary", async () => {
+  // Plenty while reading; then something else spends the hour during the review.
+  const github = fakeGitHub({ "server/src/api.ts": VULNERABLE }, [], (n) => (n <= 3 ? 4_000 : 2));
+  const d = deps(github.fetchImpl);
+  const body = push();
+  await handleWebhook(d, { signature: sign(body), event: "push" }, body);
+  await Promise.all(d.done);
+
+  const patches = github.calls.filter((c) => c.method === "PATCH");
+  assert.equal(patches.length, 1, "only the result");
+  assert.equal(patches[0]!.body.status, "completed");
+  assert.equal(patches[0]!.body.conclusion, "failure");
+  assert.match(patches[0]!.body.output.title, /\S/);
+  assert.match(patches[0]!.body.output.summary, /\S/);
 });
 
 // --- the mark when an AI softened a finding -----------------------------------------

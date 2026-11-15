@@ -28,13 +28,40 @@ export class GitHubError extends Error {
   }
 }
 
+/** How many requests GitHub still allows this token this hour, and when the count starts again. */
+export interface Allowance {
+  remaining: number;
+  resetAt: Date;
+  /** The whole hour's allowance, when GitHub says. */
+  limit?: number;
+}
+
 export interface GitHubClient {
   get<T>(path: string): Promise<T>;
   post<T>(path: string, body: unknown): Promise<T>;
   patch<T>(path: string, body: unknown): Promise<T>;
+  /** From the last answer's headers; undefined until GitHub has said. */
+  allowance(): Allowance | undefined;
+}
+
+/** GitHub's hourly allowance, as it reports it on every answer. */
+function allowanceFrom(headers: Headers): Allowance | undefined {
+  const remaining = Number(headers.get("x-ratelimit-remaining"));
+  const reset = Number(headers.get("x-ratelimit-reset"));
+  if (!headers.has("x-ratelimit-remaining") || !Number.isSafeInteger(remaining) || remaining < 0) return undefined;
+  // GitHub's hour restarts within the hour; anything else is not believed.
+  const now = Date.now() / 1000;
+  if (!headers.has("x-ratelimit-reset") || !Number.isSafeInteger(reset) || reset < now - 60 || reset > now + 2 * 3600) return undefined;
+  const limit = Number(headers.get("x-ratelimit-limit"));
+  return {
+    remaining,
+    resetAt: new Date(reset * 1000),
+    ...(headers.has("x-ratelimit-limit") && Number.isSafeInteger(limit) && limit > 0 ? { limit } : {}),
+  };
 }
 
 export function clientWithToken(token: string, fetchImpl: typeof fetch = fetch): GitHubClient {
+  let last: Allowance | undefined;
   const call = async <T>(method: string, path: string, body?: unknown): Promise<T> => {
     const response = await fetchImpl(`${API}${path}`, {
       method,
@@ -46,6 +73,7 @@ export function clientWithToken(token: string, fetchImpl: typeof fetch = fetch):
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
+    last = allowanceFrom(response.headers) ?? last;
     if (!response.ok) throw new GitHubError(response.status, `${method} ${path.split("?")[0]}`);
     return (await response.json()) as T;
   };
@@ -53,6 +81,7 @@ export function clientWithToken(token: string, fetchImpl: typeof fetch = fetch):
     get: (path) => call("GET", path),
     post: (path, body) => call("POST", path, body),
     patch: (path, body) => call("PATCH", path, body),
+    allowance: () => last,
   };
 }
 
