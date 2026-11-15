@@ -267,6 +267,77 @@ test("the last review's findings stay closed (2026-11-15)", () => {
   assert.equal(answer(one("app.use((req, res, next) => { const user = verifyToken(req.cookies.token); if (!user) return res.sendStatus(401); next(); });", ROUTE)), "check");
 });
 
+test("the plan review's false passes stay closed (2026-11-15)", () => {
+  const hono = (...lines: string[]) => [{ path: "server/src/index.ts", content: ['import { Hono } from "hono";', "const app = new Hono();", ...lines].join("\n") }];
+  const honoCheck = 'async (c, next) => { if (!c.get("user")) return c.json({ error: "Sign in" }, 401); await next(); }';
+  const page = 'app.get("/api/orders", (c) => c.json(list(c.get("user"))));';
+  // 1. Hono: an address without `*` covers only itself (checked against Hono 4.13.16).
+  assert.equal(answer(hono(`app.use("/api", ${honoCheck});`, page), "/api/orders"), "open");
+  assert.equal(answer(hono(`app.use("/api", ${honoCheck});`, 'app.get("/api", (c) => c.json(1));'), "/api"), "check");
+  assert.equal(answer(hono(`app.use("/api/*", ${honoCheck});`, page), "/api/orders"), "check");
+  assert.equal(answer(hono(`app.use("*", ${honoCheck});`, page), "/api/orders"), "check");
+  assert.equal(answer(hono(`app.use("/api/:section", ${honoCheck});`, page), "/api/orders"), "unsure:some-addresses");
+  // The kind of app decides, not the file the step is written in: a Hono
+  // app handed to a file that never loads Hono is still Hono.
+  const index = { path: "src/index.ts", content: ['import { Hono } from "hono";', 'import { mount } from "./mount";', "const app = new Hono();", "mount(app);", page].join("\n") };
+  const mount = { path: "src/mount.ts", content: `export function mount(app) { app.use("/api", ${honoCheck}); }` };
+  assert.equal(answer([index, mount], "/api/orders"), "open");
+  // An Express app stays Express in a file that also loads something of Hono's, or only mentions it.
+  const expressToo = (extra: string) => one(extra, "function requireLogin(req, res, next) { if (!req.user) return res.sendStatus(401); next(); }", 'app.use("/api", requireLogin);', 'app.get("/api/orders", (req, res) => res.json(1));');
+  assert.equal(answer(expressToo('const { serve } = require("@hono/node-server");'), "/api/orders"), "check");
+  assert.equal(answer(expressToo('// moved here from "hono"'), "/api/orders"), "check");
+  // An app of unknown kind: covered only where Express and Hono agree.
+  const unknown = (prefix: string) => [{ path: "routes.js", content: `module.exports = (app) => { app.use("${prefix}", requireLogin); app.get("/api/orders", (req, res) => res.json(1)); };` }];
+  assert.equal(answer(unknown("/api"), "/api/orders"), "unsure:some-addresses");
+  assert.equal(answer(unknown("/api/*"), "/api/orders"), "check");
+  // ...while Express treats the same address as a prefix.
+  const real = "function requireLogin(req, res, next) { if (!req.user) return res.sendStatus(401); next(); }";
+  assert.equal(answer(one(real, 'app.use("/api", requireLogin);', 'app.get("/api/orders", (req, res) => res.json(1));'), "/api/orders"), "check");
+
+  // 2. The app's own token helper is not the library that throws on a bad pass.
+  const own = { path: "lib/jwt.js", content: 'const j = require("jsonwebtoken");\nexports.verify = (t) => { try { return j.verify(t, process.env.K); } catch { return null; } };' };
+  const use = "app.use((req, res, next) => { req.user = jwt.verify(req.cookies.token, K); next(); });";
+  assert.equal(answer([{ path: "server.js", content: [...HEAD, 'const jwt = require("./lib/jwt");', use, ROUTE].join("\n") }, own]), "open");
+  assert.equal(answer(one(use, ROUTE)), "open", "a `jwt` bound nowhere is not known to be the library");
+  assert.equal(answer(one('const jwt = require("jsonwebtoken");', use, ROUTE)), "check");
+  assert.equal(answer(one('const { verify: checkPass } = require("jsonwebtoken");', "app.use((req, res, next) => { req.user = checkPass(req.cookies.token, K); next(); });", ROUTE)), "check");
+  assert.equal(answer(one('const { jwtVerify } = require("jose");', "app.use(async (req, res, next) => { req.user = await jwtVerify(req.cookies.token, K); next(); });", ROUTE)), "check");
+  assert.equal(answer(one("const jwtVerify = (t) => { try { return read(t); } catch { return null; } };", "app.use(async (req, res, next) => { req.user = await jwtVerify(req.cookies.token); next(); });", ROUTE)), "open");
+  assert.equal(answer(one('const admin = require("firebase-admin");', "app.use(async (req, res, next) => { req.user = await admin.auth().verifyIdToken(req.cookies.token); next(); });", ROUTE)), "check");
+
+  // 3. A factory that may return a step letting everyone through: its code decides, not its name.
+  const made = "function requireAuth(o) { if (o.off) return (req, res, next) => next(); return (req, res, next) => { if (!req.user) return res.sendStatus(401); next(); }; }";
+  assert.equal(answer(one(made, "app.use(requireAuth(opts));", ROUTE)), "unsure:optional");
+  const both = "function requireAuth(o) { if (o.api) return (req, res, next) => { if (!req.user) return res.sendStatus(401); next(); }; return (req, res, next) => { if (!req.user) return res.redirect('/login'); next(); }; }";
+  assert.equal(answer(one(both, "app.use(requireAuth(opts));", ROUTE)), "check");
+  // 7. `.bind` is the same function.
+  assert.equal(answer(one("function requireLogin(req, res, next) { req.seen = true; next(); }", "app.use(requireLogin.bind(null));", ROUTE)), "open");
+  assert.equal(answer(one(real, "app.use(requireLogin.bind(null));", ROUTE)), "check");
+
+  // 4. Auth0's bearer check set to let everyone in.
+  assert.equal(answer(one('const { auth } = require("express-oauth2-jwt-bearer");', "app.use(auth({ audience: A, authRequired: false }));", ROUTE)), "unsure:optional");
+  assert.equal(answer(one('const { auth } = require("express-oauth2-jwt-bearer");', "app.use(auth({ audience: A }));", ROUTE)), "check");
+  // 5. Packages named for sign-in that refuse nobody, and other exports of such packages.
+  assert.equal(answer(one('const bearerToken = require("express-bearer-token");', "app.use(bearerToken());", ROUTE)), "open");
+  assert.equal(answer(one('const NextAuth = require("next-auth");', "app.use(NextAuth(options));", ROUTE)), "open");
+  assert.equal(answer(one('const { helper } = require("acme-auth-tools");', "app.use(helper());", ROUTE)), "unsure:unreadable");
+  assert.equal(answer(one('const gate = require("acme-auth-gate");', "app.use(gate());", ROUTE)), "check");
+
+  // 6. `=== false` and `=== null` are false for a user that was never set.
+  assert.equal(answer(one('app.use((req, res, next) => { if (req.session.loggedIn === false) return res.redirect("/login"); next(); });', ROUTE)), "unsure:unclear-body");
+  assert.equal(answer(one("app.use((req, res, next) => { if (req.user === null) return res.sendStatus(401); next(); });", ROUTE)), "unsure:unclear-body");
+  assert.equal(answer(one("app.use((req, res, next) => { if (req.user !== null) return next(); res.sendStatus(401); });", ROUTE)), "unsure:unclear-body");
+  for (const test of ["req.user === undefined", "req.user == null", 'typeof req.user === "undefined"', "req.session.loggedIn !== true"]) {
+    assert.equal(answer(one(`app.use((req, res, next) => { if (${test}) return res.sendStatus(401); next(); });`, ROUTE)), "check", test);
+  }
+
+  // Two shapes that used to cost a wrong report on protected pages.
+  assert.equal(answer(one(real, 'const asyncHandler = require("express-async-handler");', "app.use(asyncHandler(requireLogin));", ROUTE)), "check");
+  assert.equal(answer(one(real, "app.use([logger, requireLogin]);", ROUTE)), "check");
+  assert.equal(answer(one("function requireLogin(req, res, next) { next(); }", "app.use([logger, requireLogin]);", ROUTE)), "open");
+  assert.equal(answer(one(real, 'app.use(["/api", "/shop"], requireLogin);', 'app.get("/shop/cart", (req, res) => res.json(1));'), "/shop/cart"), "check");
+});
+
 test("a step covers only pages after it, under its own address", () => {
   const check = "function requireMember(req, res, next) { if (!req.user) return res.sendStatus(401); next(); }";
   assert.equal(answer(one(check, ROUTE, "app.use(requireMember);")), "open");

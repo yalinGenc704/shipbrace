@@ -93,6 +93,6 @@ test("pages: an open page is never cleared, a protected page is never reported, 
     assert.deepEqual(wrong, [], `${mode}: pages graded wrongly`);
     assert.deepEqual(pages.unexpected.map((u) => u.caseId), [], `${mode}: an unmarked page reported open`);
     const count = (expect: string) => pages.outcomes.filter((o) => o.entry.expect === expect).length;
-    assert.ok(count("open") >= 12 && count("protected") >= 14 && count("unsure") >= 11, `${mode}: page cases went missing`);
+    assert.ok(count("open") >= 14 && count("protected") >= 17 && count("unsure") >= 12, `${mode}: page cases went missing`);
   }
 });

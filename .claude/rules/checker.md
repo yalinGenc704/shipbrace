@@ -374,16 +374,35 @@ benchmark scores stay in CLAUDE.md.
   addresses (`/login`, `OPTIONS`) hands every page after it back even
   when the page cannot match; steps behind path aliases (`@/...`) and
   re-exporting index files are not followed, so they hand pages back
-  (and turn an open page into a lead); an array of steps
-  (`app.use([a, check])`), a parameter-only address (`/:x`) and `use`
-  called indirectly are not read, so pages behind them are reported
-  open; better-auth's `getSession` and Supabase's `getUser` checks hand
-  pages back. Names that want visitors signed out or do another job
+  (and turn an open page into a lead); a parameter-only address (`/:x`)
+  and `use` called indirectly are not read, so pages behind them are
+  reported open; better-auth's `getSession` and Supabase's `getUser`
+  checks hand pages back. Names that want visitors signed out or do
+  another job
   (`checkNotAuthenticated`, `forwardAuthenticated`, `loginLimiter`,
   `authCors`) hand pages back rather than count; other out-of-sight names
   that merely contain a sign-in word still count (Murat's decision), and
   `clerk.expressRequireAuth()` is not recognised (reported open).
-  Benchmark: 35 page cases, 37 of 37 right;
+  The review against the plan (Fable) closed seven more: in Hono an
+  address without `*` covers only itself (`app.use("/api", check)` does
+  not cover `/api/orders`; run against Hono 4.13.16; decided by how the
+  app was made, then where it was handed in from, then what its file and
+  the project load; an app of unknown kind is covered only where both
+  would cover it; Express addresses stay prefixes); a verify
+  guards the lines after it only when bound to its import (jsonwebtoken
+  `verify`, jose `jwtVerify`, firebase-admin's two), never by the name
+  `jwt` (the app's own `./lib/jwt` may return nothing); a factory with
+  several returns is a check only when every return is one, and `.bind`
+  is read as the same function, so readable code is never beaten by a
+  name; `express-oauth2-jwt-bearer` with `authRequired: false`;
+  `express-bearer-token`, `next-auth` and `jwt-decode` refuse nobody, and
+  only the main export of a package named for sign-in counts by name;
+  `=== null`, `=== false`, `=== 0` and `=== ""` say nothing (`== null`,
+  `=== undefined` and `!== true` still do). Also read now: a check
+  inside an async wrapper (`asyncHandler(check)`) and each step of a
+  list (`app.use([a, check])`). Still handed back: a check at the top of
+  a file whose pages are added inside a function.
+  Benchmark: 39 page cases, 43 of 43 right;
   the grader refuses a page marker that is not on a route. Practice apps: DVNA 21 and keystone 12 unchanged;
   NodeGoat 6 -> 7 (`/`, a false alarm: its handler checks the session in
   another file); Juice Shop 52 -> 106, all 54 in `server.ts`, which had

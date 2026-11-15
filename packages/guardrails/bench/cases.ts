@@ -2936,4 +2936,59 @@ export const CASES: BenchCase[] = [
   pageCase("page-helper-adds-check", "A helper that adds the sign-in check, called before the pages.", [
     file("server.js", [...EXPRESS, ...REQUIRE_MEMBER, "function applyMiddleware(app) {", "  app.use(requireMember);", "}", "applyMiddleware(app);", ORDERS]),
   ], [{ marker: "A", expect: "protected", why: "The helper adds the check before the page is registered." }]),
+  // Found by the plan review.
+  pageCase("page-hono-exact-address", "In Hono an address without a star covers only itself.", [
+    file("server/src/index.ts", [
+      ...HEAD,
+      "const requireMember = async (c, next) => {",
+      '  if (!c.get("user")) return c.json({ error: "Sign in first" }, 401);',
+      "  await next();",
+      "};",
+      'app.use("/api", requireMember);',
+      'app.use("/account/*", requireMember);',
+      'app.get("/api/orders", (c) => c.json(listOrders(c.get("user")))); // [A]',
+      'app.get("/account/orders", (c) => c.json(listOrders(c.get("user")))); // [B]',
+    ]),
+  ], [
+    { marker: "A", expect: "open", why: 'Hono runs a step registered for "/api" only on /api itself.' },
+    { marker: "B", expect: "protected", why: '"/account/*" covers everything under /account.' },
+  ]),
+  pageCase("page-own-token-helper", "The app's own token helper returns nothing on a bad pass, and the step carries on.", [
+    file("server.js", [...EXPRESS, 'const jwt = require("./lib/jwt");', "app.use((req, res, next) => { req.user = jwt.verify(req.cookies.token); next(); });", ORDERS]),
+    file("lib/jwt.js", [
+      'const jsonwebtoken = require("jsonwebtoken");',
+      "exports.verify = (token) => {",
+      "  try {",
+      "    return jsonwebtoken.verify(token, process.env.JWT_SECRET);",
+      "  } catch {",
+      "    return null;",
+      "  }",
+      "};",
+    ]),
+  ], [{ marker: "A", expect: "open", why: "A bad pass only leaves the user empty; the page still answers." }]),
+  pageCase("page-check-with-off-switch", "A function that makes the check, or a step that lets everyone through.", [
+    file("server.js", [
+      ...EXPRESS,
+      "function requireAuth(options) {",
+      "  if (options.disabled) return (req, res, next) => next();",
+      '  return (req, res, next) => { if (!req.user) return res.redirect("/login"); next(); };',
+      "}",
+      "app.use(requireAuth(settings.auth));",
+      ORDERS,
+    ]),
+  ], [{ marker: "A", expect: "unsure", why: "With the switch set, nobody is turned away." }]),
+  pageCase("page-wrapped-and-listed-checks", "A check inside an async wrapper, and one in a list of steps.", [
+    file("server.js", [
+      ...EXPRESS,
+      ...REQUIRE_MEMBER,
+      'const asyncHandler = require("express-async-handler");',
+      'app.use("/shop", asyncHandler(requireMember));',
+      'app.use("/account", [express.json(), requireMember]);',
+      'app.get("/shop/cart", (req, res) => res.json(cartOf(req.session.userId))); // [A]',
+      'app.get("/account/orders", (req, res) => res.json(listOrders(req.session.userId))); // [B]',
+    ]),
+  ], [
+    { marker: "A", expect: "protected", why: "The wrapper only passes errors on; the check still runs." },
+    { marker: "B", expect: "protected", why: "Each step in the list runs, the check among them." },
+  ]),
 ];

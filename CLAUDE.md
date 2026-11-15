@@ -100,7 +100,7 @@ everywhere:
 # PostgreSQL 18 (Homebrew, not started at login). Databases: shipbrace, shipbrace_test.
 LC_ALL=en_US.UTF-8 /opt/homebrew/opt/postgresql@18/bin/pg_ctl -D /opt/homebrew/var/postgresql@18 -l /opt/homebrew/var/log/postgresql@18.log start
 
-# all tests (expect 476 pass). Without TEST_DATABASE_URL the 6 database tests
+# all tests (expect 477 pass). Without TEST_DATABASE_URL the 6 database tests
 # are skipped and say so; it must name a database ending in _test (it is wiped).
 # CI (.github/workflows/ci.yml) runs typecheck, lint, tests and build on every push.
 TEST_DATABASE_URL=postgres:///shipbrace_test npm test
@@ -253,10 +253,10 @@ the server with the AI step, start it with an extra `--env-file` that sets
   `Number.parseInt`/`Number.parseFloat` now count like `parseInt` (case
   `number-parse-int-direct`). Before them (2026-10-20): 36/40, 39/40, 0 false alarms; the only
   other perfect-suggester miss is a React component pasting a `body` prop
-  as raw HTML (stays "worth a look"). **Pages (2026-11-15, 35 more apps,
-  129 in all):** graded apart from the operations above, which they leave
-  unchanged: 37 of 37 right (12 open pages reported, 14 protected pages
-  cleared, 11 unclear ones handed back); `test/bench.test.ts` requires all.
+  as raw HTML (stays "worth a look"). **Pages (2026-11-15, 39 more apps,
+  133 in all):** graded apart from the operations above, which they leave
+  unchanged: 43 of 43 right (14 open pages reported, 17 protected pages
+  cleared, 12 unclear ones handed back); `test/bench.test.ts` requires all.
 
 The rest of the current state is in two files that Claude Code loads when
 matching files are opened: `.claude/rules/checker.md` (`packages/`,

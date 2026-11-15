@@ -241,6 +241,9 @@ const ROLE_WORD_ONLY = /^(?:admin|admins|role|roles|permission|permissions|acl)$
  */
 const SAYS_OTHERWISE = /[Oo]ptional|^no[A-Z_]|[Nn]one|[Aa]nonymous|[Gg]uest|[Ee]xcept|[Pp]ublic|[Ll]ogger|[Ll]ogging|[Ll]ogs\b|^(?:set|attach|load|add|init|skip|bypass|maybe|soft|try|lenient|lazy|passive)[A-Z_]|[Ss]kip|[Bb]ypass|IfPresent|[Dd]ecode|^initiali[sz]e$|Handler$|^to[A-Z]\w*Handler$|[Nn]ot[A-Z]|[Ll]ogged[Oo]ut|[Uu]nauth|^(?:redirect|forward)[A-Z]|[Ll]imit|[Cc]ors\b|Cors|[Cc]srf|Csrf|Parser$|Https$|Json$|Body$|Trace$|Context$|RequestId$|Status$/;
 
+/** Wrappers that run a step and pass its errors on, changing nothing else. */
+const ASYNC_WRAPPER = /^(?:asyncHandler|expressAsyncHandler|catchAsync|wrapAsync|asyncWrap|asyncMiddleware)$/;
+
 /** Names of routers and route modules: what a check covers, never a check. */
 const ROUTER_NAME = /(?:[Rr]outer|[Rr]outes?|[Cc]ontroller)$/;
 
@@ -249,7 +252,7 @@ const KNOWN_CHECKS: Record<string, { checks: RegExp; never?: RegExp; optional?: 
   "express-jwt": { checks: /^(?:default|expressjwt|jwt)$/, optional: /\bcredentialsRequired\s*:\s*false\b/ },
   "connect-ensure-login": { checks: /^(?:ensureLoggedIn|ensureAuthenticated)$/, never: /^(?:ensureLoggedOut|ensureNotAuthenticated)$/ },
   "express-openid-connect": { checks: /^(?:requiresAuth|auth)$/, optional: /\bauthRequired\s*:\s*false\b/ },
-  "express-oauth2-jwt-bearer": { checks: /^(?:auth|requiredScopes)$/ },
+  "express-oauth2-jwt-bearer": { checks: /^(?:auth|requiredScopes)$/, optional: /\bauthRequired\s*:\s*false\b/ },
   // Clerk's other packages only record who is signed in, except the Express SDK's `ClerkExpressRequireAuth`.
   "@clerk/express": { checks: /^requireAuth$/, never: /^clerkMiddleware$/ },
   "@clerk/clerk-sdk-node": { checks: /^ClerkExpressRequireAuth$/, never: /^ClerkExpressWithAuth$/ },
@@ -259,6 +262,10 @@ const KNOWN_CHECKS: Record<string, { checks: RegExp; never?: RegExp; optional?: 
   // The sign-in pages themselves, mounted for every address: they refuse nobody.
   "better-auth/node": { checks: /^$/, never: /^toNodeHandler$/ },
   "@auth/express": { checks: /^$/, never: /^ExpressAuth$/ },
+  "next-auth": { checks: /^$/, never: /./ },
+  // They read a sign-in pass and refuse nobody.
+  "express-bearer-token": { checks: /^$/, never: /./ },
+  "jwt-decode": { checks: /^$/, never: /./ },
   "hono/jwt": { checks: /^jwt$/ },
   "hono/bearer-auth": { checks: /^bearerAuth$/ },
   "hono/basic-auth": { checks: /^basicAuth$/ },
@@ -289,7 +296,10 @@ function packageAnswer(spec: string, member: string, options: string, readable: 
   if (known || spec.startsWith("@clerk/")) return /^(?:require|protect)/i.test(member) ? unclear("unreadable") : NEVER;
   if (SETUP_PACKAGE.test(spec) || spec === "express" || spec.startsWith("hono/")) return NEVER;
   if (SAYS_OTHERWISE.test(member)) return unclear("unreadable");
-  if (PACKAGE_SAYS.test(spec) || (SIGN_IN_NAME.test(member) && !ROLE_WORD_ONLY.test(member))) return { kind: "check", names };
+  if (SIGN_IN_NAME.test(member) && !ROLE_WORD_ONLY.test(member)) return { kind: "check", names };
+  // A package named for sign-in: its main export counts by that name
+  // (Murat's decision); any other export of it says nothing either way.
+  if (PACKAGE_SAYS.test(spec)) return member === "default" ? { kind: "check", names } : unclear("unreadable");
   return NEVER;
 }
 
@@ -298,6 +308,8 @@ function packageAnswer(spec: string, member: string, options: string, readable: 
 interface FileInfo {
   parsed: ParsedFile;
   path: string;
+  /** Which of Express and Hono the file loads (`Project.loads`). */
+  loads?: { express: boolean; hono: boolean };
   /** Each `require`/import of this file's: local name -> what it names. */
   passport?: Set<string>;
 }
@@ -360,6 +372,23 @@ class Project {
       if (found) return found;
     }
     return undefined;
+  }
+
+  /** Which of Express and Hono a file imports or requires, read from its code, not its text. */
+  loads(file: FileInfo): { express: boolean; hono: boolean } {
+    if (file.loads) return file.loads;
+    const loads = { express: false, hono: false };
+    const see = (spec: string) => {
+      if (spec === "express") loads.express = true;
+      if (spec === "hono" || spec.startsWith("hono/") || spec.startsWith("@hono/")) loads.hono = true;
+    };
+    walk(file.parsed.program, (node) => {
+      if (node.type === "ImportDeclaration") see(String((node.source as Node).value ?? ""));
+      const required = node.type === "CallExpression" && dottedName(node.callee) === "require" ? ((node.arguments ?? []) as Node[])[0] : undefined;
+      if (isStringLiteral(required)) see(String(required.value));
+    });
+    file.loads = loads;
+    return loads;
   }
 
   passportIn(file: FileInfo): Set<string> {
@@ -577,6 +606,15 @@ class Project {
     if (!callee) return this.byName(label, names);
     const called = dottedName(callee) ?? "";
     if (SESSION_SETUP.test(called)) return NEVER;
+    const args = (call.arguments ?? []) as Node[];
+    const method = callee.type.endsWith("MemberExpression") && !callee.computed ? String((callee.property as Node | undefined)?.name ?? "") : "";
+    // `requireLogin.bind(this)`: the same function, read for what it does.
+    if (method === "bind") return this.classifyValue(callee.object as Node, file, hops, label.replace(/\.bind$/, ""), names);
+    // `asyncHandler(check)`: a wrapper that only passes errors on; the step is its argument.
+    if (args.length === 1 && ASYNC_WRAPPER.test(called.split(".").pop() ?? "")) {
+      const inner = this.classifyStep(args[0]!, file);
+      return inner.conditional && inner.answer.kind === "check" ? unclear("conditional") : inner.answer;
+    }
     // `expressjwt({...}).unless({ path: ["/orders"] })`: some addresses skip the check.
     if (callee.type.endsWith("MemberExpression") && /^(?:unless|except|excluding)$/.test(String((callee.property as Node | undefined)?.name ?? ""))) {
       return unclear("exempt");
@@ -617,9 +655,23 @@ class Project {
         }
       };
       visit(body);
-      if (returns.length !== 1) return returns.length === 0 ? unclear("unreadable") : this.byName(label, names);
+      if (returns.length === 0) return unclear("unreadable");
+      // Several things it may return (`if (off) return skip; return check;`):
+      // a check only when every one of them is.
+      if (returns.length > 1) {
+        const answers = returns.map((r) => this.readReturned(r, fn, file, hops, label, names));
+        if (answers.every((a) => a.kind === "check")) return answers[0]!;
+        if (answers.every((a) => a.kind === "never")) return NEVER;
+        return answers.find((a) => a.kind === "unclear") ?? unclear("optional");
+      }
       returned = returns[0];
     }
+    return this.readReturned(returned, fn, file, hops, label, names);
+  }
+
+  /** One value a factory returns, read as the step it makes. */
+  private readReturned(returned: Node | undefined, fn: Node, file: FileInfo, hops: number, label: string, names: string[]): Answer {
+    const body = fn.body as Node | undefined;
     const value = unwrap(returned);
     if (!value) return unclear("unreadable");
     if (isFunction(value)) return this.readMiddleware(value, file, hops, names);
@@ -651,8 +703,34 @@ class Project {
     // It answers every request itself; it runs nothing after it.
     if (next === undefined) return NEVER;
     if (next === "") return unclear("unreadable");
-    const reading = new Reading(fn, params.length === 3 ? paramName(params[0]) : "", paramName(params[0]), next);
+    const reading = new Reading(fn, params.length === 3 ? paramName(params[0]) : "", paramName(params[0]), next, (call) => this.throwsOnBadPass(call, file));
     return reading.answer(names, (call) => this.delegate(call, file, hops));
+  }
+
+  /**
+   * True for a library check that throws (or rejects) when a sign-in pass is
+   * not genuine, bound to its import: jsonwebtoken's `verify`, jose's
+   * `jwtVerify`, firebase-admin's `verifyIdToken` and `verifySessionCookie`.
+   * The app's own `./lib/jwt` with a `verify` that returns nothing on a bad
+   * pass is not one, whatever it is called.
+   */
+  private throwsOnBadPass(call: Node, file: FileInfo): boolean {
+    const callee = unwrap(call.callee as Node);
+    if (!callee) return false;
+    let root: Node | undefined = callee;
+    for (let depth = 0; root && root.type !== "Identifier" && depth < 6; depth++) {
+      root = unwrap((root.type === "CallExpression" ? root.callee : root.type.endsWith("MemberExpression") ? root.object : undefined) as Node | undefined);
+    }
+    if (root?.type !== "Identifier") return false;
+    const bound = this.resolveName(String(root.name), file, 0);
+    if (bound.kind !== "package") return false;
+    const method = callee.type === "Identifier"
+      ? bound.member
+      : callee.type.endsWith("MemberExpression") && !callee.computed ? String((callee.property as Node | undefined)?.name ?? "") : "";
+    if (bound.spec === "jsonwebtoken") return method === "verify";
+    if (bound.spec === "jose") return method === "jwtVerify";
+    if (bound.spec.startsWith("firebase-admin")) return method === "verifyIdToken" || method === "verifySessionCookie";
+    return false;
   }
 
   /** `passport.authenticate("jwt")(req, res, next)`: the step this one hands `next` to. */
@@ -718,14 +796,6 @@ const CONTEXT_KEY = /^(?:user|userId|user_id|currentUser|session|auth|jwtPayload
 const IDENTITY_CALL = /^(?:getSession|getServerSession|getUser|getCurrentUser|currentUser|requireUser|auth|getAuth)$/;
 /** Checks that verify a sign-in pass; their answer must still be tested. */
 const VERIFY_CALL = /^(?:jwtVerify|verifyJwt|verifyJWT|verifyToken|verifyIdToken|verifyAccessToken|verifySession|verifySessionCookie|validateToken|validateSession)$/;
-/**
- * Library checks known to throw (or reject) when a pass is not genuine, so
- * that reaching the next line already means it was: jsonwebtoken's
- * `verify`, jose's `jwtVerify`, Firebase's `verifyIdToken` and
- * `verifySessionCookie`. An app's own `verifyToken` may return false instead.
- */
-const THROWING_VERIFY = /^(?:jwtVerify|verifyIdToken|verifySessionCookie)$/;
-const JWT_OWNER = /^(?:jwt|jsonwebtoken|jose|jws|JWT)$/;
 /** Looking a sign-in pass up where the app keeps them. A bare `get`/`has` counts only on a store named for it. */
 const LOOKUP_CALL = /^(?:find\w*|lookup|load(?:User|Session|Account)\w*|getUser\w*|getSession\w*|authenticate\w*|validate(?:Session|Token|User)\w*|verify\w*)$/;
 const STORE_LOOKUP = /^(?:get|has)$/;
@@ -778,12 +848,15 @@ class Reading {
   /** The first parameter's name: the request, or Hono's context. */
   private readonly first: string;
   private readonly next: string;
+  /** True for a library check, bound to its import, that throws when a pass is not genuine. */
+  private readonly throws: (call: Node) => boolean;
 
-  constructor(fn: Node, req: string, first: string, next: string) {
+  constructor(fn: Node, req: string, first: string, next: string, throws: (call: Node) => boolean) {
     this.fn = fn;
     this.req = req;
     this.first = first;
     this.next = next;
+    this.throws = throws;
     this.learnNames();
   }
 
@@ -970,7 +1043,14 @@ class Reading {
         return equal ? { whenTrue: m.whenTrue, whenFalse: false, mentions: m.mentions } : { whenTrue: false, whenFalse: m.whenTrue, mentions: m.mentions };
       }
       if (isNothing(left) || isNothing(right)) {
+        const nothing = unwrap(isNothing(left) ? left : right)!;
         const m = this.meaning(isNothing(left) ? right : left);
+        // `== null` covers both empty values and `=== undefined` the one a
+        // user never set has. `=== null`, `=== false`, `=== 0` and `=== ""`
+        // are false for a user that was never set, so they say nothing.
+        const strict = String(node.operator).length === 3;
+        const coversUnset = !strict ? nothing.type === "Identifier" || nothing.value === null : nothing.type === "Identifier";
+        if (!coversUnset) return { whenTrue: false, whenFalse: false, mentions: m.mentions };
         return equal ? swap(m) : m;
       }
       // `req.user.role === "admin"`: equal to something fixed means someone is
@@ -1021,19 +1101,14 @@ class Reading {
    * jwtVerify(t, key)`) whose library check throws when the pass is not
    * genuine, so the lines after it run only for a genuine one. Not inside a
    * `try` (its `catch` may carry on), a choice, or a callback; not the app's
-   * own `verifyToken`, which may return false instead.
+   * own `verifyToken` or `./lib/jwt`, which may return nothing instead.
    */
   private verifiesFirst(statement: Node): boolean {
     if (statement.type !== "ExpressionStatement" && statement.type !== "VariableDeclaration") return false;
     let found = false;
     const visit = (node: Node): void => {
       if (found || FUNCTION.test(node.type) || node.type === "ConditionalExpression" || node.type === "LogicalExpression") return;
-      if (node.type === "CallExpression" && !((node.arguments ?? []) as Node[]).some(isFunction)) {
-        const callee = this.dotted(node.callee as Node);
-        const parts = callee.split(".");
-        const last = parts.pop() ?? "";
-        if (THROWING_VERIFY.test(last) || (last === "verify" && JWT_OWNER.test(parts.at(-1) ?? ""))) found = true;
-      }
+      if (node.type === "CallExpression" && !((node.arguments ?? []) as Node[]).some(isFunction) && this.throws(node)) found = true;
       for (const key of Object.keys(node)) {
         if (key === "type" || key === "start" || key === "end") continue;
         const value = node[key];
@@ -1252,14 +1327,32 @@ function underCondition(parents: Node[]): boolean {
 
 const normalise = (prefix: string): string => prefix.replace(/\*+$/, "").replace(/\/+$/, "");
 
-function matches(prefixes: string[] | null, path: string | null): "yes" | "no" | "maybe" {
+/**
+ * Whether a step registered for `prefixes` runs for `path`. Express treats
+ * an address as a prefix: `/api` covers `/api/orders`. Hono (`exact`) does
+ * not: `/api` covers only `/api` itself, and it takes `/api/*` to cover
+ * what is under it (checked against Hono 4.13.16).
+ */
+function matches(prefixes: string[] | null, path: string | null, exact: boolean | undefined): "yes" | "no" | "maybe" {
   if (prefixes !== null && prefixes.length === 0) return "yes";
   if (prefixes === null || path === null) return "maybe";
+  // Not known to be Express or Hono: covered only when both would cover it.
+  if (exact === undefined) {
+    const [asExpress, asHono] = [matches(prefixes, path, false), matches(prefixes, path, true)];
+    return asExpress === asHono ? asExpress : "maybe";
+  }
+  let maybe = false;
   for (const raw of prefixes) {
     const prefix = normalise(raw);
+    if (exact && !raw.endsWith("*")) {
+      // A pattern in the address (`/:id`, a bracket) cannot be compared as text.
+      if (/[:*({]/.test(raw)) maybe = true;
+      else if (path === raw || path === prefix) return "yes";
+      continue;
+    }
     if (prefix === "" || path === prefix || path.startsWith(`${prefix}/`)) return "yes";
   }
-  return "no";
+  return maybe ? "maybe" : "no";
 }
 
 function joinPath(prefix: string | null, path: string | null): string | null {
@@ -1285,6 +1378,39 @@ export function applySiteWideSteps(parsedFiles: ParsedFile[], doors: Door[], all
   const objects = new Map<string, ObjectInfo>();
   const packages = new Set(allPaths.filter((p) => /(?:^|\/)package\.json$/.test(p)).map((p) => p.split("/").slice(0, -1).join("/")));
 
+  /** Objects seen being made: `new Hono()`, or `express()` and its routers. */
+  const madeBy = new Map<string, "hono" | "express">();
+  const anyFile = project.all().map((f) => project.loads(f));
+  const projectLoads = { express: anyFile.some((l) => l.express), hono: anyFile.some((l) => l.hono) };
+
+  /**
+   * Whether an app or router is Hono's (true: an address without `*` covers
+   * only itself), Express's (false), or not known (undefined). Read from how
+   * the object was made; for one handed in or mounted, from where it came;
+   * failing that, from what its file loads, then what the project loads.
+   */
+  const exactCache = new Map<string, boolean | undefined>();
+  const exactOf = (key: string, depth = 0): boolean | undefined => {
+    if (exactCache.has(key)) return exactCache.get(key);
+    const made = madeBy.get(key);
+    let answer: boolean | undefined = made ? made === "hono" : undefined;
+    const info = objects.get(key);
+    if (answer === undefined && info && depth < MAX_HOPS) {
+      for (const link of info.links) {
+        const parent = link.parent ? exactOf(link.parent, depth + 1) : undefined;
+        if (parent !== undefined) { answer = parent; break; }
+      }
+    }
+    if (answer === undefined && info) {
+      const file = project.fileAt(info.file);
+      for (const loads of [file ? project.loads(file) : undefined, projectLoads]) {
+        if (answer === undefined && loads && loads.hono !== loads.express) answer = loads.hono;
+      }
+    }
+    if (depth === 0) exactCache.set(key, answer);
+    return answer;
+  };
+
   const objectAt = (file: FileInfo, name: string, scope: number): ObjectInfo => {
     const key = keyOf(file.path, scope, name);
     let info = objects.get(key);
@@ -1308,6 +1434,7 @@ export function applySiteWideSteps(parsedFiles: ParsedFile[], doors: Door[], all
       const requiredExpress = init?.type === "CallExpression" && requiredModule(init.callee as Node) === "express";
       if (made === "express" || (requiredExpress && !/Router/.test(made))) result = "root";
       else if (/(?:^|\.)Router$/.test(made) || made === "Hono" || made === "OpenAPIHono") result = made.includes("Router") ? "router" : "root";
+      if (result !== "unknown") madeBy.set(keyOf(file.path, scope, name), made === "Hono" || made === "OpenAPIHono" ? "hono" : "express");
     });
     return result;
   };
@@ -1458,6 +1585,8 @@ export function applySiteWideSteps(parsedFiles: ParsedFile[], doors: Door[], all
     if (isStringLiteral(node)) return [String(node.value)];
     if (node.type === "ArrayExpression") {
       const items = (node.elements ?? []) as Node[];
+      // A list of addresses; a list with no address in it is a list of steps.
+      if (items.length > 0 && !items.some((i) => isStringLiteral(i) || i?.type === "TemplateLiteral" || (i?.type === "Literal" && i.regex))) return undefined;
       return items.every((i) => isStringLiteral(i)) ? items.map((i) => String(i.value)) : null;
     }
     if (node.type === "TemplateLiteral" || (node.type === "Literal" && node.regex)) return null;
@@ -1523,7 +1652,9 @@ export function applySiteWideSteps(parsedFiles: ParsedFile[], doors: Door[], all
       if (prefixes === undefined && args.length >= 2 && !looksLikeStep(args[0]!, file, parents)) prefixes = null;
       const rest = prefixes === undefined ? args : args.slice(1);
       const conditional = underCondition(parents);
-      for (const arg of rest) {
+      // `app.use([logger, requireLogin])`: each one is a step of its own.
+      const each = rest.flatMap((a) => (unwrap(a)?.type === "ArrayExpression" ? ((unwrap(a)!.elements ?? []) as Node[]) : [a]));
+      for (const arg of each) {
         const targets = mountTargets(arg, file, parents);
         if (targets) {
           for (const prefix of prefixes === undefined ? [""] : prefixes === null ? [null] : prefixes) {
@@ -1614,7 +1745,7 @@ export function applySiteWideSteps(parsedFiles: ParsedFile[], doors: Door[], all
       // Another function's step may run before, after, or never.
       const ordered = step.fn === fn && !step.unordered;
       if (ordered && step.at >= at) continue;
-      const fit = matches(step.prefixes, path);
+      const fit = matches(step.prefixes, path, exactOf(key));
       if (fit === "no") continue;
       const label = step.label;
       if (step.answer.kind === "check") {
@@ -1656,7 +1787,8 @@ export function applySiteWideSteps(parsedFiles: ParsedFile[], doors: Door[], all
   for (const info of objects.values()) {
     if (info.provenance !== "root") continue;
     for (const step of info.steps) {
-      if (step.answer.kind !== "check" || step.conditional || matches(step.prefixes, "/") !== "yes" || (step.prefixes ?? []).some((p) => normalise(p) !== "")) continue;
+      // One added by a helper at a time that cannot be read is not "the app's check".
+      if (step.answer.kind !== "check" || step.conditional || step.unordered || matches(step.prefixes, "/", exactOf(info.key)) !== "yes" || (step.prefixes ?? []).some((p) => normalise(p) !== "")) continue;
       const folder = packageFolder(info.file, packages);
       if (!siteWideChecks.has(folder)) siteWideChecks.set(folder, step);
     }

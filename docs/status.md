@@ -15,7 +15,7 @@ refuses with a plain message when GitHub's hourly allowance is short).
 Since 2026-11-14 `master` takes changes only through a pull request whose
 "test" check passed (GitHub ruleset "Protect master", no bypass); deploy
 from `master` after merging. A database restore was practised on a
-throwaway copy on 2026-11-15: every table matched. 476 tests.
+throwaway copy on 2026-11-15: every table matched. 477 tests.
 
 1. **The AI cleaner step: live since 2026-11-11, not yet seen running**
    (Murat's decisions, 2026-11-10: Haiku 5.5 for his reviews only, neutral
@@ -64,7 +64,8 @@ throwaway copy on 2026-11-15: every table matched. 476 tests.
 4. **Sign-in steps before pages (setup item 10): built 2026-11-15 on
    branch `checker/site-wide-sign-in`, not pushed.** Steps in `app.use(...)`
    are read for what they do, in order and across files (Fable planned,
-   Opus built). Practice apps, rules alone: Juice Shop 52 -> 106 need
+   Opus built, Fable reviewed against the plan and closed seven more
+   false passes). Practice apps, rules alone: Juice Shop 52 -> 106 need
    fixing (54 pages lost a cover they never had; about 9 of them check
    sign-in inside their own code), NodeGoat 6 -> 7, DVNA and keystone
    unchanged. Next, offered: reading sign-in checks inside named handlers
