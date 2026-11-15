@@ -7,7 +7,9 @@ describes.
 **State:** everything is pushed and deployed (2026-11-14): last deployed
 commit `a1f55d7` (hono 4.13.16, @hono/node-server 2.1.6; `npm audit`
 clean), live version `c90066d1`, all six live checks passed. Before that,
-`97fbf54` / `40ddc80d` on 2026-11-11. The
+`97fbf54` / `40ddc80d` on 2026-11-11. Since 2026-11-14 `master` takes
+changes only through a pull request whose "test" check passed (GitHub
+ruleset "Protect master", no bypass); deploy from `master` after merging. The
 audit fixes and the set-aside work are live, migration 0008 is applied, and
 the year-long asset caching is taken out again. Murat signed in after the
 deploy with the invite list by account number (audit log, 2026-11-12), and
@@ -36,8 +38,6 @@ accepted the new notices. 431 tests.
    **Offered, not started:**
    - bringing the unused Docker setup in `deploy/` in line with Cloudflare
      (limits, records, who may use the AI step) before anyone uses it;
-   - requiring CI to pass before changes land on `master`: a GitHub
-     setting Murat switches on; walk him through it when he asks;
    - a function written inline in `app.use(...)`, and names the checker
      does not know, still count as a sign-in check for every route;
    - a map of the checker per OWASP category (detects / misses / effort);
