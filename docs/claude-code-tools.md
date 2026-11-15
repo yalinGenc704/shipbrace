@@ -18,6 +18,18 @@ opened from the parent folder, outside tools) stay in CLAUDE.md.
   pushed tree, runs typecheck, lint, tests and the benchmark, applies pending
   D1 migrations, deploys, then checks the live site (health, sign-in, CSP,
   robots, unsigned webhook refused, no folder review).
+- **Skill** `/new-check` (`.claude/skills/new-check/`, added 2026-11-14):
+  the steps for adding a detector in one place: agree what it finds,
+  benchmark cases (the real problem and a safe look-alike) and tests first,
+  where each kind of detector goes, then tests, benchmark, practice apps,
+  notes and `conventions-reviewer`. Claude may also load it on its own when
+  starting a detector.
+- **Skill** `/cleanup` (`.claude/skills/cleanup/`, added 2026-11-14):
+  user-only. Fallow (skipping its known false alarms below), `/simplify`,
+  then `scripts/cleanup-guard.ts`, which fails if any test or benchmark file
+  changed or any detector name, list member, operation kind, export,
+  ALL_CAPS constant entry or `undecidable` in the checker is gone (comments
+  removed first), then tests and an unchanged benchmark. Commits nothing.
 - **Sub-agent** `security-auditor` (`.claude/agents/`, added 2026-10-18):
   a read-only (Read, Grep, Glob) audit of ShipBrace itself, adapted from
   Osmani's agent-skills (MIT) with ShipBrace's own risky areas: webhook,

@@ -84,6 +84,7 @@ review     → ten OWASP Top 10:2025 modules for the user
 | `README.md` | Plain-language overview for anyone: the vision, how a review decides, the rules, honest numbers, what is built |
 | `scripts/bench.ts` | Prints the benchmark scores: rules alone, perfect suggester, optionally a real model |
 | `scripts/bench-cleaners.ts` | The cleaner experiment on the benchmark, per model and run, with token cost (costs credit) |
+| `scripts/cleanup-guard.ts` | Used by `/cleanup`: fails if tests or the benchmark changed, or a detector or `undecidable` branch is gone, since a commit |
 
 `analysis/inventory.ts` holds only shared types: build an inventory with
 `buildInventoryFromAst` and decide claims with `verifyClaim` (the old regex
