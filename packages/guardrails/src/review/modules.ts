@@ -666,7 +666,7 @@ const MODULES: ModuleShape[] = [
       },
       {
         id: "auth/session-expiry",
-        covers: "sign-in passes are given an expiry time",
+        covers: "sign-in passes are given an expiry time, or refused past a set age wherever they are checked",
         title: "Sign-ins expire, and signing out really signs you out",
         question:
           "Confirm a sign-in does not last forever, and that signing out really ends it on your site rather than only in the browser.",

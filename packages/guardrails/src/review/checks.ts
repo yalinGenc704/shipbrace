@@ -1,4 +1,4 @@
-import { codeOnly, codeOnlyLines, dottedName, locationOf, parseFile, walk, withoutComments, type Node } from "../analysis/ast.ts";
+import { codeOnly, codeOnlyLines, dottedName, isStringLiteral, locationOf, parseFile, walk, withoutComments, type Node } from "../analysis/ast.ts";
 import type { Inventory } from "../analysis/inventory.ts";
 import { modelFields } from "../analysis/schemas.ts";
 import { COMPOSE, dependencyNames, fileChecks, outOfSight } from "./project-files.ts";
@@ -989,6 +989,173 @@ const passwordStorage: ProjectCheck = {
 
 // --- A07: sessions must expire -----------------------------------------------
 
+/** Libraries whose pass checks this file knows how to read for an age limit. */
+const JOSE = /^jose(?:\/|$)/;
+const JSONWEBTOKEN = /^jsonwebtoken$/;
+/** Any other library that reads sign-in passes: its checks cannot be judged here. */
+const OTHER_PASS_LIBRARY = /jwt|jws|jwe|jose|paseto|jsonwebtoken/i;
+/**
+ * A call that checks or opens a pass: `verify`, `jwtVerify`, `decodeJwt`,
+ * `jwtDecrypt`... In a file using a pass library, such a call that is not a
+ * known check with a limit means the answer is no; that errs to the old risk.
+ */
+const PASS_CHECK = /verify|decode|decrypt/i;
+/** Code in any language a server or page could check passes in. */
+const CODE_FILE = /\.(?:[cm]?[jt]sx?|vue|svelte|astro|py|go|rb|php|java|kt|kts|cs|rs|ex|exs|scala|swift|dart|lua|clj|erl|hs)$/i;
+
+/**
+ * Names this file binds to the two known libraries: `jwtVerify` from jose
+ * (under any local name), and from jsonwebtoken either the module itself
+ * (`import jwt from`, `import * as jwt`, `const jwt = require(...)`) or its
+ * `verify` (`import { verify as check }`, `const { verify } = require(...)`).
+ * `other` is true when the file uses some other pass library, or imports a
+ * known one in a shape not followed here.
+ */
+function passLibraryNames(program: Node): { joseVerify: Set<string>; jwtModule: Set<string>; jwtVerify: Set<string>; own: Set<string>; other: boolean } {
+  const names = { joseVerify: new Set<string>(), jwtModule: new Set<string>(), jwtVerify: new Set<string>(), own: new Set<string>(), other: false };
+  // The app's own functions (`async function verifyJwt`), whose code is read
+  // like the rest: the calls inside them are what is judged, not their names.
+  walk(program, (node) => {
+    if (node.type === "FunctionDeclaration") names.own.add(String((node.id as Node | undefined)?.name ?? ""));
+    const init = node.type === "VariableDeclarator" ? (node.init as Node | undefined) : undefined;
+    if (init && /^(?:ArrowFunctionExpression|FunctionExpression)$/.test(init.type) && (node.id as Node | undefined)?.type === "Identifier") {
+      names.own.add(String((node.id as Node).name));
+    }
+    if (node.type === "ImportDeclaration" && String((node.source as Node | undefined)?.value ?? "").startsWith(".")) {
+      for (const specifier of (node.specifiers ?? []) as Node[]) names.own.add(String((specifier.local as Node | undefined)?.name ?? ""));
+    }
+  });
+  const take = (module: string, imported: string | "*", local: string) => {
+    if (JOSE.test(module) && imported === "jwtVerify") names.joseVerify.add(local);
+    else if (JSONWEBTOKEN.test(module) && (imported === "*" || imported === "default")) names.jwtModule.add(local);
+    else if (JSONWEBTOKEN.test(module) && imported === "verify") names.jwtVerify.add(local);
+  };
+  walk(program, (node) => {
+    if (node.type === "ImportDeclaration") {
+      const module = String((node.source as Node | undefined)?.value ?? "");
+      if (node.importKind === "type" || !OTHER_PASS_LIBRARY.test(module)) return;
+      if (!JOSE.test(module) && !JSONWEBTOKEN.test(module)) names.other = true;
+      for (const specifier of (node.specifiers ?? []) as Node[]) {
+        if (specifier.importKind === "type") continue;
+        const local = String((specifier.local as Node | undefined)?.name ?? "");
+        const imported = specifier.imported as Node | undefined;
+        take(module, specifier.type === "ImportSpecifier" ? String(imported?.name ?? imported?.value ?? "") : specifier.type === "ImportDefaultSpecifier" ? "default" : "*", local);
+      }
+      return;
+    }
+    if (node.type === "CallExpression" && dottedName(node.callee) === "require" || node.type === "ImportExpression") {
+      const target = (node.type === "ImportExpression" ? node.source : ((node.arguments ?? []) as Node[])[0]) as Node | undefined;
+      const module = isStringLiteral(target) ? target.value : "";
+      if (!OTHER_PASS_LIBRARY.test(module)) return;
+      if (!JOSE.test(module) && !JSONWEBTOKEN.test(module)) names.other = true;
+    }
+    if (node.type === "VariableDeclarator") {
+      const init = node.init as Node | undefined;
+      if (init?.type !== "CallExpression" || dottedName(init.callee) !== "require") return;
+      const target = ((init.arguments ?? []) as Node[])[0];
+      const module = isStringLiteral(target) ? target.value : "";
+      if (!JSONWEBTOKEN.test(module) && !JOSE.test(module)) return;
+      const id = node.id as Node | undefined;
+      if (id?.type === "Identifier") take(module, JOSE.test(module) ? "jose" : "*", String(id.name));
+      else if (id?.type === "ObjectPattern") {
+        for (const p of (id.properties ?? []) as Node[]) {
+          const key = p.key as Node | undefined;
+          const value = p.value as Node | undefined;
+          if (p.type === "Property" && !p.computed && value?.type === "Identifier") take(module, String(key?.name ?? ""), String(value.name));
+          else names.other = true;
+        }
+      } else names.other = true;
+    }
+  });
+  // A library's name also bound by the app (a look-alike next to the import)
+  // is a guess either way.
+  for (const name of names.own) {
+    if (names.joseVerify.has(name) || names.jwtVerify.has(name) || names.jwtModule.has(name)) names.other = true;
+  }
+  return names;
+}
+
+/** A limit written plainly: a non-empty text, a positive number, or a template with no gaps. */
+function plainLimit(value: Node | undefined): boolean {
+  if (isStringLiteral(value)) return value.value.trim() !== "";
+  if (value?.type === "Literal" && typeof value.value === "number") return value.value > 0;
+  if (value?.type === "TemplateLiteral") {
+    const quasis = (value.quasis ?? []) as Node[];
+    return ((value.expressions ?? []) as Node[]).length === 0 && quasis.some((q) => String((q.value as { cooked?: string } | undefined)?.cooked ?? "").trim() !== "");
+  }
+  return false;
+}
+
+/**
+ * Whether every place the code checks a sign-in pass refuses one older than
+ * a set age, so passes end even though none carries an expiry of its own:
+ * jose's `jwtVerify(token, key, { maxTokenAge })` and jsonwebtoken's
+ * `verify(token, secret, { maxAge })`. Both libraries refuse a pass with no
+ * time of issue when the limit is set, so leaving it out does not dodge it.
+ *
+ * "all" only when at least one check exists, every call in the project that
+ * looks like checking or opening a pass (`verify`, `decode`, `decrypt`, in a
+ * file using a pass library) is one of those two, bound to its real import,
+ * with the limit written plainly in the call; and no file uses another pass
+ * library. "unseen" when that holds for the files read but a code file could
+ * not be read or parsed. Anything else is "no": the old answer stands.
+ */
+function ageLimitedOnEveryCheck(snapshot: RepoSnapshot, files: SourceFile[]): { answer: "all" | "no" } | { answer: "unseen"; example: string } {
+  let checks = 0;
+  let unseen = snapshot.incomplete
+    ? "files past the review's limit"
+    : (snapshot.unread ?? []).find((p) => CODE_FILE.test(p) && !isTestPath(p));
+  for (const file of files) {
+    const text = codeOnly(file);
+    if (!OTHER_PASS_LIBRARY.test(text)) continue;
+    const parsed = parseFile(file);
+    if (!parsed) {
+      unseen ??= file.path;
+      continue;
+    }
+    const names = passLibraryNames(parsed.program);
+    if (names.other) return { answer: "no" };
+    let failed = false;
+    walk(parsed.program, (node) => {
+      if (failed || node.type !== "CallExpression") return;
+      const callee = node.callee as Node | undefined;
+      const name = dottedName(callee) ?? "";
+      const object = callee?.type === "MemberExpression" ? (dottedName(callee.object) ?? undefined) : undefined;
+      const property = callee?.type === "MemberExpression" && !callee.computed ? dottedName(callee.property) : undefined;
+      // A known check under a name of the file's choosing (`jwtVerify as check`) counts too.
+      const known = callee?.type === "Identifier" && (names.joseVerify.has(name) || names.jwtVerify.has(name));
+      if (!known && !PASS_CHECK.test(name.split(".").pop() ?? "")) return;
+      // The app's own function, bound once and never a library's name: its
+      // body is walked like any other code.
+      if (!known && callee?.type === "Identifier" && names.own.has(name)) return;
+      // The browser's and Node's own address decoding reads no pass.
+      if (callee?.type === "Identifier" && /^decodeURI(?:Component)?$/.test(name)) return;
+      checks++;
+      const option =
+        callee?.type === "Identifier" && names.joseVerify.has(name) ? "maxTokenAge"
+        : callee?.type === "Identifier" && names.jwtVerify.has(name) ? "maxAge"
+        : object !== undefined && names.jwtModule.has(object) && property === "verify" ? "maxAge"
+        : undefined;
+      const limited = option !== undefined && ((node.arguments ?? []) as Node[]).slice(2, 3).some((argument) =>
+        argument.type === "ObjectExpression" &&
+        // A spread may carry its own value for the limit, including none.
+        !((argument.properties ?? []) as Node[]).some((p) => p.type === "SpreadElement") &&
+        ((argument.properties ?? []) as Node[]).some((p) =>
+          p.type === "Property" && !p.computed && !p.shorthand &&
+          ((p.key as Node | undefined)?.name ?? (p.key as Node | undefined)?.value) === option &&
+          plainLimit(p.value as Node | undefined)
+        )
+      );
+      if (!limited) failed = true;
+    });
+    if (failed) return { answer: "no" };
+  }
+  // Pass libraries used from files that are not code this check reads (an
+  // unread page) are covered by `unseen` above.
+  if (checks === 0) return { answer: "no" };
+  return unseen ? { answer: "unseen", example: unseen } : { answer: "all" };
+}
+
 const sessionExpiry: ProjectCheck = {
   id: "auth:tokens-expire",
   itemId: "auth/session-expiry",
@@ -1020,6 +1187,14 @@ const sessionExpiry: ProjectCheck = {
     }
     const EXPIRES = /\b(setExpirationTime|expiresIn|exp\s*:)/;
     if (EXPIRES.test(codeOnly(signer))) return { status: "pass" };
+    const ageLimit = ageLimitedOnEveryCheck(snapshot, files);
+    if (ageLimit.answer === "all") return { status: "pass" };
+    if (ageLimit.answer === "unseen") {
+      return {
+        status: "not-applicable",
+        reason: `Sign-in passes are refused after a set age everywhere we could see them being checked, but some code files could not be read (for example ${ageLimit.example}). Confirm every place that checks a sign-in also limits its age.`,
+      };
+    }
     if (EXPIRES.test(signer.content)) {
       return {
         status: "not-applicable",

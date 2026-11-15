@@ -519,7 +519,73 @@ test("tokens without an expiry are flagged", () => {
   assert.equal(statusOf([SERVER], "auth/session-expiry"), "not-applicable");
 });
 
-// --- A09 --------------------------------------------------------------------
+test("passes refused past a set age wherever they are checked do expire", () => {
+  const item = "auth/session-expiry";
+  const jose = 'import { SignJWT, jwtVerify } from "jose";';
+  const sign = 'export const sign = (id) => new SignJWT({ sub: id }).setProtectedHeader({ alg: "HS256" }).setIssuedAt().sign(key);';
+  const at = (path: string, ...lines: string[]): File => ({ path, content: lines.join("\n") });
+  const status = (...files: File[]) => statusOf(files, item);
+
+  // jose: the limit written where the pass is checked, in the same file or another.
+  const joseCheck = 'export const read = (t) => jwtVerify(t, key, { algorithms: ["HS256"], maxTokenAge: "1h" });';
+  assert.equal(status(at("server/tokens.ts", jose, sign, joseCheck)), "pass");
+  assert.equal(status(at("server/sign.ts", jose, sign), at("server/check.ts", 'import { jwtVerify as check } from "jose/jwt/verify";', 'export const read = (t) => check(t, key, { maxTokenAge: 3600 });')), "pass");
+
+  // jsonwebtoken: `maxAge` in its verify call, however the module is named.
+  const jwtSign = 'import jwt from "jsonwebtoken";\nexport const sign = (id) => jwt.sign({ sub: id }, key);';
+  assert.equal(status(at("server/tokens.ts", jwtSign, 'export const read = (t) => jwt.verify(t, key, { maxAge: "15m" });')), "pass");
+  assert.equal(status(at("server/tokens.ts", 'import { sign, verify as check } from "jsonwebtoken";', "const t = sign({ sub: id }, key);", 'check(t, key, { maxAge: "15m" });')), "pass");
+  assert.equal(status(at("server/tokens.js", 'const { sign, verify } = require("jsonwebtoken");', "const t = sign({ sub: id }, key);", 'verify(t, key, { maxAge: "15m" });')), "pass");
+
+  // The app's own wrapper around the check: its body is what is judged.
+  const keystoneShape = at(
+    "examples/custom-session-jwt/keystone.ts",
+    "import { SignJWT } from 'jose/jwt/sign'",
+    "import { jwtVerify } from 'jose/jwt/verify'",
+    "async function jwtSign(claims) { return new SignJWT(claims).setProtectedHeader({ alg: 'HS256' }).setIssuedAt().sign(secret) }",
+    "async function verifyJwt(token) {",
+    "  try { const { payload } = await jwtVerify(token, secret, { algorithms: ['HS256'], maxTokenAge: '1h' }); return payload } catch { return null }",
+    "}",
+    "export const get = async (jwt) => { const result = await verifyJwt(jwt); return result }",
+  );
+  assert.equal(status(keystoneShape), "pass");
+  // Decoding an address is not opening a pass, and a type is not a library in use.
+  assert.equal(status(keystoneShape, at("session.ts", "import type { DefaultJWT } from 'next-auth/jwt'", "const back = decodeURIComponent(q);")), "pass");
+  assert.equal(status(keystoneShape, at("session.ts", "import { getToken } from 'next-auth/jwt'", "const t = await getToken({ req });")), "risks");
+
+  // Still the risk it always was:
+  for (const [why, files] of [
+    ["one check without the limit", [at("server/tokens.ts", jose, sign, joseCheck, "export const quick = (t) => jwtVerify(t, key);")]],
+    ["no check at all", [at("server/tokens.ts", jose, sign)]],
+    ["a limit of nothing", [at("server/tokens.ts", jose, sign, "jwtVerify(t, key, { maxTokenAge: undefined });")]],
+    ["a limit of zero", [at("server/tokens.ts", jose, sign, "jwtVerify(t, key, { maxTokenAge: 0 });")]],
+    ["a limit read at run time", [at("server/tokens.ts", jose, sign, "jwtVerify(t, key, { maxTokenAge: process.env.AGE });")]],
+    ["a limit in a name", [at("server/tokens.ts", jose, sign, "const maxTokenAge = age;", "jwtVerify(t, key, { maxTokenAge });")]],
+    ["options held elsewhere", [at("server/tokens.ts", jose, sign, "jwtVerify(t, key, options);")]],
+    ["a cookie's maxAge", [at("server/tokens.ts", jwtSign, 'res.cookie("session", t, { maxAge: 900000 });')]],
+    ["a cookie's maxAge beside an unlimited check", [at("server/tokens.ts", jwtSign, 'res.cookie("s", t, { maxAge: 900000 });', "jwt.verify(t, key);")]],
+    ["only in a comment", [at("server/tokens.ts", jose, sign, '// jwtVerify(t, key, { maxTokenAge: "1h" })')]],
+    ["a home-made wrapper named like jose's", [at("server/tokens.ts", 'import { SignJWT } from "jose";', sign, "const jwtVerify = (t, k, o) => decodeOnly(t);", 'jwtVerify(t, key, { maxTokenAge: "1h" });')]],
+    ["a look-alike bound next to the real import", [at("server/tokens.ts", jose, sign, "function jwtVerify(t, k, o) { return decodeOnly(t); }", 'jwtVerify(t, key, { maxTokenAge: "1h" });')]],
+    ["the app's wrapper with no limit inside", [at("server/tokens.ts", jose, sign, "async function verifyJwt(t) { return jwtVerify(t, key); }", "verifyJwt(x);")]],
+    ["jwt from another library", [at("server/tokens.ts", jose, sign, joseCheck), at("server/other.ts", 'import * as jwt from "hono/jwt";', 'jwt.verify(t, key, { maxAge: "15m" });')]],
+    ["another library's verify beside a limited jose check", [at("server/tokens.ts", jose, sign, joseCheck), at("server/mw.ts", 'import { verify } from "hono/jwt";', "verify(t, secret);")]],
+    ["a decode that checks nothing", [at("server/tokens.ts", jose, sign, joseCheck, 'import { decodeJwt } from "jose";', "decodeJwt(t);")]],
+  ] as const) {
+    assert.equal(status(...files), "risks", why);
+  }
+
+  assert.equal(status(at("server/tokens.ts", jose, sign, 'jwtVerify(t, key, { maxTokenAge: "1h", ...overrides });')), "risks");
+
+  // A code file that could not be read might check passes without a limit,
+  // in any language, and so might files past the review's limit.
+  for (const sight of [{ unread: ["api/auth.py"] }, { incomplete: true }]) {
+    const seen = snapshotFromFiles([at("server/tokens.ts", jose, sign, joseCheck)], undefined, sight);
+    assert.equal(runProjectChecks(seen, buildInventory(seen)).get(item)?.status, "not-applicable", JSON.stringify(sight));
+  }
+  const snapshot = snapshotFromFiles([at("server/tokens.ts", jose, sign, joseCheck)], undefined, { unread: ["src/pages/login.vue"] });
+  assert.equal(runProjectChecks(snapshot, buildInventory(snapshot)).get(item)?.status, "not-applicable");
+});
 
 test("logging a secret is a high risk; logging anything else is not", () => {
   const leaks: File = {

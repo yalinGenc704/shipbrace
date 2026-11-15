@@ -185,6 +185,21 @@ benchmark scores stay in CLAUDE.md.
   package-lock.json) now passes; Juice Shop's two cards are one; DVNA
   unchanged. Not changed: `integrity/lockfile` still passes on any
   lockfile anywhere, even one that covers no package list.
+- **An age limit where passes are checked counts as expiry (2026-11-15,
+  `auth/session-expiry`, `ageLimitedOnEveryCheck`).** When the signer sets
+  no expiry, the item still passes if every pass check in the project
+  refuses old passes: jose `jwtVerify(t, key, { maxTokenAge })` or
+  jsonwebtoken `verify(t, secret, { maxAge })` (both refuse a pass with no
+  time of issue when the limit is set; checked in their source). Strict:
+  the call must be bound to its real import (aliases and `require` too),
+  the limit written plainly in the call (text, a positive number), no
+  spread in the options; any other call named like verify/decode/decrypt
+  in a file using a pass library, or any other pass library, keeps the
+  risk. The app's own wrapper functions are judged by their bodies. A code
+  file in any language that could not be read, or a repository past the
+  limit, hands the item back. keystonejs/keystone's JWT example (a
+  one-hour `maxTokenAge`): risk -> handed back, because one Astro page in
+  the repository is unread. Practice apps unchanged.
 - **Admin pages and password hashes** (project checks): a route with
   `admin` in its address needs a role-ish guard or an `if` testing the role
   (showing the role in a page does not count); a route that loads user
