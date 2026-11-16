@@ -103,6 +103,46 @@ export interface Door {
    * traced open-redirect check.
    */
   onlyRedirects?: boolean;
+  /**
+   * Set when nothing shows the route requires signing in, but a step before
+   * it might: ShipBrace could not tell (`analysis/site-wide.ts`). The page
+   * goes back to the user as "needs your check", never as open or as a pass.
+   */
+  signInUnclear?: SignInUnclear[];
+}
+
+/** Why a step before a route could not be told to require signing in or not. */
+export type UnclearReason =
+  /** It lets some addresses through without its test. */
+  | "exempt"
+  /** It applies to addresses that could not be read. */
+  | "some-addresses"
+  /** It is added only under a condition. */
+  | "conditional"
+  /** It is added inside another function, so it may run after the page, or never. */
+  | "order"
+  /** Its name is handed in, or bound more than once. */
+  | "parameter"
+  /** It tests a key or the visitor's network address, not a person. */
+  | "key-or-address"
+  /** Its code could not be read, and its name says nothing. */
+  | "unreadable"
+  /** It looks for a sign-in pass but never checks the pass is genuine. */
+  | "credential-only"
+  /** It reads who is signed in but lets everyone through. */
+  | "optional"
+  /** It turns some visitors away, but not plainly by who they are. */
+  | "unclear-body"
+  /** The route's router could not be followed to where it is mounted, and the app has a sign-in check. */
+  | "mount"
+  /** The route is reachable through two mounts, only one of them behind a sign-in check. */
+  | "mounted-twice";
+
+export interface SignInUnclear {
+  /** The step's name as written, or "" for one written inline. */
+  step: string;
+  location: CodeLocation;
+  reason: UnclearReason;
 }
 
 export interface TaintSource {

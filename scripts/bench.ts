@@ -43,6 +43,21 @@ function report(score: Score): void {
     for (const r of score.refusals) console.log(`    - ${r.caseId}: ${r.reason}`);
   }
 
+  // Pages behind (or not behind) a sign-in step: a separate score.
+  const pages = score.pages;
+  const count = (expect: string) => pages.outcomes.filter((o) => o.entry.expect === expect);
+  const right = (expect: string) => count(expect).filter((o) => o.got === expect).length;
+  console.log(`  pages graded:                  ${pages.right} of ${pages.total} right`);
+  console.log(`    open pages reported:         ${right("open")} of ${count("open").length}`);
+  console.log(`    protected pages cleared:     ${right("protected")} of ${count("protected").length}`);
+  console.log(`    unclear pages handed back:   ${right("unsure")} of ${count("unsure").length}`);
+  const wrongPages = pages.outcomes.filter((o) => o.got !== o.entry.expect);
+  if (wrongPages.length > 0 || pages.unexpected.length > 0) {
+    console.log("\n  PAGES WRONG:");
+    for (const o of wrongPages) console.log(`    - ${o.caseId} [${o.entry.marker}]: expected ${o.entry.expect}, got ${o.got} (${o.entry.why})`);
+    for (const u of pages.unexpected) console.log(`    - ${u.caseId}: ${u.risk.what}`);
+  }
+
   const missed = score.outcomes.filter((o) => o.entry.real && !o.reported && !o.lead);
   if (missed.length > 0) {
     console.log("\n  missed:");

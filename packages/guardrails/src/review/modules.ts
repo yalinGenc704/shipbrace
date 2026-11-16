@@ -1,5 +1,5 @@
 import type { CodeLocation, Finding } from "../types.ts";
-import type { Door, Inventory, Sink, TaintSource } from "../analysis/inventory.ts";
+import type { Door, Inventory, SignInUnclear, Sink, TaintSource, UnclearReason } from "../analysis/inventory.ts";
 import type { ConfirmedAttack, TaintPath } from "../analysis/oracle.ts";
 import type { CheckOutcome } from "./checks.ts";
 
@@ -1122,8 +1122,21 @@ export function buildReview(input: ReviewInput): SecurityReview {
   // Routes with no authentication middleware are an access-control risk the
   // taint analysis cannot express -- there is no dangerous sink, the problem is
   // that the door has no lock at all.
+  const unclearSteps = new Map<string, { unclear: SignInUnclear; doors: Door[] }>();
   for (const door of input.inventory.doors) {
     if (door.guards.length > 0 || isPublicByDesign(door.path) || door.answersOnlyFixed || door.onlyRedirects) continue;
+
+    // A step before the page might require signing in, and ShipBrace cannot
+    // tell: one "needs your check" per step, never a risk and never a pass.
+    if (door.signInUnclear?.length) {
+      for (const unclear of door.signInUnclear) {
+        const key = `${unclear.location.path}:${unclear.location.line}:${unclear.reason}`;
+        const group = unclearSteps.get(key) ?? { unclear, doors: [] };
+        group.doors.push(door);
+        unclearSteps.set(key, group);
+      }
+      continue;
+    }
 
     attach("access-control/unguarded-routes", {
       id: riskId("access-control/unguarded", door.location),
@@ -1147,6 +1160,12 @@ export function buildReview(input: ReviewInput): SecurityReview {
       location: door.location,
       confirmedBy: "route-check",
     });
+  }
+
+  for (const { unclear, doors } of unclearSteps.values()) {
+    const leads = unprovenByItem.get("access-control/unguarded-routes") ?? [];
+    leads.push(unclearSignInLead(unclear, doors));
+    unprovenByItem.set("access-control/unguarded-routes", leads);
   }
 
   const modules = MODULES.map((shape): ReviewModule => ({
@@ -1192,6 +1211,43 @@ export function buildReview(input: ReviewInput): SecurityReview {
   }));
 
   return { modules, summary: summarise(modules), unverified: explainUnverified(input.unverified) };
+}
+
+/** Why a step could not be told to require signing in, in one sentence. */
+const UNCLEAR_REASON: Record<UnclearReason, string> = {
+  exempt: "It lets some addresses through without its test, and ShipBrace could not tell which.",
+  "some-addresses": "It applies to addresses ShipBrace could not read, so it may not cover these pages.",
+  conditional: "It is added only when a condition holds, so it may not run at all.",
+  order: "It is added inside a function, so ShipBrace could not tell whether it runs before these pages, or at all.",
+  parameter: "It is handed in from elsewhere or defined more than once, so ShipBrace could not read it.",
+  "key-or-address": "It checks a shared key or the visitor's network address, not who is signed in.",
+  unreadable: "ShipBrace could not read its code, and its name does not say it checks signing in.",
+  "credential-only": "It looks for a sign-in pass but does not check that the pass is genuine.",
+  optional: "It reads who is signed in but lets visitors who are not signed in through.",
+  "unclear-body": "It turns some visitors away, but not plainly because they are not signed in.",
+  mount: "The app has a sign-in check, but ShipBrace could not follow where these pages are added, so they may come before it.",
+  "mounted-twice": "These pages can be reached in two ways, and only one of them passes a sign-in check.",
+};
+
+/** One "needs your check" for a step that may or may not require signing in, naming the pages after it. */
+function unclearSignInLead(unclear: SignInUnclear, doors: Door[]): Unproven {
+  const where = `${unclear.location.path} line ${unclear.location.line}`;
+  const named = (d: Door) => `${d.method === "GET" ? "the page" : "the action"} ${d.path}`;
+  const shown = doors.slice(0, 3).map(named);
+  const pages = doors.length > 3 ? `${shown.join(", ")} and ${doors.length - 3} more` : shown.join(", ").replace(/, ([^,]*)$/, " and $1");
+  const step = unclear.step ? `\`${unclear.step}\`` : "the step written there";
+  return {
+    id: riskId(`access-control/sign-in-unclear/${unclear.reason}`, unclear.location),
+    what: unclear.reason === "mount" || unclear.reason === "mounted-twice"
+      ? `ShipBrace could not tell whether ${pages} ${doors.length === 1 ? "requires" : "require"} signing in (${where}).`
+      : `ShipBrace could not tell whether ${step} requires signing in before ${pages} (${where}).`,
+    why: `${UNCLEAR_REASON[unclear.reason]} If these pages are not protected, anyone can use them without an account.`,
+    check: `Confirm that these pages turn away visitors who are not signed in. If they are meant to be public, nothing needs changing.`,
+    checkDetail:
+      `Check that a sign-in check runs before ${doors.map((d) => `${d.method} ${d.path}`).join(", ")} ` +
+      `(the step at ${where}); if not, add the app's sign-in middleware ahead of them.`,
+    location: unclear.location,
+  };
 }
 
 /**

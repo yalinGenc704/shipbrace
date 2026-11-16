@@ -655,6 +655,15 @@ export function verifyOwnership(claim: OwnershipClaim, inventory: Inventory): Ve
   if (!door) {
     return { claim, verdict: "not-found", reason: `No route ${claim.door} exists in this code.` };
   }
+  // A step before it may or may not require signing in: not a "no".
+  if (door.guards.length === 0 && door.signInUnclear?.length) {
+    return {
+      claim,
+      door,
+      verdict: "undecidable",
+      reason: `ShipBrace could not tell whether ${door.path} requires signing in, so whose records it reaches cannot be judged.`,
+    };
+  }
   if (door.guards.length === 0) {
     return {
       claim,

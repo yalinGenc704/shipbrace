@@ -297,20 +297,122 @@ benchmark scores stay in CLAUDE.md.
   across files. It does not follow method calls (`obj.fn(x)`), and a helper
   name defined twice, unknown code, or destructured parameters make the
   claim `undecidable` (never `no-path`).
-- **Site-wide middleware as a sign-in check (gap noted 2026-10-23, narrowed
-  2026-11-10).** `app.use(...)` of session set-up (`session({...})`,
-  `cookieSession`, `passport.initialize()`/`.session()`, flash) no longer
-  counts as a sign-in check, and for any call only what is called counts,
-  not the settings passed to it (`cors({ origin: allowedOrigins })`), so an
-  Express app with sessions and no check gets its open pages reported
-  (`SESSION_SETUP`, `guardNamesIn`). `app.use(require("..."))` in any shape
-  still counts, as the app's own check may be loaded that way, unless the
-  package is one known only to set things up (`SETUP_PACKAGE`). Still
-  counted, erring to silence: any other name not in `NOT_A_GUARD`, and a
-  function written inline in `app.use`. Measured on DVNA, NodeGoat and Juice Shop: no change, since
-  their routes sit in router files or behind other site-wide names. Juice
-  Shop's open redirect is guarded by a bypassable allowlist and its
-  redirect item shows a pass.
+- **Steps before pages, read for what they do (setup item 10,
+  2026-11-15, `analysis/site-wide.ts`; replaces the 2026-10-23 gap note).**
+  Each step in `app.use(...)`, `router.use(...)`, `app.all("*", ...)` and
+  Hono's `use` gets one of three answers. *Check*: its code (inline, a
+  function in the file, one exported from another file, or one a factory
+  returns) asks who is signed in (`req.user`, `req.session.<user-ish>`,
+  `req.isAuthenticated()`, `c.get("user")`, a verified pass, a pass looked
+  up where the app keeps them), turns the visitor away when nobody is, and
+  every way on to `next()` passes that test (tests read through `!`, `&&`,
+  `||` and comparisons); or a library check bound to its import
+  (express-jwt, passport `authenticate`, connect-ensure-login, Auth0's two,
+  Clerk `requireAuth`, Hono's jwt/bearer/basic); or, only when its code
+  is out of sight, a name that says sign-in (`requireLogin`; Murat's
+  decision). *Never*: code that turns nobody away (logging, headers,
+  loading the user), refuses for another reason (503, 429, a file filter),
+  error handlers (four parameters), session and request set-up, packages
+  with no sign-in word. A readable body always beats the name. *Cannot
+  tell* (a "needs your check" lead per step naming its pages, ownership
+  `undecidable`, never a risk or a pass): addresses let through, a step
+  added under a condition or with an unreadable address, a name handed in
+  or bound twice, a key or IP test, a pass looked for but not verified
+  (`jwt.decode`, header present), a refusal with 401 or to sign-in that is
+  not plainly about who is signed in, optional library settings
+  (`credentialsRequired: false`, passport's `session` strategy), a router
+  mounted twice with different cover, and a router whose mounting cannot
+  be followed in a package whose app has a site-wide check. A step covers
+  only routes after it: on the same object (by name and scope), under its
+  address (`/api` covers `/api/x`, not `/apiary`), in routers mounted after
+  it (`use(prefix, router)`, Hono `route`) and in files handed the app
+  (`routes(app)`), up to three files away. Not read: per-route steps
+  (still by name), checks inside named handlers in other files, objects
+  not named like `app`/`router`, Fastify/Koa/Nest/Next. The conventions reviewer found six false passes
+  in the first build, all closed with tests: an address held in a
+  setting read as "every address" (now unreadable), a step chosen by a
+  condition inside `app.use`, a verify whose failure is caught or ignored
+  (only a plain statement calling jsonwebtoken `verify`, jose `jwtVerify`
+  or Firebase's two counts on its own; the app's own `verifyToken` must be
+  tested), anti-forgery and address tokens read as sign-in passes (pass
+  names are whole names, never the address; a bare `get`/`has` only on a
+  store named for users or sessions), routers out of sight trusted by a
+  role word (`adminRouter`, `@/routes/admin`; path aliases are the app's
+  own files), and steps or routes added inside another function (ordered
+  only within one function; otherwise "could not tell"). Its second pass
+  found four more, also closed: a file handing out two routers had both
+  linked to every mount (now only the router the export names, exactly;
+  otherwise the file's routers may be mounted anywhere, so never covered
+  for sure), an address made by a call (`base()`, `config.get(...)`), a
+  user that is always something through a choice, and a comparison with
+  a visitor's value held in a name. Role words alone (`adminLogger`) no
+  longer count as a sign-in name; next to a check word they do
+  (`isAdmin`, `requireAdmin`). Its final pass: a name counts as the
+  signed-in user only when it is the user read itself (`req.user`,
+  `req.user.id`, `await getUser(req)`), bound once and never written,
+  not a copy, a fallback or a call wrapping it; a mount or routes file
+  handed the app under an `if` is "could not tell". Left as is: a page
+  whose test is a list the visitor sends (`ids.includes(req.user?.id)`).
+  A fresh reviewer then found five more, also closed: library settings
+  held in a name or spread in (could hide `credentialsRequired: false`),
+  passport given a list of strategies or a name, `.unless(...)` on a
+  check, a step that writes who is signed in itself and reads it back
+  (`req.user = req.query.u`), and an inline check named after a role it
+  only reads (inline checks are named `req.user`, never `req.user.role`,
+  so the admin-pages item still asks for a role check). Out-of-sight
+  names that say otherwise (`optionalAuth`, `noAuth`, `guestGuard`,
+  `authLogger`, `setAuthUser`) are no longer trusted by name. Steps a
+  helper adds to the app it is handed (`applyMiddleware(app)`) count where
+  it is called. The last review closed: Clerk outside `@clerk/express`
+  (Hono, Next.js and the old SDK's `ClerkExpressWithAuth` only record who
+  is signed in; `ClerkExpressRequireAuth` is the check), "maybe" names
+  (`maybeAuth`, `softAuth`, `authIfPresent`) and decoders (`jwtDecode`),
+  better-auth's `toNodeHandler` and Auth.js's `ExpressAuth` mounted for
+  every address (sign-in pages, not checks), `next(null)` and
+  `next("route")` (they carry on), and a verify of a captcha or a
+  signature header. Known costs, not passes: a step that exempts some
+  addresses (`/login`, `OPTIONS`) hands every page after it back even
+  when the page cannot match; steps behind path aliases (`@/...`) and
+  re-exporting index files are not followed, so they hand pages back
+  (and turn an open page into a lead); a parameter-only address (`/:x`)
+  and `use` called indirectly are not read, so pages behind them are
+  reported open; better-auth's `getSession` and Supabase's `getUser`
+  checks hand pages back. Names that want visitors signed out or do
+  another job
+  (`checkNotAuthenticated`, `forwardAuthenticated`, `loginLimiter`,
+  `authCors`) hand pages back rather than count; other out-of-sight names
+  that merely contain a sign-in word still count (Murat's decision), and
+  `clerk.expressRequireAuth()` is not recognised (reported open).
+  The review against the plan (Fable) closed seven more: in Hono an
+  address without `*` covers only itself (`app.use("/api", check)` does
+  not cover `/api/orders`; run against Hono 4.13.16; decided by how the
+  app was made, then where it was handed in from, then what its file and
+  the project load; an app of unknown kind is covered only where both
+  would cover it; Express addresses stay prefixes); a verify
+  guards the lines after it only when bound to its import (jsonwebtoken
+  `verify`, jose `jwtVerify`, firebase-admin's two), never by the name
+  `jwt` (the app's own `./lib/jwt` may return nothing); a factory with
+  several returns is a check only when every return is one, and `.bind`
+  is read as the same function, so readable code is never beaten by a
+  name; `express-oauth2-jwt-bearer` with `authRequired: false`;
+  `express-bearer-token`, `next-auth` and `jwt-decode` refuse nobody, and
+  only the main export of a package named for sign-in counts by name;
+  `=== null`, `=== false`, `=== 0` and `=== ""` say nothing (`== null`,
+  `=== undefined` and `!== true` still do). Also read now: a check
+  inside an async wrapper (`asyncHandler(check)`) and each step of a
+  list (`app.use([a, check])`). Still handed back: a check at the top of
+  a file whose pages are added inside a function.
+  Benchmark: 39 page cases, 43 of 43 right;
+  the grader refuses a page marker that is not on a route. Practice apps: DVNA 21 and keystone 12 unchanged;
+  NodeGoat 6 -> 7 (`/`, a false alarm: its handler checks the session in
+  another file); Juice Shop 52 -> 106, all 54 in `server.ts`, which had
+  been covered only by header, logging and challenge steps. By hand: about
+  9 of the 54 check sign-in in their own handler (change-password,
+  saveLoginIp, order-history, both `/profile`, image-captcha,
+  deluxe-membership, likely chat), `2fa/verify` belongs to signing in, the
+  rest are left public on purpose (feedback, registration, search,
+  product lists, challenge pages). No page was cleared or handed back on
+  the four: none has a site-wide sign-in check.
 - **Redirect-only pages (2026-11-10, `Door.onlyRedirects`).** A handler
   with nothing running before it that only calls `redirect` or an answer
   method on its answering parameter, and reads only one field of the

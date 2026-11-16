@@ -22,6 +22,7 @@ import type {
   StoreAccess,
 } from "./inventory.ts";
 import { isFixedText } from "./fixed-text.ts";
+import { applySiteWideSteps, enclosingFunction, NOT_A_GUARD, passportNames, ROUTER, routeSeen, scopeOf } from "./site-wide.ts";
 import { visitorInputChecker } from "./oracle.ts";
 import { bindings as bindingsOf } from "./cleaners.ts";
 import { modelFields } from "./schemas.ts";
@@ -32,76 +33,11 @@ import { modelFields } from "./schemas.ts";
  * drop-in replacement for the regex version.
  */
 
-const ROUTER = /^(?:app|router|\w*[Rr]outes?)$/;
 const METHODS = new Set(["get", "post", "put", "patch", "delete", "all"]);
 
 /** Middleware that is not an access-control check; naming it as a guard would hide a missing one. */
 const ACCESS_CHECK =
   /auth|login|signed|session|guard|protect|require(?:User|Login|Admin|Role)|verify(?:Token|Jwt|User)|jwt|deny|permission|role|admin|acl|userId/i;
-
-const NOT_A_GUARD =
-  /^(?:cors|secureHeaders|logger|compress|compression|etag|prettyJSON|rateLimiter|rateLimit|limiter|helmet|morgan|bodyParser|json|urlencoded|cookieParser|express|upload|multer|serveStatic|cache|validate\w*)$/;
-
-/**
- * Middleware that gives every visitor a session, or prepares sign-in,
- * without requiring anyone to be signed in: `session({...})`,
- * `cookieSession(...)`, `passport.initialize()`, `passport.session()`,
- * flash messages. Registered site-wide, these used to count as a sign-in
- * check on every route, so an Express app with sessions and no check at all
- * got no open-page warning (known gap, 2026-10-23). Matched on the exact
- * call, so `passport.authenticate(...)` and `requireSession` still count.
- */
-const SESSION_SETUP = /^(?:session|cookieSession|expressSession|passport\.(?:initialize|session)|flash)$/;
-
-/**
- * The names that may be a sign-in check in one argument of `app.use(...)`.
- * For a call such as `session({ secret, store })` or `cors({ origin })` only
- * what is called counts, never the settings passed to it: a setting named
- * `allowedOrigins` is not a check. Anything else is read as before.
- */
-function guardNamesIn(arg: Node): string[] {
-  // `app.use(require("express-flash")())`: a package known to set things up
-  // is not a check. Any other `require(...)` counts as before -- it may well
-  // be the app's own sign-in check (`require("./middleware/auth")`).
-  const required = requiredModule(arg);
-  if (required !== undefined) return SETUP_PACKAGE.test(required) ? [] : ["require"];
-  if (arg.type === "CallExpression") {
-    const called = dottedName(arg.callee);
-    // `dottedName` of a call ends in "()": only a plain `a.b(...)` is read this way.
-    if (called && !called.includes("(")) {
-      return SESSION_SETUP.test(called) ? [] : identifiersIn(arg.callee as Node);
-    }
-  }
-  return identifiersIn(arg);
-}
-
-/** Packages that prepare a request or a session and require nothing of the visitor. */
-const SETUP_PACKAGE =
-  /^(?:express-session|cookie-session|express-flash|connect-flash|cookie-parser|body-parser|morgan|cors|helmet|compression|serve-favicon|express-fileupload|multer|method-override)$/;
-
-/**
- * The module named by the `require("...")` an expression is built on
- * (`require("x")`, `require("x")()`, `require("x").y`, `require("x").y()`),
- * or undefined when it is not built on one.
- */
-function requiredModule(node: Node): string | undefined {
-  let current: Node | undefined = node;
-  for (let depth = 0; current && depth < 6; depth++) {
-    if (current.type === "CallExpression") {
-      const callee = current.callee as Node | undefined;
-      const args = (current.arguments ?? []) as Node[];
-      if (callee?.type === "Identifier" && callee.name === "require") {
-        return args.length === 1 && isStringLiteral(args[0]) ? String(args[0].value) : undefined;
-      }
-      current = callee;
-    } else if (current.type.endsWith("MemberExpression")) {
-      current = current.object as Node | undefined;
-    } else {
-      return undefined;
-    }
-  }
-  return undefined;
-}
 
 const SOURCE_NAMES: Array<{ match: RegExp; kind: SourceKind }> = [
   // Express with multer: `req.file.originalname` is whatever the uploader named it.
@@ -281,16 +217,22 @@ export function buildInventoryFromAst(snapshot: RepoSnapshot): Inventory {
     assignments: [],
   };
 
+  const parsedFiles: ParsedFile[] = [];
   for (const file of snapshot.files) {
     if (isTestPath(file.path)) continue;
 
     const parsed = parseFile(file);
     if (!parsed) continue;
 
+    parsedFiles.push(parsed);
     const doors = findDoors(parsed);
     inventory.doors.push(...doors);
     collect(parsed, doors, inventory, views);
   }
+
+  // Steps registered for a whole app or section (`app.use(...)`), followed
+  // across files: which ones require signing in for which routes.
+  applySiteWideSteps(parsedFiles, inventory.doors, snapshot.files.map((f) => f.path));
 
   // A route that names its handler gets that function's code, when exactly one
   // function of that name exists. Two of the same name is a guess, so neither.
@@ -760,46 +702,6 @@ function doorFor(doors: Door[], node: Node): Door | undefined {
 }
 
 /**
- * The names this file binds to passport itself: its default or whole-module
- * import (`import passport from "passport"`, `require("passport")`), and an
- * instance made from its `Passport` class (`const p = new Passport()`). Each
- * must be bound exactly once in the file and never written.
- */
-function passportNames(parsed: ParsedFile): Set<string> {
-  const names = new Set<string>();
-  const classes = new Set<string>();
-  const once = (name: string) => {
-    const b = bindingsOf(parsed.program, name);
-    return b.declared === 1 && b.written === 0;
-  };
-  const isPassport = (node: Node | undefined) => isStringLiteral(node) && node.value === "passport";
-  walk(parsed.program, (node) => {
-    if (node.type === "ImportDeclaration" && isPassport(node.source as Node) && node.importKind !== "type") {
-      for (const specifier of (node.specifiers ?? []) as Node[]) {
-        const local = String((specifier.local as Node | undefined)?.name ?? "");
-        if (specifier.type === "ImportDefaultSpecifier" || specifier.type === "ImportNamespaceSpecifier") names.add(local);
-        if (specifier.type === "ImportSpecifier" && (specifier.imported as Node | undefined)?.name === "Passport" && specifier.importKind !== "type") classes.add(local);
-      }
-    }
-    if (node.type === "VariableDeclarator" && (node.id as Node | undefined)?.type === "Identifier") {
-      const init = node.init as Node | undefined;
-      const required = init?.type === "CallExpression" && dottedName(init.callee) === "require" && isPassport(((init.arguments ?? []) as Node[])[0]);
-      if (required) names.add(String((node.id as Node).name));
-    }
-  });
-  // Instances, once the class names are known.
-  walk(parsed.program, (node) => {
-    if (node.type !== "VariableDeclarator" || (node.id as Node | undefined)?.type !== "Identifier") return;
-    const init = node.init as Node | undefined;
-    const made = init?.type === "NewExpression" ? dottedName(init.callee) : undefined;
-    if (made && (classes.has(made) || [...names].some((n) => made === `${n}.Passport`))) names.add(String((node.id as Node).name));
-  });
-  for (const name of names) if (!once(name)) names.delete(name);
-  for (const name of classes) if (!once(name)) for (const n of names) names.delete(n);
-  return names;
-}
-
-/**
  * When a route's handler is a name bound once, never written, to
  * passport's `authenticate(...)`, that call (`instance.authenticate`): the
  * route starts or completes signing in. Written directly in the route, the
@@ -827,10 +729,9 @@ function passportAuthenticateAs(parsed: ParsedFile, handler: Node): string | und
 }
 
 function findDoors(parsed: ParsedFile): Door[] {
-  const registered: Array<{ prefix: string; names: string[] }> = [];
-  const routes: Array<{ method: string; path: string; node: Node; handler: Node; middleware: Node[] }> = [];
+  const routes: Array<{ method: string; path: string; node: Node; handler: Node; middleware: Node[]; object: string; scope: number; fn: number }> = [];
 
-  walk(parsed.program, (node) => {
+  walk(parsed.program, (node, parents) => {
     if (node.type !== "CallExpression") return;
 
     const callee = node.callee as Node | undefined;
@@ -842,22 +743,18 @@ function findDoors(parsed: ParsedFile): Door[] {
 
     const args = (node.arguments ?? []) as Node[];
 
-    if (property === "use") {
-      const prefix = isStringLiteral(args[0]) ? String(args[0].value).replace(/\*+$/, "") : "";
-      const names = args
-        .filter((a) => !isStringLiteral(a))
-        .flatMap((a) => guardNamesIn(a))
-        .filter((n) => !NOT_A_GUARD.test(n));
-
-      if (names.length > 0) registered.push({ prefix, names });
-      return;
-    }
-
+    // Steps for a whole app or section are read in `site-wide.ts`, in order
+    // and across files: `app.use(...)`, and `app.all("*", check)`.
+    if (property === "use") return;
     if (!METHODS.has(property) || !isStringLiteral(args[0])) return;
 
     // The handler is the last argument; its body is the analysis scope.
     const handler = args.at(-1);
+    if (property === "all" && /\*/.test(String(args[0].value)) && handler && passesOn(handler)) return;
     routes.push({
+      object,
+      scope: scopeOf(object, parents),
+      fn: enclosingFunction(parents),
       method: property.toUpperCase(),
       path: String(args[0].value),
       node,
@@ -868,7 +765,7 @@ function findDoors(parsed: ParsedFile): Door[] {
     });
   });
 
-  return routes.map(({ method, path, node, handler, middleware }): Door => {
+  return routes.map(({ method, path, node, handler, middleware, object, scope, fn }): Door => {
     const guards = new Set<string>();
     /**
      * Checks named on the route itself count as much as ones registered for a
@@ -888,12 +785,6 @@ function findDoors(parsed: ParsedFile): Door[] {
       const callee = dottedName(handler.callee) ?? "";
       if (ACCESS_CHECK.test(callee)) guards.add(callee);
     }
-    for (const entry of registered) {
-      if (entry.prefix === "" || path.startsWith(entry.prefix)) {
-        for (const name of entry.names) guards.add(name);
-      }
-    }
-
     const inline = signInCheckedFirst(handler);
     if (inline) guards.add(inline);
     // `router.get("/auth/github", start)` where `start = passport.authenticate(...)`:
@@ -922,8 +813,22 @@ function findDoors(parsed: ParsedFile): Door[] {
       const home = handlerHome(parsed, handler);
       if (home) handlerHomes.set(door, home);
     }
+    routeSeen.set(door, { object, scope, at: node.start, fn });
     return door;
   });
+}
+
+/**
+ * `app.all("*", requireLogin)`: a step that runs before every route, not a
+ * page. True for a named handler, or one written with a `next` it calls;
+ * an inline handler that answers every request (`(req, res) => res.sendStatus(404)`)
+ * stays a page.
+ */
+function passesOn(handler: Node): boolean {
+  if (handler.type === "Identifier" || handler.type.endsWith("MemberExpression") || handler.type === "CallExpression") return true;
+  if (!/^(?:ArrowFunctionExpression|FunctionExpression)$/.test(handler.type)) return false;
+  const params = paramNames(handler);
+  return params.length >= 3 || (params.length === 2 && identifiersIn(handler.body as Node).includes(params[1]!));
 }
 
 /**

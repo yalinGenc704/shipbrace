@@ -37,6 +37,18 @@ export interface KeyEntry {
   why: string;
 }
 
+/**
+ * A page and what the open-page check must say about it: reported as open
+ * to anyone, left alone because a step before it requires signing in, or
+ * handed back as "needs your check" because ShipBrace cannot tell.
+ */
+export interface PageEntry {
+  /** Matches the `// [marker]` comment on the route's line. */
+  marker: string;
+  expect: "open" | "protected" | "unsure";
+  why: string;
+}
+
 export interface BenchCase {
   id: string;
   /** What this case tests, in one plain sentence. */
@@ -49,11 +61,28 @@ export interface BenchCase {
    * scripted run sends these too, to show the checker throws them out.
    */
   wrongClaims?: Array<{ door?: string; parameter: string; sink: ClaimKind }>;
+  /** Pages graded by the open-page check, apart from the operations in `key`. */
+  pages?: PageEntry[];
 }
 
 const file = (path: string, lines: string[]): SourceFile => ({ path, content: lines.join("\n") });
 
 const HEAD = ['import { Hono } from "hono";', "const app = new Hono();", ""];
+
+const EXPRESS = ['const express = require("express");', "const app = express();", ""];
+
+/** A sign-in check written in the app, as many apps write one. */
+const REQUIRE_MEMBER = [
+  "function requireMember(req, res, next) {",
+  '  if (!req.session.userId) return res.redirect("/login");',
+  "  next();",
+  "}",
+  "",
+];
+
+/** A page case: one app, its marked pages, no dangerous operations. */
+const pageCase = (id: string, tests: string, files: SourceFile[], pages: PageEntry[]): BenchCase => ({ id, tests, files, key: [], pages });
+const ORDERS = 'app.get("/orders", (req, res) => res.json(listOrders(req.session.userId))); // [A]';
 
 /** An app where everything under /api requires signing in. */
 const SIGNED_IN = [...HEAD, 'app.use("/api/*", requireUser);', ""];
@@ -2626,4 +2655,340 @@ export const CASES: BenchCase[] = [
       },
     ],
   },
+
+  // --- sign-in steps before pages (setup item 10, 2026-11-15) -------------
+  // Protected: a step before the page requires signing in, however it is written.
+  pageCase("page-inline-check", "A sign-in check written inline in app.use protects the pages after it.", [
+    file("server.js", [...EXPRESS, 'app.use((req, res, next) => { if (!req.session.userId) return res.redirect("/login"); next(); });', ORDERS]),
+  ], [{ marker: "A", expect: "protected", why: "Visitors who are not signed in are sent to the sign-in page first." }]),
+  pageCase("page-hono-inline-check", "A Hono sign-in check written inline protects its section.", [
+    file("server/src/index.ts", [
+      ...HEAD,
+      'app.use("/api/*", async (c, next) => {',
+      '  if (!c.get("user")) return c.json({ error: "Sign in first" }, 401);',
+      "  await next();",
+      "});",
+      'app.get("/api/orders", (c) => c.json(listOrders(c.get("user").id))); // [A]',
+    ]),
+  ], [{ marker: "A", expect: "protected", why: "The section answers 401 to anyone not signed in." }]),
+  pageCase("page-unknown-name", "A check with a name the checker does not know, written in the app.", [
+    file("server.js", [
+      ...EXPRESS,
+      "function mustBeMember(req, res, next) {",
+      "  if (req.isAuthenticated()) return next();",
+      '  res.redirect("/login");',
+      "}",
+      "app.use(mustBeMember);",
+      ORDERS,
+    ]),
+  ], [{ marker: "A", expect: "protected", why: "Only signed-in visitors get past mustBeMember." }]),
+  pageCase("page-check-other-file", "A check loaded from its own file, then a router mounted after it from another.", [
+    file("app.js", [...EXPRESS, 'const gate = require("./middleware/gate");', "app.use(gate);", 'app.use("/shop", require("./routes/shop"));']),
+    file("middleware/gate.js", [
+      "module.exports = function (req, res, next) {",
+      '  if (!req.user) return res.status(401).json({ error: "Sign in first" });',
+      "  next();",
+      "};",
+    ]),
+    file("routes/shop.js", [
+      'const router = require("express").Router();',
+      'router.get("/cart", (req, res) => res.json(cartOf(req.user.id))); // [A]',
+      "module.exports = router;",
+    ]),
+  ], [{ marker: "A", expect: "protected", why: "The shop router is mounted after the sign-in check." }]),
+  pageCase("page-handed-the-app", "The app is handed to a routes file after a sign-in check.", [
+    file("server.js", [
+      ...EXPRESS,
+      'const onlyMembers = (req, res, next) => (req.session.member ? next() : res.redirect("/login"));',
+      "app.use(onlyMembers);",
+      'require("./routes")(app);',
+    ]),
+    file("routes/index.js", [
+      "module.exports = (app) => {",
+      '  app.get("/statements", (req, res) => res.json(statementsOf(req.session.member))); // [A]',
+      "};",
+    ]),
+  ], [{ marker: "A", expect: "protected", why: "The routes are added after the sign-in check." }]),
+  pageCase("page-jwt-try", "A sign-in pass verified inside try, refused in catch.", [
+    file("server.js", [
+      ...EXPRESS,
+      'const jwt = require("jsonwebtoken");',
+      'app.use("/api", (req, res, next) => {',
+      "  try {",
+      "    req.user = jwt.verify(req.cookies.token, process.env.JWT_SECRET);",
+      "    next();",
+      "  } catch {",
+      "    res.sendStatus(401);",
+      "  }",
+      "});",
+      'app.get("/api/profile", (req, res) => res.json(profileOf(req.user.sub))); // [A]',
+    ]),
+  ], [{ marker: "A", expect: "protected", why: "A pass that does not verify never reaches the page." }]),
+  pageCase("page-jwt-callback", "A sign-in pass verified with a callback that refuses on error.", [
+    file("server.js", [
+      ...EXPRESS,
+      'const jwt = require("jsonwebtoken");',
+      "app.use((req, res, next) => {",
+      '  const token = (req.headers.authorization || "").replace("Bearer ", "");',
+      "  if (!token) return res.sendStatus(401);",
+      "  jwt.verify(token, process.env.JWT_SECRET, (err, payload) => {",
+      "    if (err) return res.status(403).end();",
+      "    req.user = payload;",
+      "    next();",
+      "  });",
+      "});",
+      'app.get("/invoices", (req, res) => res.json(invoicesOf(req.user.sub))); // [A]',
+    ]),
+  ], [{ marker: "A", expect: "protected", why: "Only a verified pass gets the request on." }]),
+  pageCase("page-express-jwt", "express-jwt's check, bound to its import.", [
+    file("server.js", [
+      ...EXPRESS,
+      'const { expressjwt } = require("express-jwt");',
+      'app.use(expressjwt({ secret: process.env.JWT_SECRET, algorithms: ["HS256"] }));',
+      'app.get("/invoices", (req, res) => res.json(invoicesOf(req.auth.sub))); // [A]',
+    ]),
+  ], [{ marker: "A", expect: "protected", why: "express-jwt refuses requests without a valid pass by default." }]),
+  pageCase("page-all-star", 'The Express guide\'s app.all("*", requireAuthentication).', [
+    file("server.js", [
+      ...EXPRESS,
+      "function requireAuthentication(req, res, next) {",
+      '  if (!req.user) return res.status(401).send("Sign in first");',
+      "  next();",
+      "}",
+      'app.all("*", requireAuthentication);',
+      ORDERS,
+    ]),
+  ], [{ marker: "A", expect: "protected", why: "Every address passes the check first." }]),
+  pageCase("page-hono-sub-app", "A Hono sub-app with its own check, mounted with app.route.", [
+    file("server/src/index.ts", [
+      ...HEAD,
+      "async function requireMember(c, next) {",
+      '  const user = c.get("user");',
+      '  if (!user) return c.json({ error: "Sign in first" }, 401);',
+      "  await next();",
+      "}",
+      "const apiRoutes = new Hono();",
+      'apiRoutes.use("*", requireMember);',
+      'apiRoutes.get("/orders", (c) => c.json(listOrders(c.get("user").id))); // [A]',
+      'app.route("/api", apiRoutes);',
+    ]),
+  ], [{ marker: "A", expect: "protected", why: "The sub-app checks before each of its pages." }]),
+  pageCase("page-factory", "A check made by a function the app calls.", [
+    file("server.js", [
+      ...EXPRESS,
+      "const onlyMembers = () => (req, res, next) => {",
+      '  if (!req.user) return res.redirect("/login");',
+      "  next();",
+      "};",
+      "app.use(onlyMembers());",
+      ORDERS,
+    ]),
+  ], [{ marker: "A", expect: "protected", why: "The function returns a sign-in check." }]),
+
+  // Look-alikes: steps before the page that do not require signing in.
+  pageCase("page-inline-logger", "A step written inline that only logs.", [
+    file("server.js", [...EXPRESS, "app.use((req, res, next) => { console.log(req.method, req.url); next(); });", ORDERS]),
+  ], [{ marker: "A", expect: "open", why: "Logging turns nobody away." }]),
+  pageCase("page-header-setter", "A step written inline that only sets a header.", [
+    file("server.js", [...EXPRESS, 'app.use((req, res, next) => { res.setHeader("X-Frame-Options", "DENY"); next(); });', ORDERS]),
+  ], [{ marker: "A", expect: "open", why: "A header turns nobody away." }]),
+  pageCase("page-loads-user", "A step that loads the user but lets everyone through.", [
+    file("server.js", [...EXPRESS, "app.use(async (req, res, next) => { req.user = await findUser(req.cookies.sid); next(); });", ORDERS]),
+  ], [{ marker: "A", expect: "open", why: "Visitors with no session still reach the page." }]),
+  pageCase("page-check-after-route", "A real check registered after the page.", [
+    file("server.js", [...EXPRESS, ...REQUIRE_MEMBER, ORDERS, "app.use(requireMember);"]),
+  ], [{ marker: "A", expect: "open", why: "Express runs steps in order, so the page answers before the check." }]),
+  pageCase("page-error-handler", "An error handler whose name says sign-in.", [
+    file("server.js", [...EXPRESS, 'app.use(function authErrors(err, req, res, next) { res.status(401).send("Sign in"); });', ORDERS]),
+  ], [{ marker: "A", expect: "open", why: "An error handler runs only when something failed." }]),
+  pageCase("page-maintenance-gate", "A step that refuses everyone during maintenance.", [
+    file("server.js", [...EXPRESS, 'app.use((req, res, next) => { if (maintenanceOn()) return res.status(503).send("Back soon"); next(); });', ORDERS]),
+  ], [{ marker: "A", expect: "open", why: "Outside maintenance anyone gets through." }]),
+  pageCase("page-misnamed-check", "A step called requireLogin that never refuses.", [
+    file("server.js", [...EXPRESS, "function requireLogin(req, res, next) {", "  req.wantsLogin = true;", "  next();", "}", "app.use(requireLogin);", ORDERS]),
+  ], [{ marker: "A", expect: "open", why: "Its code lets everyone through, whatever its name." }]),
+  pageCase("page-other-prefix", "A check on /api does not cover /apiary.", [
+    file("server.js", [
+      ...EXPRESS,
+      ...REQUIRE_MEMBER,
+      'app.use("/api", requireMember);',
+      'app.get("/apiary/list", (req, res) => res.json(listHives(req.query.page))); // [A]',
+      'app.get("/api/orders", (req, res) => res.json(listOrders(req.session.userId))); // [B]',
+    ]),
+  ], [
+    { marker: "A", expect: "open", why: "/apiary is not under /api." },
+    { marker: "B", expect: "protected", why: "/api/orders is under the checked section." },
+  ]),
+  pageCase("page-router-before-check", "A router mounted before the check is not covered by it.", [
+    file("server.js", [
+      ...EXPRESS,
+      ...REQUIRE_MEMBER,
+      "const shopRoutes = express.Router();",
+      'shopRoutes.get("/cart", (req, res) => res.json(cartOf(req.session.userId))); // [A]',
+      'app.use("/shop", shopRoutes);',
+      "app.use(requireMember);",
+    ]),
+  ], [{ marker: "A", expect: "open", why: "The shop is reached before the check runs." }]),
+  pageCase("page-session-only", "Sessions and body parsing, no check.", [
+    file("server.js", [
+      ...EXPRESS,
+      'const session = require("express-session");',
+      "app.use(session({ secret: process.env.SESSION_SECRET }));",
+      "app.use(express.json());",
+      ORDERS,
+    ]),
+  ], [{ marker: "A", expect: "open", why: "A session is given to everyone; nothing requires one." }]),
+
+  // Cannot tell: the page goes back to the user, never a pass.
+  pageCase("page-exempt-addresses", "A check that lets some addresses through first.", [
+    file("server.js", [
+      ...EXPRESS,
+      "app.use((req, res, next) => {",
+      '  if (req.path.startsWith("/welcome")) return next();',
+      '  if (!req.user) return res.redirect("/login");',
+      "  next();",
+      "});",
+      ORDERS,
+    ]),
+  ], [{ marker: "A", expect: "unsure", why: "Which addresses skip the check depends on the request." }]),
+  pageCase("page-conditional-check", "A check added only under a setting.", [
+    file("server.js", [...EXPRESS, ...REQUIRE_MEMBER, 'if (process.env.LOCKED === "yes") app.use(requireMember);', ORDERS]),
+  ], [{ marker: "A", expect: "unsure", why: "Without the setting the check is never added." }]),
+  pageCase("page-api-key", "A step that checks an API key, not a person.", [
+    file("server.js", [
+      ...EXPRESS,
+      'app.use((req, res, next) => { if (req.get("x-api-key") !== process.env.API_KEY) return res.sendStatus(401); next(); });',
+      ORDERS,
+    ]),
+  ], [{ marker: "A", expect: "unsure", why: "A shared key may or may not be the protection the page needs." }]),
+  pageCase("page-unknown-step", "A step defined nowhere the checker can read, with a name that says nothing.", [
+    file("server.js", [...EXPRESS, "app.use(checkpoint);", ORDERS]),
+  ], [{ marker: "A", expect: "unsure", why: "Its code is out of sight." }]),
+  pageCase("page-pass-not-checked", "A step that looks for a sign-in pass but never checks it is genuine.", [
+    file("server.js", [...EXPRESS, "app.use((req, res, next) => { if (!req.headers.authorization) return res.sendStatus(401); next(); });", ORDERS]),
+  ], [{ marker: "A", expect: "unsure", why: "Anyone can send a made-up pass." }]),
+  pageCase("page-router-not-followed", "An app with a sign-in check, and a router whose mounting cannot be followed.", [
+    file("app.js", [...EXPRESS, ...REQUIRE_MEMBER, "app.use(requireMember);", "for (const r of loadRouters()) app.use(r);"]),
+    file("routes/reports.js", [
+      'const router = require("express").Router();',
+      'router.get("/reports", (req, res) => res.json(reportsOf(req.session.userId))); // [A]',
+      "module.exports = router;",
+    ]),
+  ], [{ marker: "A", expect: "unsure", why: "The router may be mounted before or after the check." }]),
+  // Found by the conventions reviewer: shapes common in real apps.
+  pageCase("page-optional-sign-in", "A pass verified in try, but a bad one only clears the user and carries on.", [
+    file("server.js", [
+      ...EXPRESS,
+      'const jwt = require("jsonwebtoken");',
+      "app.use((req, res, next) => {",
+      "  try {",
+      "    req.user = jwt.verify(req.cookies.token, process.env.JWT_SECRET);",
+      "  } catch (e) {",
+      "    req.user = null;",
+      "  }",
+      "  next();",
+      "});",
+      ORDERS,
+    ]),
+  ], [{ marker: "A", expect: "open", why: "Visitors with no pass, or a bad one, still reach the page." }]),
+  pageCase("page-prefix-in-a-setting", "A check under an address held in an imported setting.", [
+    file("server.js", [...EXPRESS, ...REQUIRE_MEMBER, 'const { API_PREFIX } = require("./settings");', "app.use(API_PREFIX, requireMember);", ORDERS]),
+  ], [{ marker: "A", expect: "unsure", why: "Whether /orders is under that address cannot be read." }]),
+  pageCase("page-check-chosen-by-setting", "A check chosen by a setting inside app.use.", [
+    file("server.js", [...EXPRESS, ...REQUIRE_MEMBER, "app.use(process.env.OPEN ? (req, res, next) => next() : requireMember);", ORDERS]),
+  ], [{ marker: "A", expect: "unsure", why: "With the setting on, everyone gets through." }]),
+  pageCase("page-two-routers-one-file", "One file hands out two routers; the one mounted before the check is open.", [
+    file("app.js", [
+      ...EXPRESS,
+      ...REQUIRE_MEMBER,
+      'const { reportRoutes, shopRoutes } = require("./routes");',
+      'app.use("/reports", reportRoutes);',
+      "app.use(requireMember);",
+      'app.use("/shop", shopRoutes);',
+    ]),
+    file("routes.js", [
+      'const express = require("express");',
+      "const reportRoutes = express.Router();",
+      "const shopRoutes = express.Router();",
+      'reportRoutes.get("/monthly", (req, res) => res.json(monthly(req.session.userId))); // [A]',
+      'shopRoutes.get("/cart", (req, res) => res.json(cartOf(req.session.userId))); // [B]',
+      "module.exports = { reportRoutes, shopRoutes };",
+    ]),
+  ], [
+    { marker: "A", expect: "open", why: "The reports router is mounted before the check." },
+    { marker: "B", expect: "protected", why: "The shop router is mounted after it." },
+  ]),
+  // Found by the fresh review: library settings and steps that undo themselves.
+  pageCase("page-passport-anonymous", "Passport with the anonymous strategy in its list lets everyone through.", [
+    file("server.js", [...EXPRESS, 'const passport = require("passport");', 'app.use(passport.authenticate(["jwt", "anonymous"], { session: false }));', ORDERS]),
+  ], [{ marker: "A", expect: "unsure", why: "Visitors with no pass are let in as anonymous." }]),
+  pageCase("page-check-unless", "A library check with the page exempted by unless.", [
+    file("server.js", [
+      ...EXPRESS,
+      'const { expressjwt } = require("express-jwt");',
+      'app.use(expressjwt({ secret: process.env.JWT_SECRET, algorithms: ["HS256"] }).unless({ path: ["/orders"] }));',
+      ORDERS,
+    ]),
+  ], [{ marker: "A", expect: "unsure", why: "The page is on the list the check skips." }]),
+  pageCase("page-user-from-address", "A step that takes the user from the address, then checks it is there.", [
+    file("server.js", [...EXPRESS, "app.use((req, res, next) => { req.user = req.query.user; if (!req.user) return res.sendStatus(401); next(); });", ORDERS]),
+  ], [{ marker: "A", expect: "unsure", why: "The visitor names themselves in the address." }]),
+  pageCase("page-helper-adds-check", "A helper that adds the sign-in check, called before the pages.", [
+    file("server.js", [...EXPRESS, ...REQUIRE_MEMBER, "function applyMiddleware(app) {", "  app.use(requireMember);", "}", "applyMiddleware(app);", ORDERS]),
+  ], [{ marker: "A", expect: "protected", why: "The helper adds the check before the page is registered." }]),
+  // Found by the plan review.
+  pageCase("page-hono-exact-address", "In Hono an address without a star covers only itself.", [
+    file("server/src/index.ts", [
+      ...HEAD,
+      "const requireMember = async (c, next) => {",
+      '  if (!c.get("user")) return c.json({ error: "Sign in first" }, 401);',
+      "  await next();",
+      "};",
+      'app.use("/api", requireMember);',
+      'app.use("/account/*", requireMember);',
+      'app.get("/api/orders", (c) => c.json(listOrders(c.get("user")))); // [A]',
+      'app.get("/account/orders", (c) => c.json(listOrders(c.get("user")))); // [B]',
+    ]),
+  ], [
+    { marker: "A", expect: "open", why: 'Hono runs a step registered for "/api" only on /api itself.' },
+    { marker: "B", expect: "protected", why: '"/account/*" covers everything under /account.' },
+  ]),
+  pageCase("page-own-token-helper", "The app's own token helper returns nothing on a bad pass, and the step carries on.", [
+    file("server.js", [...EXPRESS, 'const jwt = require("./lib/jwt");', "app.use((req, res, next) => { req.user = jwt.verify(req.cookies.token); next(); });", ORDERS]),
+    file("lib/jwt.js", [
+      'const jsonwebtoken = require("jsonwebtoken");',
+      "exports.verify = (token) => {",
+      "  try {",
+      "    return jsonwebtoken.verify(token, process.env.JWT_SECRET);",
+      "  } catch {",
+      "    return null;",
+      "  }",
+      "};",
+    ]),
+  ], [{ marker: "A", expect: "open", why: "A bad pass only leaves the user empty; the page still answers." }]),
+  pageCase("page-check-with-off-switch", "A function that makes the check, or a step that lets everyone through.", [
+    file("server.js", [
+      ...EXPRESS,
+      "function requireAuth(options) {",
+      "  if (options.disabled) return (req, res, next) => next();",
+      '  return (req, res, next) => { if (!req.user) return res.redirect("/login"); next(); };',
+      "}",
+      "app.use(requireAuth(settings.auth));",
+      ORDERS,
+    ]),
+  ], [{ marker: "A", expect: "unsure", why: "With the switch set, nobody is turned away." }]),
+  pageCase("page-wrapped-and-listed-checks", "A check inside an async wrapper, and one in a list of steps.", [
+    file("server.js", [
+      ...EXPRESS,
+      ...REQUIRE_MEMBER,
+      'const asyncHandler = require("express-async-handler");',
+      'app.use("/shop", asyncHandler(requireMember));',
+      'app.use("/account", [express.json(), requireMember]);',
+      'app.get("/shop/cart", (req, res) => res.json(cartOf(req.session.userId))); // [A]',
+      'app.get("/account/orders", (req, res) => res.json(listOrders(req.session.userId))); // [B]',
+    ]),
+  ], [
+    { marker: "A", expect: "protected", why: "The wrapper only passes errors on; the check still runs." },
+    { marker: "B", expect: "protected", why: "Each step in the list runs, the check among them." },
+  ]),
 ];
