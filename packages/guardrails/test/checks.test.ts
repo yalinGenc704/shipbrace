@@ -937,3 +937,30 @@ test("an XML library the check cannot follow hands the XML item back", () => {
   assert.equal(itemStatus([manifest({ "libxml2-wasm": "0.5.0" })], "injection/xml-entities"), "not-applicable");
   assert.equal(itemStatus([manifest({ libxmljs: "1.0.0" })], "injection/xml-entities"), "pass");
 });
+
+test("with no pages read, the open-pages item goes back to the user and never passes", async () => {
+  const item = "access-control/unguarded-routes";
+  // Pages built in a way the reader does not follow: nothing was checked.
+  const unread: File[] = [
+    { path: "server.js", content: 'const fastify = require("fastify")();\nfastify.get("/orders", async (req) => listOrders(req.query.user));' },
+    { path: "app/api/orders/route.ts", content: "export async function GET() { return Response.json(await listOrders()); }" },
+    { path: "server.js", content: 'const server = require("express")();\nserver.get("/orders", (req, res) => res.json(listOrders()));' },
+    { path: "src/index.ts", content: "export const add = (a: number, b: number) => a + b;" },
+  ];
+  for (const file of unread) {
+    const outcome = outcomes([file]).get(item);
+    assert.equal(outcome?.status, "not-applicable", file.content);
+    // Never "doesn't apply": pages may exist out of the reader's sight.
+    assert.equal(outcome?.status === "not-applicable" && outcome.absent, undefined, file.content);
+    const review = await runSecurityReview(snapshotFromFiles([file]));
+    const shown = review.modules.flatMap((m) => m.items).find((i) => i.id === item)!;
+    assert.equal(shown.status, "needs-your-review", file.content);
+    assert.match(shown.notApplicable ?? "", /found no pages it could read/);
+  }
+  // With pages read, the item is answered from them as before.
+  const guarded: File = { path: "server.js", content: ['const app = require("express")();', "app.use(requireLogin);", 'app.get("/orders", (req, res) => res.json(listOrders(req.user.id)));'].join("\n") };
+  assert.equal(statusOf([guarded], item), "pass");
+  const open: File = { path: "server.js", content: ['const app = require("express")();', 'app.get("/orders", (req, res) => res.json(listOrders()));'].join("\n") };
+  const review = await runSecurityReview(snapshotFromFiles([open]));
+  assert.equal(review.modules.flatMap((m) => m.items).find((i) => i.id === item)!.status, "action-needed");
+});

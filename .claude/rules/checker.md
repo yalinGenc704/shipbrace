@@ -413,6 +413,19 @@ benchmark scores stay in CLAUDE.md.
   rest are left public on purpose (feedback, registration, search,
   product lists, challenge pages). No page was cleared or handed back on
   the four: none has a site-wide sign-in check.
+- **No pages read is not a pass (2026-11-15, project check
+  `routes:pages-read`, item `access-control/unguarded-routes`).** The
+  open-pages item is answered from the routes the inventory read; with
+  none read it passed with nothing checked (a Fastify app, a Next.js route
+  handler, an Express app kept under the name `server`: all "0 pages
+  seen", all a pass; found by the OWASP map). Now it is handed back,
+  saying no pages could be read and which kinds are. Never "doesn't
+  apply", also for a project that plainly serves nothing: no list of ways
+  to serve pages is complete. Not changed: the other items that read
+  routes (admin pages, ownership) and the tracer still see nothing in
+  such apps. Benchmark and the four practice apps unchanged (each has
+  routes); ShipBrace's own code has 26 routes read, so its own review is
+  unchanged.
 - **Redirect-only pages (2026-11-10, `Door.onlyRedirects`).** A handler
   with nothing running before it that only calls `redirect` or an answer
   method on its answering parameter, and reads only one field of the

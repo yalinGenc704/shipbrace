@@ -1522,6 +1522,30 @@ const ROLE_GUARD = /admin|role|permission|authori[sz]e|isStaff|isSuperuser/i;
 /** A decision on the role inside the handler -- an `if` that tests it. */
 const ROLE_DECISION = /\bif\s*\([^)]*\b(?:role|roles|isAdmin|is_admin|admin|permissions?|isStaff)\b/;
 
+/**
+ * The open-pages item is answered from the pages the inventory read. With
+ * none read there is nothing behind a "pass": the app may add its pages in
+ * a way the reader does not follow (Fastify, Next.js, an app kept under
+ * another name), and both such probes showed a pass with nothing checked
+ * (OWASP map, 2026-11-15). Never "doesn't apply": no list of ways to serve
+ * pages is complete.
+ */
+const pagesRead: ProjectCheck = {
+  id: "routes:pages-read",
+  itemId: "access-control/unguarded-routes",
+
+  run(_snapshot, inventory) {
+    if (inventory.doors.length > 0) return { status: "pass" };
+    return {
+      status: "not-applicable",
+      reason:
+        "ShipBrace found no pages it could read in this project, so it could not check which ones require signing in. " +
+        "It reads pages added the Express or Hono way; pages built with another tool were not looked at. " +
+        "If the project serves pages, confirm each private one requires signing in.",
+    };
+  },
+};
+
 const adminOnly: ProjectCheck = {
   id: "routes:admin-check",
   itemId: "access-control/admin-only",
@@ -1657,6 +1681,7 @@ const passwordHashesSent: ProjectCheck = {
 };
 
 export const projectChecks: ProjectCheck[] = [
+  pagesRead,
   adminOnly,
   passwordHashesSent,
   sessionSecret,
