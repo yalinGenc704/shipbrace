@@ -132,7 +132,7 @@ built for going live".
   The check says which limit stopped a review (`monthly-limit` /
   `account-daily-limit` / `limit`). The AI step
   runs only for reviews started by GitHub ids in `AI_ALLOWED_GITHUB_IDS`
-  (the owner, 174497899) with that installation's switch on
+  (the owner, 174497899, and dvirbot, 110500588, invited 2026-11-15) with that installation's switch on
   (`cloud/src/ai-access.ts`); `AI_REVIEW` is on only for that. Per-minute
   limits are exact, in a Durable Object per key (`cloud/src/rate-counter.ts`,
   sliding window in `rate-window.ts`): 60 requests per signed-in person on
