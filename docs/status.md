@@ -4,10 +4,10 @@ Moved from CLAUDE.md "Roadmap -> Next steps" on 2026-11-12. Read at the
 start of a session; update it in the same change as the work it
 describes.
 
-**State:** last deployed commit `3b64bf6` (2026-11-15: the keystone
-checker fixes, PR #7), live version `b008b46d`; `master` is at `3559137`
-(the cleanup, PR #8), not deployed, which rides with the next real change.
-Before them the same day: `49c3b04` / `889dfd2d` (the nightly
+**State:** last deployed commit `3559137` (2026-11-15: the cleanup, PR
+#8), live version `866b3dd7`, six live checks passed; `master` is at
+`2ea1379` (the sign-in steps work, PR #9), not deployed yet. Before them
+the same day: `3b64bf6` / `b008b46d` (the keystone checker fixes, PR #7), `49c3b04` / `889dfd2d` (the nightly
 refused-attempts alert is also emailed), `062d229` / `24b26b6a` (someone else's review answers like
 a missing one), `80452ce` / `47728c6e` (the dashboard says why a review
 stopped; migration 0009 applied) and `b12fc6e` / `bb2c10ac` (a review
@@ -15,7 +15,7 @@ refuses with a plain message when GitHub's hourly allowance is short).
 Since 2026-11-14 `master` takes changes only through a pull request whose
 "test" check passed (GitHub ruleset "Protect master", no bypass); deploy
 from `master` after merging. A database restore was practised on a
-throwaway copy on 2026-11-15: every table matched. 477 tests.
+throwaway copy on 2026-11-15: every table matched. 478 tests.
 
 1. **The AI cleaner step: live since 2026-11-11, not yet seen running**
    (Murat's decisions, 2026-11-10: Haiku 5.5 for his reviews only, neutral
@@ -61,8 +61,8 @@ throwaway copy on 2026-11-15: every table matched. 477 tests.
    version item now passes (it saves a lockfile); Juice Shop's two version
    cards are one. Set aside: grouping identical findings and labelling
    sample folders (Murat's decision).
-4. **Sign-in steps before pages (setup item 10): built 2026-11-15 on
-   branch `checker/site-wide-sign-in`, not pushed.** Steps in `app.use(...)`
+4. **Sign-in steps before pages (setup item 10): merged 2026-11-15 as PR
+   #9 (`2ea1379`), not deployed yet.** Steps in `app.use(...)`
    are read for what they do, in order and across files (Fable planned,
    Opus built, Fable reviewed against the plan and closed seven more
    false passes). Practice apps, rules alone: Juice Shop 52 -> 106 need
@@ -73,7 +73,14 @@ throwaway copy on 2026-11-15: every table matched. 477 tests.
    check" cards, by reading a step's exempt addresses (`/login`,
    `OPTIONS`) and following path aliases and re-exporting index files. Details in
    `.claude/rules/checker.md`.
-5. **Opening up** (needs Murat's product decisions): see CLAUDE.md, "Before anyone
+5. **The reviewer is frozen for research (Murat's decision,
+   2026-11-15).** After item 10 and one last small fix (the open-pages
+   item no longer passes when no pages were read; `routes:pages-read` in
+   `.claude/rules/checker.md`), the checker is not changed while the
+   experiments run: a tag names the frozen commit, and a bug found on the
+   way is logged rather than fixed, or fixed and every experiment run
+   again. The checker items under 2 and 4 above stay offered for later.
+6. **Opening up** (needs Murat's product decisions): see CLAUDE.md, "Before anyone
    else uses it".
 
 Done: review history (2026-10-09), the sealed reviewer (2026-10-09), hosting
